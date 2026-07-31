@@ -1,4 +1,5 @@
 mod boot_splash;
+mod builder;
 mod character_rom;
 mod filesystem;
 mod frame_pacer;

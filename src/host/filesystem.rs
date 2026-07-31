@@ -21,7 +21,7 @@ enum Backend {
     #[cfg(not(target_arch = "wasm32"))]
     Native { root: PathBuf },
     #[cfg(any(target_arch = "wasm32", test))]
-    Memory { directories: BTreeSet<Vec<String>>, files: BTreeMap<Vec<String>, String> },
+    Memory { directories: BTreeSet<Vec<String>>, files: BTreeMap<Vec<String>, Vec<u8>> },
     #[cfg(all(not(target_arch = "wasm32"), not(test)))]
     Unavailable(String),
 }
@@ -198,6 +198,10 @@ impl ConsoleFilesystem {
     }
 
     pub fn read_text(&self, path: &str) -> Result<String, String> {
+        String::from_utf8(self.read_binary(path)?).map_err(|_| "TEXT FILE IS NOT UTF-8".to_owned())
+    }
+
+    pub fn read_binary(&self, path: &str) -> Result<Vec<u8>, String> {
         let requested = self.normalize_non_root(path)?;
         match &self.backend {
             #[cfg(not(target_arch = "wasm32"))]
@@ -206,7 +210,7 @@ impl ConsoleFilesystem {
                 if !path.is_file() {
                     return Err("NOT A FILE".to_owned());
                 }
-                std::fs::read_to_string(path).map_err(|error| io_error("OPEN", error))
+                std::fs::read(path).map_err(|error| io_error("OPEN", error))
             }
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { files, .. } => {
@@ -218,6 +222,10 @@ impl ConsoleFilesystem {
     }
 
     pub fn write_text(&mut self, path: &str, text: &str) -> Result<(), String> {
+        self.write_binary(path, text.as_bytes())
+    }
+
+    pub fn write_binary(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let requested = self.normalize_non_root(path)?;
         match &mut self.backend {
             #[cfg(not(target_arch = "wasm32"))]
@@ -237,7 +245,7 @@ impl ConsoleFilesystem {
                     }
                     None => parent.join(name),
                 };
-                std::fs::write(path, text).map_err(|error| io_error("SAVE", error))
+                std::fs::write(path, bytes).map_err(|error| io_error("SAVE", error))
             }
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { directories, files } => {
@@ -248,7 +256,7 @@ impl ConsoleFilesystem {
                 if directories.contains(&requested) {
                     return Err("NOT A FILE".to_owned());
                 }
-                files.insert(requested, text.to_owned());
+                files.insert(requested, bytes.to_vec());
                 Ok(())
             }
             #[cfg(all(not(target_arch = "wasm32"), not(test)))]

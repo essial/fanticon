@@ -1,5 +1,6 @@
 use fanticon::video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, Video};
 
+use super::builder::build_file;
 use super::character_rom::{CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH};
 use super::filesystem::{DirectoryEntry, SharedFilesystem, shared_filesystem};
 use super::ui_colors::{SharedUiColors, UiColors, parse_palette_index, shared_ui_colors};
@@ -8,6 +9,10 @@ const COLUMNS: usize = DISPLAY_WIDTH / GLYPH_WIDTH;
 const ROWS: usize = DISPLAY_HEIGHT / GLYPH_HEIGHT;
 const CELL_COUNT: usize = COLUMNS * ROWS;
 const MAX_INPUT: usize = COLUMNS - 3;
+const DUMP_OFFSET_COLOR: u8 = 251;
+const DUMP_BYTE_COLOR: u8 = 252;
+const DUMP_ASCII_COLOR: u8 = 253;
+const DUMP_ZERO_COLOR: u8 = 254;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AppMode {
@@ -34,6 +39,7 @@ pub enum TerminalAction {
 
 pub struct Terminal {
     cells: [u8; CELL_COUNT],
+    cell_foregrounds: [Option<u8>; CELL_COUNT],
     cursor_x: usize,
     cursor_y: usize,
     input: String,
@@ -46,6 +52,7 @@ impl Terminal {
     pub fn new(mode: AppMode) -> Self {
         let mut terminal = Self {
             cells: [b' '; CELL_COUNT],
+            cell_foregrounds: [None; CELL_COUNT],
             cursor_x: 0,
             cursor_y: 0,
             input: String::with_capacity(MAX_INPUT),
@@ -72,6 +79,7 @@ impl Terminal {
         if self.input.pop().is_some() && self.cursor_x > 0 {
             self.cursor_x -= 1;
             self.cells[self.cursor_y * COLUMNS + self.cursor_x] = b' ';
+            self.cell_foregrounds[self.cursor_y * COLUMNS + self.cursor_x] = None;
         }
     }
 
@@ -101,6 +109,7 @@ impl Terminal {
 
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
         let colors = self.colors.get();
+        configure_dump_palette(video);
         let pixels = video.pixels_mut();
         pixels.fill(colors.background);
 
@@ -113,7 +122,9 @@ impl Terminal {
                         if bits & (0x80 >> glyph_x) != 0 {
                             let x = cell_x * GLYPH_WIDTH + glyph_x;
                             let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                            pixels[y * DISPLAY_WIDTH + x] = colors.foreground;
+                            pixels[y * DISPLAY_WIDTH + x] = self.cell_foregrounds
+                                [cell_y * COLUMNS + cell_x]
+                                .unwrap_or(colors.foreground);
                         }
                     }
                 }
@@ -138,7 +149,7 @@ impl Terminal {
             "HELP" => {
                 self.write("HELP CLS MODE EDITOR GAME EDIT\n");
                 self.write("ECHO VERSION COLOR CD MKDIR\n");
-                self.write("RMDIR DIR LS\n");
+                self.write("RMDIR DIR LS ASM BUILD DUMP\n");
                 TerminalAction::None
             }
             "CLS" | "CLEAR" => {
@@ -167,6 +178,14 @@ impl Terminal {
                 TerminalAction::None
             }
             "EDIT" => TerminalAction::Edit((!arguments.is_empty()).then(|| arguments.to_owned())),
+            "ASM" | "BUILD" => {
+                self.build(arguments);
+                TerminalAction::None
+            }
+            "DUMP" => {
+                self.dump(arguments);
+                TerminalAction::None
+            }
             "CD" => {
                 if arguments.is_empty() {
                     let directory = self.filesystem.borrow().current_directory();
@@ -265,6 +284,97 @@ impl Terminal {
         }
     }
 
+    fn build(&mut self, arguments: &str) {
+        let fields = arguments.split_whitespace().collect::<Vec<_>>();
+        if fields.is_empty() || fields.len() > 2 {
+            self.write_error("USAGE: BUILD SOURCE [OUTPUT]");
+            return;
+        }
+        match build_file(&self.filesystem, fields[0], fields.get(1).copied()) {
+            Ok(success) => {
+                self.write("BUILT ");
+                self.write(&success.output);
+                self.newline();
+                self.write(&format!("ORIGIN ${:04X}  {} BYTES\n", success.origin, success.size));
+            }
+            Err(diagnostics) => {
+                self.write(&format!("{} ERROR(S)\n", diagnostics.len()));
+                for diagnostic in diagnostics {
+                    self.write(&format!(
+                        "{}:{}:{} {}\n",
+                        diagnostic.source, diagnostic.line, diagnostic.column, diagnostic.message
+                    ));
+                }
+            }
+        }
+    }
+
+    fn dump(&mut self, arguments: &str) {
+        let fields = arguments.split_whitespace().collect::<Vec<_>>();
+        if fields.is_empty() || fields.len() > 3 {
+            self.write_error("USAGE: DUMP FILE [OFFSET [LENGTH]]");
+            return;
+        }
+        let offset = match fields.get(1).map_or(Ok(0), |value| parse_dump_number(value)) {
+            Ok(value) => value,
+            Err(error) => {
+                self.write_error(&error);
+                return;
+            }
+        };
+        let length = match fields.get(2).map_or(Ok(128), |value| parse_dump_number(value)) {
+            Ok(0) => {
+                self.write_error("LENGTH MUST BE GREATER THAN ZERO");
+                return;
+            }
+            Ok(value) => value,
+            Err(error) => {
+                self.write_error(&error);
+                return;
+            }
+        };
+        let read_result = self.filesystem.borrow().read_binary(fields[0]);
+        let bytes = match read_result {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.write_error(&error);
+                return;
+            }
+        };
+        if bytes.is_empty() {
+            self.write("<EMPTY FILE>\n");
+            return;
+        }
+        if offset >= bytes.len() {
+            self.write_error("OFFSET OUT OF RANGE");
+            return;
+        }
+
+        let end = offset.saturating_add(length).min(bytes.len());
+        let last_line_address = offset + (end - offset - 1) / 8 * 8;
+        let address_width = hex_digits(last_line_address);
+        for (line, chunk) in bytes[offset..end].chunks(8).enumerate() {
+            let address = offset + line * 8;
+            self.write_colored(&format!("{address:>address_width$X}: "), DUMP_OFFSET_COLOR);
+            for index in 0..8 {
+                if let Some(byte) = chunk.get(index) {
+                    let color = if *byte == 0 { DUMP_ZERO_COLOR } else { DUMP_BYTE_COLOR };
+                    self.write_colored(&format!("{byte:02X} "), color);
+                } else {
+                    self.write("   ");
+                }
+            }
+            for byte in chunk {
+                let character =
+                    if byte.is_ascii_graphic() || *byte == b' ' { char::from(*byte) } else { '.' };
+                let color = if *byte == 0 { DUMP_ZERO_COLOR } else { DUMP_ASCII_COLOR };
+                self.put_colored_byte(character.to_ascii_uppercase() as u8, color);
+            }
+            self.newline();
+        }
+        self.write(&format!("{} BYTE(S) FROM ${offset:X}\n", end - offset));
+    }
+
     fn prompt(&mut self) {
         self.input.clear();
         let directory = self.filesystem.borrow().current_directory();
@@ -274,6 +384,7 @@ impl Terminal {
 
     fn clear(&mut self) {
         self.cells.fill(b' ');
+        self.cell_foregrounds.fill(None);
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.input.clear();
@@ -289,11 +400,31 @@ impl Terminal {
         }
     }
 
+    fn write_colored(&mut self, text: &str, foreground: u8) {
+        for byte in text.bytes() {
+            if byte == b'\n' {
+                self.newline();
+            } else {
+                self.put_colored_byte(byte.to_ascii_uppercase(), foreground);
+            }
+        }
+    }
+
     fn put_byte(&mut self, byte: u8) {
+        self.put_byte_with_color(byte, None);
+    }
+
+    fn put_colored_byte(&mut self, byte: u8, foreground: u8) {
+        self.put_byte_with_color(byte, Some(foreground));
+    }
+
+    fn put_byte_with_color(&mut self, byte: u8, foreground: Option<u8>) {
         if self.cursor_x >= COLUMNS {
             self.newline();
         }
-        self.cells[self.cursor_y * COLUMNS + self.cursor_x] = byte;
+        let index = self.cursor_y * COLUMNS + self.cursor_x;
+        self.cells[index] = byte;
+        self.cell_foregrounds[index] = foreground;
         self.cursor_x += 1;
     }
 
@@ -302,10 +433,42 @@ impl Terminal {
         self.cursor_y += 1;
         if self.cursor_y >= ROWS {
             self.cells.copy_within(COLUMNS.., 0);
+            self.cell_foregrounds.copy_within(COLUMNS.., 0);
             self.cells[(ROWS - 1) * COLUMNS..].fill(b' ');
+            self.cell_foregrounds[(ROWS - 1) * COLUMNS..].fill(None);
             self.cursor_y = ROWS - 1;
         }
     }
+}
+
+fn parse_dump_number(value: &str) -> Result<usize, String> {
+    let (radix, digits) = if let Some(hex) = value.strip_prefix('$') {
+        (16, hex)
+    } else if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+        (16, hex)
+    } else {
+        (10, value)
+    };
+    if digits.is_empty() {
+        return Err("INVALID NUMBER".to_owned());
+    }
+    usize::from_str_radix(digits, radix).map_err(|_| "INVALID NUMBER".to_owned())
+}
+
+fn hex_digits(mut value: usize) -> usize {
+    let mut digits = 1;
+    while value >= 16 {
+        value /= 16;
+        digits += 1;
+    }
+    digits
+}
+
+fn configure_dump_palette(video: &mut Video) {
+    video.set_palette(DUMP_OFFSET_COLOR, [180, 190, 254, 255]);
+    video.set_palette(DUMP_BYTE_COLOR, [250, 179, 135, 255]);
+    video.set_palette(DUMP_ASCII_COLOR, [166, 227, 161, 255]);
+    video.set_palette(DUMP_ZERO_COLOR, [88, 91, 112, 255]);
 }
 
 #[cfg(test)]
@@ -317,6 +480,26 @@ mod tests {
             terminal.input_character(character);
         }
         terminal.submit()
+    }
+
+    fn screen_text(terminal: &Terminal) -> String {
+        terminal
+            .cells
+            .chunks(COLUMNS)
+            .map(|row| String::from_utf8_lossy(row).into_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn screen_position(terminal: &Terminal, text: &str) -> usize {
+        terminal
+            .cells
+            .chunks(COLUMNS)
+            .enumerate()
+            .find_map(|(row, cells)| {
+                String::from_utf8_lossy(cells).find(text).map(|column| row * COLUMNS + column)
+            })
+            .expect("text should be visible")
     }
 
     #[test]
@@ -390,5 +573,68 @@ mod tests {
         terminal.render(&mut video, false);
         assert!(video.pixels().contains(&3));
         assert!(video.pixels().contains(&224));
+    }
+
+    #[test]
+    fn build_command_writes_a_binary_file() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        terminal
+            .filesystem
+            .borrow_mut()
+            .write_text("demo.asm", " ORG $2000\n LDX #$10\n RTS")
+            .unwrap();
+
+        assert_eq!(type_command(&mut terminal, "build demo.asm"), TerminalAction::None);
+        assert_eq!(
+            terminal.filesystem.borrow().read_binary("demo.bin").unwrap(),
+            [0xa2, 0x10, 0x60]
+        );
+    }
+
+    #[test]
+    fn dump_command_shows_hex_ascii_and_supports_ranges() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        terminal
+            .filesystem
+            .borrow_mut()
+            .write_binary("bytes.bin", &[0x00, 0x01, b'A', b'B', b' ', b'~', 0x7f, 0xff])
+            .unwrap();
+
+        type_command(&mut terminal, "dump bytes.bin");
+        assert!(screen_text(&terminal).contains("0: 00 01 41 42 20 7E 7F FF ..AB ~.."));
+        let dump_start = screen_position(&terminal, "0: 00 01");
+        assert_eq!(terminal.cell_foregrounds[dump_start], Some(DUMP_OFFSET_COLOR));
+        assert_eq!(terminal.cell_foregrounds[dump_start + 3], Some(DUMP_ZERO_COLOR));
+        assert_eq!(terminal.cell_foregrounds[dump_start + 6], Some(DUMP_BYTE_COLOR));
+        assert_eq!(terminal.cell_foregrounds[dump_start + 27], Some(DUMP_ZERO_COLOR));
+        assert_eq!(terminal.cell_foregrounds[dump_start + 28], Some(DUMP_ASCII_COLOR));
+
+        type_command(&mut terminal, "dump bytes.bin $2 2");
+        let screen = screen_text(&terminal);
+        assert!(screen.contains("2: 41 42                   AB"));
+        assert!(screen.contains("2 BYTE(S) FROM $2"));
+    }
+
+    #[test]
+    fn dump_numbers_accept_decimal_and_hex() {
+        assert_eq!(parse_dump_number("16").unwrap(), 16);
+        assert_eq!(parse_dump_number("$10").unwrap(), 16);
+        assert_eq!(parse_dump_number("0x10").unwrap(), 16);
+        assert!(parse_dump_number("$NOPE").is_err());
+        assert_eq!(hex_digits(0), 1);
+        assert_eq!(hex_digits(0xff), 2);
+        assert_eq!(hex_digits(0x100), 3);
+    }
+
+    #[test]
+    fn dump_addresses_are_zero_suppressed_and_right_aligned() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        terminal.filesystem.borrow_mut().write_binary("align.bin", &[0; 17]).unwrap();
+
+        type_command(&mut terminal, "dump align.bin");
+        let screen = screen_text(&terminal);
+        assert!(screen.contains(" 0: 00 00"));
+        assert!(screen.contains(" 8: 00 00"));
+        assert!(screen.contains("10: 00"));
     }
 }

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod assembler;
 mod cpu;
 pub mod video;
 

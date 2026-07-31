@@ -1,5 +1,15 @@
 pub const GLYPH_WIDTH: usize = 8;
 pub const GLYPH_HEIGHT: usize = 8;
+pub const BOX_HORIZONTAL: u8 = 1;
+pub const BOX_VERTICAL: u8 = 2;
+pub const BOX_TOP_LEFT: u8 = 3;
+pub const BOX_TOP_RIGHT: u8 = 4;
+pub const BOX_BOTTOM_LEFT: u8 = 5;
+pub const BOX_BOTTOM_RIGHT: u8 = 6;
+pub const SYMBOL_ARROW_RIGHT: u8 = 7;
+pub const SYMBOL_CHECK: u8 = 8;
+pub const SYMBOL_CROSS: u8 = 9;
+pub const SYMBOL_BUSY: u8 = 10;
 pub const CHARACTER_ROM: [[u8; GLYPH_HEIGHT]; 128] = build_character_rom();
 
 const fn build_character_rom() -> [[u8; GLYPH_HEIGHT]; 128] {
@@ -9,11 +19,29 @@ const fn build_character_rom() -> [[u8; GLYPH_HEIGHT]; 128] {
         let source = glyph_5x7(character as u8);
         let mut row = 0;
         while row < 7 {
-            rom[character][row] = source[row] << 1;
+            let stroke = source[row] << 1;
+            rom[character][row] = if matches!(
+                character as u8,
+                b'A'..=b'Z' | b'0'..=b'9' | b'/' | b'\\' | b'>' | b'<' | b'|' | b'^'
+            ) {
+                stroke | (stroke >> 1)
+            } else {
+                stroke
+            };
             row += 1;
         }
         character += 1;
     }
+    rom[BOX_HORIZONTAL as usize] = [0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00];
+    rom[BOX_VERTICAL as usize] = [0x18; 8];
+    rom[BOX_TOP_LEFT as usize] = [0x00, 0x00, 0x00, 0x1f, 0x18, 0x18, 0x18, 0x18];
+    rom[BOX_TOP_RIGHT as usize] = [0x00, 0x00, 0x00, 0xf8, 0x18, 0x18, 0x18, 0x18];
+    rom[BOX_BOTTOM_LEFT as usize] = [0x18, 0x18, 0x18, 0x1f, 0x00, 0x00, 0x00, 0x00];
+    rom[BOX_BOTTOM_RIGHT as usize] = [0x18, 0x18, 0x18, 0xf8, 0x00, 0x00, 0x00, 0x00];
+    rom[SYMBOL_ARROW_RIGHT as usize] = [0x00, 0x20, 0x10, 0xf8, 0x10, 0x20, 0x00, 0x00];
+    rom[SYMBOL_CHECK as usize] = [0x00, 0x00, 0x04, 0x08, 0x90, 0x60, 0x00, 0x00];
+    rom[SYMBOL_CROSS as usize] = [0x00, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x00];
+    rom[SYMBOL_BUSY as usize] = [0x7e, 0x24, 0x18, 0x18, 0x18, 0x24, 0x7e, 0x00];
     rom
 }
 
@@ -83,7 +111,9 @@ const fn glyph_5x7(character: u8) -> [u8; 7] {
         b']' => [0x0e, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0e],
         b'^' => [0x04, 0x0a, 0x11, 0x00, 0x00, 0x00, 0x00],
         b'_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f],
+        b'{' => [0x03, 0x04, 0x04, 0x18, 0x04, 0x04, 0x03],
         b'|' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        b'}' => [0x18, 0x04, 0x04, 0x03, 0x04, 0x04, 0x18],
         b'~' => [0x00, 0x00, 0x09, 0x16, 0x00, 0x00, 0x00],
         _ => [0; 7],
     }
@@ -99,5 +129,34 @@ mod tests {
         assert_ne!(CHARACTER_ROM[b'0' as usize], [0; 8]);
         assert_ne!(CHARACTER_ROM[b'?' as usize], [0; 8]);
         assert_eq!(CHARACTER_ROM[b' ' as usize], [0; 8]);
+        assert_ne!(CHARACTER_ROM[BOX_TOP_LEFT as usize], [0; 8]);
+        assert_ne!(CHARACTER_ROM[SYMBOL_CHECK as usize], [0; 8]);
+    }
+
+    #[test]
+    fn ascii_glyphs_use_bold_horizontal_strokes() {
+        // The top of A is 00011100 before emboldening; its right-hand neighbor
+        // is added to make the character visibly heavier without changing cells.
+        assert_eq!(CHARACTER_ROM[b'A' as usize][0], 0x1e);
+        assert!(CHARACTER_ROM[b'I' as usize].iter().any(|row| row.count_ones() >= 6));
+    }
+
+    #[test]
+    fn punctuation_preserves_open_thin_strokes() {
+        assert_eq!(CHARACTER_ROM[b'$' as usize][1], 0x1e);
+        assert_eq!(CHARACTER_ROM[b'%' as usize][0], 0x32);
+        assert_eq!(CHARACTER_ROM[b'@' as usize][0], 0x1c);
+    }
+
+    #[test]
+    fn structural_symbols_are_bold_and_braces_are_available() {
+        assert_eq!(CHARACTER_ROM[b'/' as usize][0], 0x03);
+        assert_eq!(CHARACTER_ROM[b'\\' as usize][0], 0x30);
+        assert_eq!(CHARACTER_ROM[b'>' as usize][0], 0x18);
+        assert_eq!(CHARACTER_ROM[b'<' as usize][0], 0x06);
+        assert_eq!(CHARACTER_ROM[b'|' as usize][0], 0x0c);
+        assert_eq!(CHARACTER_ROM[b'^' as usize][0], 0x0c);
+        assert_ne!(CHARACTER_ROM[b'{' as usize], [0; 8]);
+        assert_ne!(CHARACTER_ROM[b'}' as usize], [0; 8]);
     }
 }

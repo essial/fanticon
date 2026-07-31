@@ -27,6 +27,8 @@ The [video architecture](documentation/video.md) describes the 320×200 indexed
 display, dot-timestamped raster events, GPU scaling, and CRT presentation pass.
 The [editor and command console](documentation/editor.md) describes application
 modes, the embedded character ROM, native commands, and future tool dispatch.
+The [macro assembler](documentation/assembler.md) documents building raw `.BIN`
+files, supported syntax and directives, Merlin-style macros, and diagnostics.
 
 ## Run the Fanticon host
 

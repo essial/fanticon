@@ -183,7 +183,8 @@ impl FanticonApp {
         }
 
         let cursor_visible = (self.frame_number / 30).is_multiple_of(2);
-        if let Some(editor) = &self.text_editor {
+        if let Some(editor) = &mut self.text_editor {
+            editor.update();
             editor.render(&mut self.video, cursor_visible);
         } else {
             self.terminal.render(&mut self.video, cursor_visible);

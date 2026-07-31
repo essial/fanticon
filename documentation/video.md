@@ -10,10 +10,9 @@ black letterbox or pillarbox bars around it.
 cargo run --release
 ```
 
-The initial host displays a diagnostic pattern. It does not run a cartridge yet.
-The pattern deliberately changes palette color partway through scanline 100 to
-exercise the same raster-event path future VM hardware will use. The split moves
-at the host's 60 Hz emulation rate.
+After boot, the host displays its native 40×25 command console. It does not run a
+cartridge yet. The console is rendered into the same indexed framebuffer and CRT
+presentation path a game will use.
 
 Before the diagnostic screen, the app presents the centered Fanticon logo for
 five seconds. Keyboard and mouse presses are ignored for the first 500 ms to
@@ -35,9 +34,9 @@ running multiple VM frames in a burst. After a long debugger stop, suspended
 browser tab, or system sleep, the schedule rebases to current time. This prevents
 a catch-up spiral while keeping ordinary frames phase-stable.
 
-The current tick only prepares video. CPU cycles, timers, audio, and cartridge
-execution will be added to `FanticonApp::emulate_frame` as those systems are
-connected.
+The current tick advances and renders the native editor console. In Game mode,
+CPU cycles, timers, audio, and cartridge execution will be added to
+`FanticonApp::emulate_frame` as those systems are connected.
 
 ## Rendering path
 
@@ -50,7 +49,7 @@ The display pipeline has three intentionally separate layers:
    reaches their timestamp.
 3. The host uploads the resulting 256 KiB RGBA image to one persistent GPU
    texture and draws one fullscreen triangle. A WGSL shader performs scaling,
-   letterboxing, scanlines, RGB phosphor masking, horizontal color bleed, and a
+   letterboxing, scanline beam shaping, composite color filtering, bloom, and a
    mild vignette.
 
 There are no per-pixel draw calls, transient GPU textures, or allocations in the

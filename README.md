@@ -25,17 +25,25 @@ decimal arithmetic, undocumented opcodes, and optimization patterns.
 
 The [video architecture](documentation/video.md) describes the 320×200 indexed
 display, dot-timestamped raster events, GPU scaling, and CRT presentation pass.
+The [editor and command console](documentation/editor.md) describes application
+modes, the embedded character ROM, native commands, and future tool dispatch.
 
 ## Run the Fanticon host
 
 The current app host runs a paced 60 Hz emulation loop and opens a resizable
 320×200 virtual display with aspect-correct letterboxing, scanlines, phosphor
-masking, and color bleed. It shows a moving raster-effect diagnostic until
-cartridge execution is connected. On launch, a centered Fanticon logo appears
-for five seconds and can be dismissed by keyboard or mouse after a 500 ms guard.
+beam shaping, and composite color bleed. On launch, a centered Fanticon logo
+appears for five seconds and can be dismissed by keyboard or mouse after a 500 ms
+guard. The native Editor mode command console then appears by default.
 
 ```sh
 cargo run --release
+```
+
+Start explicitly in Game mode instead:
+
+```sh
+cargo run --release -- --game
 ```
 
 In VS Code, install the recommended CodeLLDB and rust-analyzer extensions, then

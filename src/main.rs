@@ -2,14 +2,18 @@ mod host;
 
 use std::sync::Arc;
 
-use fanticon::video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, RasterTick, Video};
-use host::{BootSplash, FramePacer, FrameStatus, Renderer, draw_boot_logo};
+use fanticon::video::Video;
+use host::{
+    AppMode, BootSplash, FramePacer, FrameStatus, Renderer, Terminal, TerminalAction,
+    draw_boot_logo,
+};
 use web_time::Instant;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::{ElementState, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::{Key, NamedKey},
     window::{Window, WindowId},
 };
 
@@ -25,11 +29,11 @@ struct FanticonApp {
     frame_pacer: FramePacer,
     frame_number: u64,
     boot_splash: BootSplash,
-    main_screen_ready: bool,
+    terminal: Terminal,
 }
 
 impl FanticonApp {
-    fn new(event_proxy: winit::event_loop::EventLoopProxy<UserEvent>) -> Self {
+    fn new(event_proxy: winit::event_loop::EventLoopProxy<UserEvent>, mode: AppMode) -> Self {
         let mut video = Video::new();
         draw_boot_logo(&mut video);
         let now = Instant::now();
@@ -41,7 +45,7 @@ impl FanticonApp {
             frame_pacer: FramePacer::new(now),
             frame_number: 0,
             boot_splash: BootSplash::new(now),
-            main_screen_ready: false,
+            terminal: Terminal::new(mode),
         }
     }
 }
@@ -118,12 +122,20 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. }
-                if event.state == ElementState::Pressed && !event.repeat =>
+                if should_process_keyboard_input(event.state, event.repeat) =>
             {
-                self.boot_splash.try_dismiss(Instant::now());
+                let now = Instant::now();
+                if self.boot_splash.is_active(now) {
+                    self.boot_splash.try_dismiss(now);
+                } else {
+                    self.handle_key(&event.logical_key);
+                }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, .. } => {
-                self.boot_splash.try_dismiss(Instant::now());
+                let now = Instant::now();
+                if self.boot_splash.is_active(now) {
+                    self.boot_splash.try_dismiss(now);
+                }
             }
             WindowEvent::RedrawRequested => {
                 if let Some(renderer) = &mut self.renderer {
@@ -164,52 +176,63 @@ impl FanticonApp {
             return;
         }
 
-        if !self.main_screen_ready {
-            draw_startup_screen(&mut self.video);
-            self.main_screen_ready = true;
-        }
-
-        // The host currently has no VM to run. This split palette write makes
-        // the timing path visible and exercises a sub-scanline state change.
-        self.video.set_palette(0xe0, [245, 72, 66, 255]);
+        let cursor_visible = (self.frame_number / 30).is_multiple_of(2);
+        self.terminal.render(&mut self.video, cursor_visible);
         self.video.begin_frame();
-        let split_dot = (self.frame_number.wrapping_mul(2) % DISPLAY_WIDTH as u64) as u16;
-        self.video
-            .write_palette_at(RasterTick::new(100, split_dot).unwrap(), 0xe0, [66, 190, 245, 255])
-            .expect("demo raster event is ordered");
         self.frame_number = self.frame_number.wrapping_add(1);
+    }
+
+    fn handle_key(&mut self, key: &Key) {
+        let action = dispatch_terminal_key(&mut self.terminal, key);
+        if let TerminalAction::SwitchMode(mode) = action {
+            self.terminal.switch_mode(mode);
+        }
     }
 }
 
-fn draw_startup_screen(video: &mut Video) {
-    let pixels = video.pixels_mut();
-    for y in 0..DISPLAY_HEIGHT {
-        for x in 0..DISPLAY_WIDTH {
-            let grid = x % 32 == 0 || y % 25 == 0;
-            let border =
-                !(8..DISPLAY_WIDTH - 8).contains(&x) || !(8..DISPLAY_HEIGHT - 8).contains(&y);
-            let color = if border {
-                0xff
-            } else if grid {
-                0x49
-            } else if ((x / 16) + (y / 16)) & 1 == 0 {
-                0xe0
-            } else {
-                0x03
-            };
-            pixels[y * DISPLAY_WIDTH + x] = color;
+fn dispatch_terminal_key(terminal: &mut Terminal, key: &Key) -> TerminalAction {
+    match key {
+        Key::Named(NamedKey::Enter) => terminal.submit(),
+        Key::Named(NamedKey::Backspace) => {
+            terminal.backspace();
+            TerminalAction::None
         }
+        Key::Named(NamedKey::F1) => TerminalAction::SwitchMode(AppMode::Editor),
+        Key::Named(NamedKey::F2) => TerminalAction::SwitchMode(AppMode::Game),
+        Key::Named(NamedKey::Space) => {
+            terminal.input_character(' ');
+            TerminalAction::None
+        }
+        Key::Character(text) => {
+            for character in text.chars() {
+                terminal.input_character(character);
+            }
+            TerminalAction::None
+        }
+        _ => TerminalAction::None,
     }
+}
+
+const fn should_process_keyboard_input(state: ElementState, _repeat: bool) -> bool {
+    matches!(state, ElementState::Pressed)
 }
 
 fn create_event_loop() -> Result<EventLoop<UserEvent>, winit::error::EventLoopError> {
     EventLoop::<UserEvent>::with_user_event().build()
 }
 
+fn initial_mode() -> AppMode {
+    if std::env::args().any(|argument| argument == "--game") {
+        AppMode::Game
+    } else {
+        AppMode::Editor
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = create_event_loop()?;
-    let mut app = FanticonApp::new(event_loop.create_proxy());
+    let mut app = FanticonApp::new(event_loop.create_proxy(), initial_mode());
     event_loop.run_app(&mut app)?;
     Ok(())
 }
@@ -219,7 +242,7 @@ fn main() {
     use winit::platform::web::EventLoopExtWebSys;
 
     let event_loop = create_event_loop().expect("create Fanticon event loop");
-    let app = FanticonApp::new(event_loop.create_proxy());
+    let app = FanticonApp::new(event_loop.create_proxy(), initial_mode());
     event_loop.spawn_app(app);
 }
 
@@ -234,4 +257,28 @@ fn attach_canvas(window: &Window) {
     let canvas = window.canvas().expect("Fanticon window has a canvas");
     canvas.set_id("fanticon-display");
     let _ = body.append_child(canvas.unchecked_ref());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_space_key_is_inserted_into_terminal_input() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+
+        dispatch_terminal_key(&mut terminal, &Key::Character("ECHO".into()));
+        dispatch_terminal_key(&mut terminal, &Key::Named(NamedKey::Space));
+        dispatch_terminal_key(&mut terminal, &Key::Character("OK".into()));
+
+        assert_eq!(terminal.submit(), TerminalAction::None);
+    }
+
+    #[test]
+    fn pressed_key_repeats_are_processed_but_releases_are_not() {
+        assert!(should_process_keyboard_input(ElementState::Pressed, false));
+        assert!(should_process_keyboard_input(ElementState::Pressed, true));
+        assert!(!should_process_keyboard_input(ElementState::Released, false));
+        assert!(!should_process_keyboard_input(ElementState::Released, true));
+    }
 }

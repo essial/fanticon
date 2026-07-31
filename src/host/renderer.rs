@@ -10,6 +10,7 @@ use winit::{dpi::PhysicalSize, window::Window};
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct DisplayUniform {
     surface_size: [f32; 2],
+    source_size: [f32; 2],
     crt_strength: f32,
     time_seconds: f32,
     text_mode: f32,
@@ -22,12 +23,15 @@ pub struct Renderer {
     queue: wgpu::Queue,
     configuration: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
+    sampler: wgpu::Sampler,
     display_texture: wgpu::Texture,
     uniform_buffer: wgpu::Buffer,
     rgba_frame: Vec<u8>,
     start_time: Instant,
     text_mode: bool,
+    source_size: (u32, u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,7 +96,7 @@ impl Renderer {
         surface.configure(&device, &configuration);
 
         let display_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Fanticon 320x200 display"),
+            label: Some("Fanticon display"),
             size: wgpu::Extent3d {
                 width: DISPLAY_WIDTH as u32,
                 height: DISPLAY_HEIGHT as u32,
@@ -118,6 +122,7 @@ impl Renderer {
         });
         let uniform = DisplayUniform {
             surface_size: [size.width as f32, size.height as f32],
+            source_size: [DISPLAY_WIDTH as f32, DISPLAY_HEIGHT as f32],
             crt_strength: 0.82,
             time_seconds: 0.0,
             text_mode: 0.0,
@@ -215,12 +220,15 @@ impl Renderer {
             queue,
             configuration,
             pipeline,
+            bind_group_layout,
             bind_group,
+            sampler,
             display_texture,
             uniform_buffer,
             rgba_frame: vec![0; RGBA_FRAME_LEN],
             start_time: Instant::now(),
             text_mode: false,
+            source_size: (DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32),
         })
     }
 
@@ -235,8 +243,13 @@ impl Renderer {
     }
 
     pub fn render(&mut self, video: &mut Video, text_mode: bool) -> FrameStatus {
+        let source_size = (video.width() as u32, video.height() as u32);
+        if source_size != self.source_size {
+            self.set_source_size(source_size);
+        }
         self.text_mode = text_mode;
         self.write_uniform();
+        self.rgba_frame.resize(video.rgba_len(), 0);
         video.resolve_rgba(&mut self.rgba_frame).expect("fixed-size display buffer");
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -248,12 +261,12 @@ impl Renderer {
             &self.rgba_frame,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some((DISPLAY_WIDTH * 4) as u32),
-                rows_per_image: Some(DISPLAY_HEIGHT as u32),
+                bytes_per_row: Some(self.source_size.0 * 4),
+                rows_per_image: Some(self.source_size.1),
             },
             wgpu::Extent3d {
-                width: DISPLAY_WIDTH as u32,
-                height: DISPLAY_HEIGHT as u32,
+                width: self.source_size.0,
+                height: self.source_size.1,
                 depth_or_array_layers: 1,
             },
         );
@@ -301,6 +314,7 @@ impl Renderer {
     fn write_uniform(&self) {
         let uniform = DisplayUniform {
             surface_size: [self.configuration.width as f32, self.configuration.height as f32],
+            source_size: [self.source_size.0 as f32, self.source_size.1 as f32],
             crt_strength: 0.82,
             time_seconds: self.start_time.elapsed().as_secs_f32(),
             text_mode: u8::from(self.text_mode) as f32,
@@ -308,6 +322,55 @@ impl Renderer {
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
     }
+
+    fn set_source_size(&mut self, source_size: (u32, u32)) {
+        self.display_texture = create_display_texture(&self.device, source_size);
+        let texture_view =
+            self.display_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.bind_group = create_display_bind_group(
+            &self.device,
+            &self.bind_group_layout,
+            &texture_view,
+            &self.sampler,
+            &self.uniform_buffer,
+        );
+        self.source_size = source_size;
+        self.rgba_frame.resize(source_size.0 as usize * source_size.1 as usize * 4, 0);
+    }
+}
+
+fn create_display_texture(device: &wgpu::Device, size: (u32, u32)) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Fanticon display"),
+        size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+fn create_display_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    texture_view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    uniform_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Fanticon display bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(texture_view),
+            },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry { binding: 2, resource: uniform_buffer.as_entire_binding() },
+        ],
+    })
 }
 
 fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {

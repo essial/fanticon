@@ -1,10 +1,8 @@
-use fanticon::{
-    assembler::Diagnostic,
-    video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, Video},
-};
+use fanticon::{assembler::Diagnostic, video::Video};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 use super::{
+    EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH,
     builder::build_source,
     character_rom::{
         BOX_BOTTOM_LEFT, BOX_BOTTOM_RIGHT, BOX_HORIZONTAL, BOX_TOP_LEFT, BOX_TOP_RIGHT,
@@ -15,8 +13,8 @@ use super::{
     ui_colors::SharedUiColors,
 };
 
-const COLUMNS: usize = DISPLAY_WIDTH / GLYPH_WIDTH;
-const ROWS: usize = DISPLAY_HEIGHT / GLYPH_HEIGHT;
+const COLUMNS: usize = EDITOR_DISPLAY_WIDTH / GLYPH_WIDTH;
+const ROWS: usize = EDITOR_DISPLAY_HEIGHT / GLYPH_HEIGHT;
 const TEXT_ROWS: usize = ROWS - 2;
 const ASM_TEXT_COLOR: u8 = 240;
 const ASM_LABEL_COLOR: u8 = 241;
@@ -262,6 +260,7 @@ impl TextEditor {
     }
 
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
+        debug_assert_eq!(video.dimensions(), (EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT));
         let colors = self.colors.get();
         let assembly_mode = self.assembly_mode();
         configure_ui_palette(video);
@@ -342,9 +341,9 @@ impl TextEditor {
             let y = (self.cursor.line.saturating_sub(self.scroll_line) + 1) * GLYPH_HEIGHT
                 + GLYPH_HEIGHT
                 - 1;
-            if x < DISPLAY_WIDTH && y < DISPLAY_HEIGHT - GLYPH_HEIGHT {
-                for pixel_x in x..(x + 5).min(DISPLAY_WIDTH) {
-                    video.pixels_mut()[y * DISPLAY_WIDTH + pixel_x] = foreground;
+            if x < EDITOR_DISPLAY_WIDTH && y < EDITOR_DISPLAY_HEIGHT - GLYPH_HEIGHT {
+                for pixel_x in x..(x + 5).min(EDITOR_DISPLAY_WIDTH) {
+                    video.pixels_mut()[y * EDITOR_DISPLAY_WIDTH + pixel_x] = foreground;
                 }
             }
         }
@@ -486,10 +485,10 @@ impl TextEditor {
             }
             Overlay::Dialog { kind, input, error } => {
                 let title = if *kind == DialogKind::Open { "OPEN FILE" } else { "SAVE FILE" };
-                let x = 4;
-                let y = 8;
                 let width = 32;
                 let height = 8;
+                let x = (COLUMNS - width) / 2;
+                let y = (ROWS - height) / 2;
                 draw_window(
                     cells,
                     foregrounds,
@@ -1018,8 +1017,8 @@ fn render_message_box(
     title: &str,
     lines: &[String],
 ) {
-    let x = 3;
     let width = 34;
+    let x = (COLUMNS - width) / 2;
     let visible_lines = lines.len().min(7);
     let height = visible_lines + 4;
     let y = (ROWS - height) / 2;
@@ -1133,8 +1132,8 @@ fn render_cells(
             };
             if cell_background != background {
                 for y in cell_y * GLYPH_HEIGHT..(cell_y + 1) * GLYPH_HEIGHT {
-                    pixels[y * DISPLAY_WIDTH + cell_x * GLYPH_WIDTH
-                        ..y * DISPLAY_WIDTH + (cell_x + 1) * GLYPH_WIDTH]
+                    pixels[y * EDITOR_DISPLAY_WIDTH + cell_x * GLYPH_WIDTH
+                        ..y * EDITOR_DISPLAY_WIDTH + (cell_x + 1) * GLYPH_WIDTH]
                         .fill(cell_background);
                 }
             }
@@ -1144,7 +1143,7 @@ fn render_cells(
                     if bits & (0x80 >> glyph_x) != 0 {
                         let x = cell_x * GLYPH_WIDTH + glyph_x;
                         let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                        pixels[y * DISPLAY_WIDTH + x] = cell_foreground;
+                        pixels[y * EDITOR_DISPLAY_WIDTH + x] = cell_foreground;
                     }
                 }
             }
@@ -1487,7 +1486,7 @@ mod tests {
         let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
         editor.insert_text("hello");
         editor.open_menu(MenuKind::File);
-        let mut video = Video::new();
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut video, true);
         assert!(video.pixels().contains(&255));
         assert!(video.pixels().contains(&0));
@@ -1618,7 +1617,7 @@ mod tests {
         let filesystem = shared_filesystem();
         filesystem.borrow_mut().write_text("code.asm", "START LDA #$01 ; VALUE").unwrap();
         let editor = TextEditor::new(filesystem, shared_ui_colors(), Some("code.asm".to_owned()));
-        let mut video = Video::new();
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut video, false);
         assert_eq!(video.palette()[ASM_TEXT_COLOR as usize], [205, 214, 244, 255]);
         assert_eq!(video.palette()[ASM_COMMENT_COLOR as usize], [127, 132, 156, 255]);
@@ -1649,7 +1648,7 @@ mod tests {
             editor.overlay,
             Overlay::Message { ref title, .. } if title == "BUILD SUCCESSFUL"
         ));
-        let mut video = Video::new();
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut video, false);
         assert!(video.pixels().contains(&UI_WHITE_COLOR));
         assert!(video.pixels().contains(&UI_SUCCESS_BACKGROUND));
@@ -1672,7 +1671,7 @@ mod tests {
             editor.overlay,
             Overlay::Message { ref title, .. } if title == "BUILD ERRORS"
         ));
-        let mut video = Video::new();
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut video, false);
         assert!(video.pixels().contains(&UI_WHITE_COLOR));
         assert!(video.pixels().contains(&UI_ERROR_BACKGROUND));

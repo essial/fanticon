@@ -1,5 +1,6 @@
 struct DisplayUniform {
     surface_size: vec2<f32>,
+    source_size: vec2<f32>,
     crt_strength: f32,
     time_seconds: f32,
     text_mode: f32,
@@ -36,7 +37,7 @@ fn source_sample(uv: vec2<f32>) -> vec3<f32> {
 }
 
 fn beam_sample(uv: vec2<f32>) -> vec3<f32> {
-    let texel = vec2<f32>(1.0 / 320.0, 1.0 / 200.0);
+    let texel = vec2<f32>(1.0) / display.source_size;
     let center = source_sample(uv) * 0.70;
     let horizontal = (
         source_sample(uv - vec2<f32>(texel.x * 0.55, 0.0))
@@ -77,7 +78,7 @@ fn bright_pass(uv: vec2<f32>) -> vec3<f32> {
 
 @fragment
 fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let source_size = vec2<f32>(320.0, 200.0);
+    let source_size = display.source_size;
     let fit_scale = min(
         display.surface_size.x / source_size.x,
         display.surface_size.y / source_size.y,
@@ -98,7 +99,7 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // changes from frame to frame.
     let frame = floor(display.time_seconds * 60.0);
     let uv = stable_uv;
-    let texel = vec2<f32>(1.0 / 320.0, 1.0 / 200.0);
+    let texel = vec2<f32>(1.0) / source_size;
     let source_position = uv * source_size;
     let text_mode = display.text_mode > 0.5;
     let sharp_text_uv = (floor(source_position) + vec2<f32>(0.5)) / source_size;
@@ -152,6 +153,14 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let bloom_strength = select(1.0, 0.16, text_mode);
     color += (bloom_horizontal * 0.026 + bloom_vertical * 0.018 + bloom_diagonal * 0.006)
         * bloom_strength;
+
+    // Native editor glyphs use the 8x8 character ROM. Apply this after bloom
+    // so the halo cannot wash the gradient back out: the top keeps its final
+    // reconstructed color while the bottom of each cell is 20% darker.
+    if text_mode {
+        let glyph_row = fract(floor(source_position.y) / 8.0) * (8.0 / 7.0);
+        color *= 1.0 - glyph_row * 0.20;
+    }
 
     let snow = hash_noise(floor(screen_position) + vec2<f32>(frame * 17.0, frame * 23.0));
     color += vec3<f32>((snow - 0.5) * 0.003);

@@ -46,8 +46,10 @@ separates frozen v0.1 contracts from remaining implementation work.
 ## Run the Fanticon host
 
 The current app host runs a paced 60 Hz emulation loop and opens a resizable
-320×200 virtual display with aspect-correct letterboxing, scanlines, phosphor
-beam shaping, and composite color bleed. On launch, a centered Fanticon logo
+8:5 virtual display. Game mode remains hardware-accurate at 320×200; native
+Editor mode uses 640×400 with an 80×50 character grid. Both use aspect-correct
+letterboxing, scanlines, phosphor beam shaping, and composite color bleed. On
+launch, a centered Fanticon logo
 appears for five seconds and can be dismissed by keyboard or mouse after a 500 ms
 guard. The native Editor mode command console then appears by default.
 

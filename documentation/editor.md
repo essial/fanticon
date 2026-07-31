@@ -37,15 +37,20 @@ restarting the window or GPU renderer.
 
 ## Character display
 
-The native console is exactly 40 columns by 25 rows. Each cell is rendered from
-an embedded 8×8 character ROM, matching the 320×200 framebuffer without fractional
-cell positioning. The ROM contains uppercase ASCII letters, numbers, and command
-punctuation. Typed lowercase characters are normalized to uppercase.
+Editor mode is 640×400 and its native console is exactly 80 columns by 50 rows.
+Game mode remains the fantasy hardware's 320×200 output and uses a 40×25 prompt
+until a cartridge takes ownership of the display. Each cell is rendered from an
+embedded 8×8 character ROM without fractional positioning. The ROM contains
+uppercase ASCII letters, numbers, and command punctuation. Typed lowercase
+characters are normalized to uppercase.
 
 The terminal writes character-ROM pixels into indexed video memory. It does not
 ask the operating system to draw text, so appearance and layout are identical on
 Windows, Linux, macOS, and WebAssembly. The final GPU presentation still supplies
 CRT beam reconstruction, composite filtering, bloom, and scanline character.
+Within each 8-pixel character row, the top retains the exact palette color and
+the presentation darkens gradually by 20% toward the bottom. This restrained
+phosphor-density gradient applies only to native Editor mode, not game output.
 
 The ROM also reserves native UI glyphs for connected window borders, selection
 arrows, build progress, success, and error symbols. Editor menus and dialogs clear

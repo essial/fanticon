@@ -8,6 +8,9 @@ mod terminal;
 mod text_editor;
 mod ui_colors;
 
+pub const EDITOR_DISPLAY_WIDTH: usize = 640;
+pub const EDITOR_DISPLAY_HEIGHT: usize = 400;
+
 pub use boot_splash::{BootSplash, draw_boot_logo};
 pub use frame_pacer::FramePacer;
 pub use renderer::{FrameStatus, Renderer};

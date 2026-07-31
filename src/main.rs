@@ -144,8 +144,10 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
             }
             WindowEvent::RedrawRequested => {
                 if let Some(renderer) = &mut self.renderer {
-                    let text_mode = !self.boot_splash.is_active(Instant::now());
-                    match renderer.render(&mut self.video, text_mode) {
+                    let editor_presentation = !self.boot_splash.is_active(Instant::now())
+                        && self.video.dimensions()
+                            == (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT);
+                    match renderer.render(&mut self.video, editor_presentation) {
                         FrameStatus::Presented | FrameStatus::Skip => {}
                         FrameStatus::Reconfigure => renderer.resize(window.inner_size()),
                     }
@@ -180,6 +182,15 @@ impl FanticonApp {
         if self.boot_splash.is_active(now) {
             self.video.begin_frame();
             return;
+        }
+
+        let dimensions = if self.text_editor.is_some() {
+            (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT)
+        } else {
+            self.terminal.display_dimensions()
+        };
+        if self.video.dimensions() != dimensions {
+            self.video = Video::new_with_size(dimensions.0, dimensions.1);
         }
 
         let cursor_visible = (self.frame_number / 30).is_multiple_of(2);

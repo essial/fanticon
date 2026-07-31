@@ -1,8 +1,10 @@
 # Fanticon Video Architecture
 
-Fanticon presents a fixed 320×200 virtual display. The host window may be any
-size: the GPU scales the display to the largest centered 8:5 rectangle and draws
-exact solid-black letterbox or pillarbox bars around it.
+Fanticon cartridges present a fixed 320×200 virtual display. Native Editor mode
+uses a separate 640×400 surface so its 8×8 character ROM provides an 80×50 text
+grid without changing VM video hardware. The host window may be any size: the GPU
+scales either 8:5 surface to the largest centered rectangle and draws exact
+solid-black letterbox or pillarbox bars around it.
 
 ## Running the host
 
@@ -10,9 +12,9 @@ exact solid-black letterbox or pillarbox bars around it.
 cargo run --release
 ```
 
-After boot, the host displays its native 40×25 command console. It does not run a
-cartridge yet. The console is rendered into the same indexed framebuffer and CRT
-presentation path a game will use.
+After boot, the host displays its native 80×50 Editor command console. It does not
+run a cartridge yet. The console uses the same indexed-color and CRT presentation
+path as a game, but not the VM's 320×200 framebuffer or raster hardware.
 
 Before the diagnostic screen, the app presents the centered Fanticon logo for
 five seconds. Keyboard and mouse presses are ignored for the first 500 ms to
@@ -42,15 +44,16 @@ CPU cycles, timers, audio, and cartridge execution will be added to
 
 The display pipeline has three intentionally separate layers:
 
-1. `Video` owns the 320×200 indexed framebuffer, 256-entry RGBA palette, and
+1. `Video` owns the active indexed framebuffer—320×200 for games or 640×400 for
+   native tools—plus its 256-entry RGBA palette and
    ordered raster-event log.
 2. At the end of a VM frame, `Video::resolve_rgba` makes one linear pass over the
    active display and applies palette or pixel writes when the simulated beam
    reaches their timestamp.
-3. The host uploads the resulting 256 KiB RGBA image to one persistent GPU
-   texture and draws one fullscreen triangle. A WGSL shader performs scaling,
-   letterboxing, scanline beam shaping, composite color filtering, bloom, and a
-   mild vignette.
+3. The host uploads the resulting RGBA image—256 KiB for games or 1,000 KiB for
+   Editor mode—to one persistent GPU texture and draws one fullscreen triangle.
+   A WGSL shader performs scaling, letterboxing, scanline beam shaping, composite
+   color filtering, bloom, and a mild vignette.
 
 There are no per-pixel draw calls, transient GPU textures, or allocations in the
 steady-state presentation path. The CPU-side resolve is bounded by 64,000 pixels

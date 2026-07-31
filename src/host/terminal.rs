@@ -4,11 +4,8 @@ use super::builder::build_file;
 use super::character_rom::{CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH};
 use super::filesystem::{DirectoryEntry, SharedFilesystem, shared_filesystem};
 use super::ui_colors::{SharedUiColors, UiColors, parse_palette_index, shared_ui_colors};
+use super::{EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH};
 
-const COLUMNS: usize = DISPLAY_WIDTH / GLYPH_WIDTH;
-const ROWS: usize = DISPLAY_HEIGHT / GLYPH_HEIGHT;
-const CELL_COUNT: usize = COLUMNS * ROWS;
-const MAX_INPUT: usize = COLUMNS - 3;
 const DUMP_OFFSET_COLOR: u8 = 251;
 const DUMP_BYTE_COLOR: u8 = 252;
 const DUMP_ASCII_COLOR: u8 = 253;
@@ -28,6 +25,18 @@ impl AppMode {
             Self::Editor => "EDITOR",
         }
     }
+
+    pub const fn display_dimensions(self) -> (usize, usize) {
+        match self {
+            Self::Game => (DISPLAY_WIDTH, DISPLAY_HEIGHT),
+            Self::Editor => (EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT),
+        }
+    }
+
+    const fn text_dimensions(self) -> (usize, usize) {
+        let (width, height) = self.display_dimensions();
+        (width / GLYPH_WIDTH, height / GLYPH_HEIGHT)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,8 +47,10 @@ pub enum TerminalAction {
 }
 
 pub struct Terminal {
-    cells: [u8; CELL_COUNT],
-    cell_foregrounds: [Option<u8>; CELL_COUNT],
+    cells: Vec<u8>,
+    cell_foregrounds: Vec<Option<u8>>,
+    columns: usize,
+    rows: usize,
     cursor_x: usize,
     cursor_y: usize,
     input: String,
@@ -50,12 +61,16 @@ pub struct Terminal {
 
 impl Terminal {
     pub fn new(mode: AppMode) -> Self {
+        let (columns, rows) = mode.text_dimensions();
+        let cell_count = columns * rows;
         let mut terminal = Self {
-            cells: [b' '; CELL_COUNT],
-            cell_foregrounds: [None; CELL_COUNT],
+            cells: vec![b' '; cell_count],
+            cell_foregrounds: vec![None; cell_count],
+            columns,
+            rows,
             cursor_x: 0,
             cursor_y: 0,
-            input: String::with_capacity(MAX_INPUT),
+            input: String::with_capacity(columns - 3),
             mode,
             filesystem: shared_filesystem(),
             colors: shared_ui_colors(),
@@ -65,7 +80,7 @@ impl Terminal {
     }
 
     pub fn input_character(&mut self, character: char) {
-        if self.input.len() >= MAX_INPUT || !character.is_ascii() {
+        if self.input.len() >= self.columns - 3 || !character.is_ascii() {
             return;
         }
         let byte = character.to_ascii_uppercase() as u8;
@@ -78,8 +93,8 @@ impl Terminal {
     pub fn backspace(&mut self) {
         if self.input.pop().is_some() && self.cursor_x > 0 {
             self.cursor_x -= 1;
-            self.cells[self.cursor_y * COLUMNS + self.cursor_x] = b' ';
-            self.cell_foregrounds[self.cursor_y * COLUMNS + self.cursor_x] = None;
+            self.cells[self.cursor_y * self.columns + self.cursor_x] = b' ';
+            self.cell_foregrounds[self.cursor_y * self.columns + self.cursor_x] = None;
         }
     }
 
@@ -95,7 +110,12 @@ impl Terminal {
 
     pub fn switch_mode(&mut self, mode: AppMode) {
         self.mode = mode;
-        self.clear();
+        (self.columns, self.rows) = mode.text_dimensions();
+        self.cells = vec![b' '; self.columns * self.rows];
+        self.cell_foregrounds = vec![None; self.columns * self.rows];
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+        self.input.clear();
         self.show_banner();
     }
 
@@ -107,23 +127,29 @@ impl Terminal {
         self.colors.clone()
     }
 
+    pub const fn display_dimensions(&self) -> (usize, usize) {
+        self.mode.display_dimensions()
+    }
+
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
+        let (display_width, display_height) = self.mode.display_dimensions();
+        debug_assert_eq!(video.dimensions(), (display_width, display_height));
         let colors = self.colors.get();
         configure_dump_palette(video);
         let pixels = video.pixels_mut();
         pixels.fill(colors.background);
 
-        for cell_y in 0..ROWS {
-            for cell_x in 0..COLUMNS {
-                let character = self.cells[cell_y * COLUMNS + cell_x] as usize;
+        for cell_y in 0..self.rows {
+            for cell_x in 0..self.columns {
+                let character = self.cells[cell_y * self.columns + cell_x] as usize;
                 let glyph = CHARACTER_ROM[character.min(CHARACTER_ROM.len() - 1)];
                 for (glyph_y, bits) in glyph.into_iter().enumerate() {
                     for glyph_x in 0..GLYPH_WIDTH {
                         if bits & (0x80 >> glyph_x) != 0 {
                             let x = cell_x * GLYPH_WIDTH + glyph_x;
                             let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                            pixels[y * DISPLAY_WIDTH + x] = self.cell_foregrounds
-                                [cell_y * COLUMNS + cell_x]
+                            pixels[y * display_width + x] = self.cell_foregrounds
+                                [cell_y * self.columns + cell_x]
                                 .unwrap_or(colors.foreground);
                         }
                     }
@@ -134,8 +160,8 @@ impl Terminal {
         if cursor_visible {
             let start_x = self.cursor_x * GLYPH_WIDTH + 1;
             let y = self.cursor_y * GLYPH_HEIGHT + GLYPH_HEIGHT - 1;
-            for x in start_x..(start_x + 5).min(DISPLAY_WIDTH) {
-                pixels[y * DISPLAY_WIDTH + x] = colors.foreground;
+            for x in start_x..(start_x + 5).min(display_width) {
+                pixels[y * display_width + x] = colors.foreground;
             }
         }
     }
@@ -419,10 +445,10 @@ impl Terminal {
     }
 
     fn put_byte_with_color(&mut self, byte: u8, foreground: Option<u8>) {
-        if self.cursor_x >= COLUMNS {
+        if self.cursor_x >= self.columns {
             self.newline();
         }
-        let index = self.cursor_y * COLUMNS + self.cursor_x;
+        let index = self.cursor_y * self.columns + self.cursor_x;
         self.cells[index] = byte;
         self.cell_foregrounds[index] = foreground;
         self.cursor_x += 1;
@@ -431,12 +457,12 @@ impl Terminal {
     fn newline(&mut self) {
         self.cursor_x = 0;
         self.cursor_y += 1;
-        if self.cursor_y >= ROWS {
-            self.cells.copy_within(COLUMNS.., 0);
-            self.cell_foregrounds.copy_within(COLUMNS.., 0);
-            self.cells[(ROWS - 1) * COLUMNS..].fill(b' ');
-            self.cell_foregrounds[(ROWS - 1) * COLUMNS..].fill(None);
-            self.cursor_y = ROWS - 1;
+        if self.cursor_y >= self.rows {
+            self.cells.copy_within(self.columns.., 0);
+            self.cell_foregrounds.copy_within(self.columns.., 0);
+            self.cells[(self.rows - 1) * self.columns..].fill(b' ');
+            self.cell_foregrounds[(self.rows - 1) * self.columns..].fill(None);
+            self.cursor_y = self.rows - 1;
         }
     }
 }
@@ -485,7 +511,7 @@ mod tests {
     fn screen_text(terminal: &Terminal) -> String {
         terminal
             .cells
-            .chunks(COLUMNS)
+            .chunks(terminal.columns)
             .map(|row| String::from_utf8_lossy(row).into_owned())
             .collect::<Vec<_>>()
             .join("\n")
@@ -494,10 +520,12 @@ mod tests {
     fn screen_position(terminal: &Terminal, text: &str) -> usize {
         terminal
             .cells
-            .chunks(COLUMNS)
+            .chunks(terminal.columns)
             .enumerate()
             .find_map(|(row, cells)| {
-                String::from_utf8_lossy(cells).find(text).map(|column| row * COLUMNS + column)
+                String::from_utf8_lossy(cells)
+                    .find(text)
+                    .map(|column| row * terminal.columns + column)
             })
             .expect("text should be visible")
     }
@@ -528,8 +556,10 @@ mod tests {
     #[test]
     fn switching_mode_rebuilds_prompt() {
         let mut terminal = Terminal::new(AppMode::Game);
+        assert_eq!((terminal.columns, terminal.rows), (40, 25));
         terminal.switch_mode(AppMode::Editor);
         assert_eq!(terminal.mode, AppMode::Editor);
+        assert_eq!((terminal.columns, terminal.rows), (80, 50));
         assert_eq!(type_command(&mut terminal, "mode"), TerminalAction::None);
     }
 
@@ -569,7 +599,7 @@ mod tests {
         let mut terminal = Terminal::new(AppMode::Editor);
         type_command(&mut terminal, "color 3 $e0");
         assert_eq!(terminal.colors.get(), UiColors { background: 3, foreground: 224 });
-        let mut video = Video::new();
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         terminal.render(&mut video, false);
         assert!(video.pixels().contains(&3));
         assert!(video.pixels().contains(&224));

@@ -82,7 +82,7 @@ impl std::error::Error for VideoTimingError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RasterEventKind {
     Palette { index: u8, rgba: [u8; 4] },
-    Pixel { offset: u16, color: u8 },
+    Pixel { offset: u32, color: u8 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,11 +98,13 @@ struct RasterEvent {
 /// blank. During active emulation, use the timestamped write methods. Finally,
 /// call `resolve_rgba` once to materialize exactly what the beam observed.
 pub struct Video {
-    pixels: Box<[u8; FRAMEBUFFER_LEN]>,
+    width: usize,
+    height: usize,
+    pixels: Vec<u8>,
     palette: [[u8; 4]; 256],
-    frame_pixels: Box<[u8; FRAMEBUFFER_LEN]>,
+    frame_pixels: Vec<u8>,
     frame_palette: [[u8; 4]; 256],
-    resolve_pixels: Box<[u8; FRAMEBUFFER_LEN]>,
+    resolve_pixels: Vec<u8>,
     events: Vec<RasterEvent>,
 }
 
@@ -114,22 +116,46 @@ impl Default for Video {
 
 impl Video {
     pub fn new() -> Self {
+        Self::new_with_size(DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    }
+
+    pub fn new_with_size(width: usize, height: usize) -> Self {
+        assert!(width > 0 && height > 0);
+        let pixel_count = width.checked_mul(height).expect("video dimensions are too large");
         let palette = rgb332_palette();
         Self {
-            pixels: Box::new([0; FRAMEBUFFER_LEN]),
+            width,
+            height,
+            pixels: vec![0; pixel_count],
             palette,
-            frame_pixels: Box::new([0; FRAMEBUFFER_LEN]),
+            frame_pixels: vec![0; pixel_count],
             frame_palette: palette,
-            resolve_pixels: Box::new([0; FRAMEBUFFER_LEN]),
+            resolve_pixels: vec![0; pixel_count],
             events: Vec::with_capacity(256),
         }
     }
 
-    pub fn pixels(&self) -> &[u8; FRAMEBUFFER_LEN] {
+    pub const fn width(&self) -> usize {
+        self.width
+    }
+
+    pub const fn height(&self) -> usize {
+        self.height
+    }
+
+    pub const fn dimensions(&self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+
+    pub const fn rgba_len(&self) -> usize {
+        self.width * self.height * 4
+    }
+
+    pub fn pixels(&self) -> &[u8] {
         &self.pixels
     }
 
-    pub fn pixels_mut(&mut self) -> &mut [u8; FRAMEBUFFER_LEN] {
+    pub fn pixels_mut(&mut self) -> &mut [u8] {
         &mut self.pixels
     }
 
@@ -143,7 +169,7 @@ impl Video {
 
     /// Snapshot persistent video state at the leading edge of a new frame.
     pub fn begin_frame(&mut self) {
-        self.frame_pixels.copy_from_slice(self.pixels.as_slice());
+        self.frame_pixels.copy_from_slice(&self.pixels);
         self.frame_palette = self.palette;
         self.events.clear();
     }
@@ -166,30 +192,28 @@ impl Video {
         y: u16,
         color: u8,
     ) -> Result<(), VideoTimingError> {
-        if x as usize >= DISPLAY_WIDTH || y as usize >= DISPLAY_HEIGHT {
+        if x as usize >= self.width || y as usize >= self.height {
             return Err(VideoTimingError::PixelOutOfRange { x, y });
         }
-        let offset = y as usize * DISPLAY_WIDTH + x as usize;
-        self.record(tick, RasterEventKind::Pixel { offset: offset as u16, color })?;
+        let offset = y as usize * self.width + x as usize;
+        self.record(tick, RasterEventKind::Pixel { offset: offset as u32, color })?;
         self.pixels[offset] = color;
         Ok(())
     }
 
     /// Resolve the indexed frame in a single linear pass with no allocation.
     pub fn resolve_rgba(&mut self, output: &mut [u8]) -> Result<(), VideoTimingError> {
-        if output.len() != RGBA_FRAME_LEN {
-            return Err(VideoTimingError::OutputSize {
-                expected: RGBA_FRAME_LEN,
-                actual: output.len(),
-            });
+        let expected = self.rgba_len();
+        if output.len() != expected {
+            return Err(VideoTimingError::OutputSize { expected, actual: output.len() });
         }
 
-        self.resolve_pixels.copy_from_slice(self.frame_pixels.as_slice());
+        self.resolve_pixels.copy_from_slice(&self.frame_pixels);
         let mut palette = self.frame_palette;
         let mut event_index = 0;
 
-        for y in 0..DISPLAY_HEIGHT {
-            for x in 0..DISPLAY_WIDTH {
+        for y in 0..self.height {
+            for x in 0..self.width {
                 let beam = y as u32 * DOTS_PER_SCANLINE as u32 + x as u32;
                 while let Some(event) =
                     self.events.get(event_index).filter(|e| e.tick.raw() <= beam)
@@ -203,7 +227,7 @@ impl Video {
                     event_index += 1;
                 }
 
-                let pixel = y * DISPLAY_WIDTH + x;
+                let pixel = y * self.width + x;
                 let rgba = palette[self.resolve_pixels[pixel] as usize];
                 output[pixel * 4..pixel * 4 + 4].copy_from_slice(&rgba);
             }
@@ -369,5 +393,20 @@ mod tests {
         assert_eq!(BITMAP_BYTES, 32_000);
         assert_eq!(BITMAP_VRAM_END, 0xbcff);
         assert_eq!(DEFAULT_RASTER_TARGET, (511, 511));
+    }
+
+    #[test]
+    fn host_tools_can_use_a_larger_framebuffer_without_changing_vm_dimensions() {
+        let mut video = Video::new_with_size(640, 400);
+        assert_eq!(video.dimensions(), (640, 400));
+        assert_eq!(video.pixels().len(), 256_000);
+        assert_eq!(video.rgba_len(), 1_024_000);
+        assert_eq!((DISPLAY_WIDTH, DISPLAY_HEIGHT), (320, 200));
+
+        video.pixels_mut()[639] = 1;
+        video.begin_frame();
+        let mut rgba = vec![0; video.rgba_len()];
+        video.resolve_rgba(&mut rgba).unwrap();
+        assert_eq!(&rgba[639 * 4..639 * 4 + 4], &rgb332_to_rgba(1));
     }
 }

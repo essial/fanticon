@@ -15,6 +15,13 @@ The pattern deliberately changes palette color partway through scanline 100 to
 exercise the same raster-event path future VM hardware will use. The split moves
 at the host's 60 Hz emulation rate.
 
+Before the diagnostic screen, the app presents the centered Fanticon logo for
+five seconds. Keyboard and mouse presses are ignored for the first 500 ms to
+prevent the launch input from immediately dismissing it; after that guard period,
+either input advances to the normal display. The boot timer begins when the GPU
+renderer is ready, ensuring initialization time does not consume the logo's
+visible duration.
+
 ## Emulation rate
 
 The host runs one emulation tick at an average of exactly 60 Hz. Its frame pacer
@@ -108,16 +115,18 @@ CRT effects are presentation-only. They never modify emulated framebuffer or
 palette state. The single GPU pass currently provides:
 
 - aspect-correct letterbox/pillarbox scaling;
-- nearest-neighbor sampling of the 320×200 source;
+- anisotropic beam reconstruction with continuous horizontal signal spread,
+  weaker vertical blending, and a vertical scanline beam profile without a
+  source-pixel column grid;
 - scanline luminance modulation tied to source scanlines;
-- an RGB phosphor triad mask tied to physical output pixels;
-- inexpensive channel-dependent horizontal bleed for color artifacting;
+- composite-inspired YIQ reconstruction that preserves luma detail while
+  reducing chroma bandwidth and adding restrained phase-dependent crosstalk;
 - edge darkening;
 - very subtle monochrome CRT snow refreshed by the 60 Hz presentation clock; and
 - a thresholded phosphor/glass bloom that lets bright pixels softly illuminate
   their horizontal, vertical, and diagonal neighbors.
 
-The snow changes luminance by at most 0.6% and never moves, scales, or distorts
+The snow changes luminance by at most 0.15% and never moves, scales, or distorts
 the image. It is presentation-only, so emulated pixels and raster timestamps
 remain deterministic.
 
@@ -128,3 +137,8 @@ looking blurred. It requires no intermediate texture or additional draw pass.
 Keeping these effects in the final shader makes their cost proportional to host
 window pixels, leaves the VM's pixel timing deterministic, and allows the visual
 style to become configurable later without touching emulation logic.
+
+The signal filtering approach is inspired by Shay Green's (blargg's) NTSC video
+filters, particularly their separate luma/chroma kernels and independently
+controlled artifacting, fringing, and color bleed. Fanticon uses a compact GPU
+approximation rather than incorporating those CPU filter sources directly.

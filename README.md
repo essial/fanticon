@@ -31,7 +31,8 @@ display, dot-timestamped raster events, GPU scaling, and CRT presentation pass.
 The current app host runs a paced 60 Hz emulation loop and opens a resizable
 320×200 virtual display with aspect-correct letterboxing, scanlines, phosphor
 masking, and color bleed. It shows a moving raster-effect diagnostic until
-cartridge execution is connected.
+cartridge execution is connected. On launch, a centered Fanticon logo appears
+for five seconds and can be dismissed by keyboard or mouse after a 500 ms guard.
 
 ```sh
 cargo run --release

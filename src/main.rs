@@ -3,12 +3,12 @@ mod host;
 use std::sync::Arc;
 
 use fanticon::video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, RasterTick, Video};
-use host::{FramePacer, FrameStatus, Renderer};
+use host::{BootSplash, FramePacer, FrameStatus, Renderer, draw_boot_logo};
 use web_time::Instant;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::WindowEvent,
+    event::{ElementState, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
@@ -24,19 +24,24 @@ struct FanticonApp {
     video: Video,
     frame_pacer: FramePacer,
     frame_number: u64,
+    boot_splash: BootSplash,
+    main_screen_ready: bool,
 }
 
 impl FanticonApp {
     fn new(event_proxy: winit::event_loop::EventLoopProxy<UserEvent>) -> Self {
         let mut video = Video::new();
-        draw_startup_screen(&mut video);
+        draw_boot_logo(&mut video);
+        let now = Instant::now();
         Self {
             event_proxy,
             window: None,
             renderer: None,
             video,
-            frame_pacer: FramePacer::new(Instant::now()),
+            frame_pacer: FramePacer::new(now),
             frame_number: 0,
+            boot_splash: BootSplash::new(now),
+            main_screen_ready: false,
         }
     }
 }
@@ -82,7 +87,9 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
         match event {
             UserEvent::RendererReady(Ok(renderer)) => {
                 self.renderer = Some(renderer);
-                self.frame_pacer.reset(Instant::now());
+                let now = Instant::now();
+                self.frame_pacer.reset(now);
+                self.boot_splash.reset(now);
             }
             UserEvent::RendererReady(Err(error)) => {
                 eprintln!("Fanticon renderer initialization failed: {error}");
@@ -110,6 +117,14 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
                 window.request_redraw();
             }
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed && !event.repeat =>
+            {
+                self.boot_splash.try_dismiss(Instant::now());
+            }
+            WindowEvent::MouseInput { state: ElementState::Pressed, .. } => {
+                self.boot_splash.try_dismiss(Instant::now());
+            }
             WindowEvent::RedrawRequested => {
                 if let Some(renderer) = &mut self.renderer {
                     match renderer.render(&mut self.video) {
@@ -134,7 +149,7 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
 
         let now = Instant::now();
         if self.frame_pacer.is_due(now) {
-            self.emulate_frame();
+            self.emulate_frame(now);
             window.request_redraw();
             self.frame_pacer.advance_after_frame(now);
         }
@@ -143,7 +158,17 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
 }
 
 impl FanticonApp {
-    fn emulate_frame(&mut self) {
+    fn emulate_frame(&mut self, now: Instant) {
+        if self.boot_splash.is_active(now) {
+            self.video.begin_frame();
+            return;
+        }
+
+        if !self.main_screen_ready {
+            draw_startup_screen(&mut self.video);
+            self.main_screen_ready = true;
+        }
+
         // The host currently has no VM to run. This split palette write makes
         // the timing path visible and exercises a sub-scanline state change.
         self.video.set_palette(0xe0, [245, 72, 66, 255]);

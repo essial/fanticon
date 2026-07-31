@@ -92,9 +92,11 @@ pixel the beam already passed remains in persistent video memory for the next
 frame but does not retroactively alter the current image. This supports raster
 palette splits, mid-scanline color changes, and timed framebuffer writes.
 
-The final CPU-cycle-to-video-dot ratio is not defined yet. When the fantasy
-console's master clock and video registers are specified, the bus/video device
-can convert master-clock time to `RasterTick` without changing the host renderer.
+The v0.1 machine clock is now defined as two video dots per 6502 cycle: 200 CPU
+cycles per scanline, 52,400 cycles per frame, and a 3.144 MHz CPU at 60 Hz. A bus
+transfer becomes visible on the second dot of its CPU cycle. The complete clock
+tree and mapped video-device contract are specified in
+[System Architecture](system-architecture.md).
 
 ## Untimed and timed writes
 

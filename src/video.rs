@@ -13,6 +13,12 @@ pub const RGBA_FRAME_LEN: usize = FRAMEBUFFER_LEN * 4;
 pub const DOTS_PER_SCANLINE: u16 = 400;
 pub const SCANLINES_PER_FRAME: u16 = 262;
 pub const DOTS_PER_FRAME: u32 = DOTS_PER_SCANLINE as u32 * SCANLINES_PER_FRAME as u32;
+pub const DEFAULT_RASTER_TARGET: (u16, u16) = (511, 511);
+pub const BITMAP_VRAM_START: usize = 0x4000;
+pub const BITMAP_BYTES: usize = DISPLAY_WIDTH * DISPLAY_HEIGHT / 2;
+pub const BITMAP_VRAM_END: usize = BITMAP_VRAM_START + BITMAP_BYTES - 1;
+pub const SPRITE_COUNT: usize = 32;
+pub const SPRITES_PER_SCANLINE: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RasterTick(u32);
@@ -216,19 +222,54 @@ impl Video {
     }
 }
 
+#[inline]
+pub const fn rgb332_to_rgba(value: u8) -> [u8; 4] {
+    let r = (value >> 5) & 7;
+    let g = (value >> 2) & 7;
+    let b = value & 3;
+    [
+        ((r as u16 * 255 + 3) / 7) as u8,
+        ((g as u16 * 255 + 3) / 7) as u8,
+        ((b as u16 * 255 + 1) / 3) as u8,
+        255,
+    ]
+}
+
+#[inline]
+pub const fn decode_sprite_x(raw: u16) -> i16 {
+    let raw = raw & 0x01ff;
+    if raw >= 0x01f0 { raw as i16 - 512 } else { raw as i16 }
+}
+
+#[inline]
+pub const fn decode_sprite_y(raw: u8) -> i16 {
+    if raw >= 0xf0 { raw as i16 - 256 } else { raw as i16 }
+}
+
+#[inline]
+pub const fn sprite_has_priority(
+    background_color: u8,
+    background_foreground: bool,
+    sprite_behind_background: bool,
+) -> bool {
+    background_color & 0x0f == 0 || (!background_foreground && !sprite_behind_background)
+}
+
+#[inline]
+pub const fn is_hblank(dot: u16) -> bool {
+    dot >= DISPLAY_WIDTH as u16 && dot < DOTS_PER_SCANLINE
+}
+
+#[inline]
+pub const fn is_vblank(scanline: u16) -> bool {
+    scanline >= DISPLAY_HEIGHT as u16 && scanline < SCANLINES_PER_FRAME
+}
+
 fn rgb332_palette() -> [[u8; 4]; 256] {
     let mut palette = [[0; 4]; 256];
     let mut index = 0;
     while index < 256 {
-        let r = ((index >> 5) & 7) as u8;
-        let g = ((index >> 2) & 7) as u8;
-        let b = (index & 3) as u8;
-        palette[index] = [
-            (u16::from(r) * 255 / 7) as u8,
-            (u16::from(g) * 255 / 7) as u8,
-            (u16::from(b) * 255 / 3) as u8,
-            255,
-        ];
+        palette[index] = rgb332_to_rgba(index as u8);
         index += 1;
     }
     palette
@@ -286,5 +327,47 @@ mod tests {
             video.write_palette_at(RasterTick::new(9, 399).unwrap(), 0, [0; 4]),
             Err(VideoTimingError::EventOutOfOrder { .. })
         ));
+    }
+
+    #[test]
+    fn reset_palette_is_identity_rgb332_with_rounded_expansion() {
+        let video = Video::new();
+        assert_eq!(video.palette()[0], [0, 0, 0, 255]);
+        assert_eq!(rgb332_to_rgba(0x40), [73, 0, 0, 255]);
+        assert_eq!(rgb332_to_rgba(0x08), [0, 73, 0, 255]);
+        assert_eq!(rgb332_to_rgba(0x02), [0, 0, 170, 255]);
+        assert_eq!(video.palette()[255], [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn sprite_coordinates_support_clipping_past_all_four_edges() {
+        assert_eq!(decode_sprite_x(0x01f0), -16);
+        assert_eq!(decode_sprite_x(0x01ff), -1);
+        assert_eq!(decode_sprite_x(0x0140), 320);
+        assert_eq!(decode_sprite_y(0xf0), -16);
+        assert_eq!(decode_sprite_y(0xff), -1);
+        assert_eq!(decode_sprite_y(0xc8), 200);
+    }
+
+    #[test]
+    fn sprite_background_priority_matches_the_frozen_truth_table() {
+        assert!(sprite_has_priority(0, true, true));
+        assert!(sprite_has_priority(1, false, false));
+        assert!(!sprite_has_priority(1, false, true));
+        assert!(!sprite_has_priority(1, true, false));
+        assert!(!sprite_has_priority(1, true, true));
+    }
+
+    #[test]
+    fn blanking_and_bitmap_boundaries_match_the_memory_map() {
+        assert!(!is_hblank(319));
+        assert!(is_hblank(320));
+        assert!(is_hblank(399));
+        assert!(!is_vblank(199));
+        assert!(is_vblank(200));
+        assert!(is_vblank(261));
+        assert_eq!(BITMAP_BYTES, 32_000);
+        assert_eq!(BITMAP_VRAM_END, 0xbcff);
+        assert_eq!(DEFAULT_RASTER_TARGET, (511, 511));
     }
 }

@@ -25,10 +25,23 @@ decimal arithmetic, undocumented opcodes, and optimization patterns.
 
 The [video architecture](documentation/video.md) describes the 320×200 indexed
 display, dot-timestamped raster events, GPU scaling, and CRT presentation pass.
+The [audio programmer's reference](documentation/audio.md) defines the two pulse,
+triangle, and noise voices, including exact waveforms, timing, and mixing.
 The [editor and command console](documentation/editor.md) describes application
 modes, the embedded character ROM, native commands, and future tool dispatch.
 The [macro assembler](documentation/assembler.md) documents building raw `.BIN`
 files, supported syntax and directives, Merlin-style macros, and diagnostics.
+The [system architecture](documentation/system-architecture.md) defines the VM's
+clock tree, memory and I/O maps, tile/bitmap video, sprites, NES-like audio,
+controllers, interrupts, timers, and cartridge-visible reset model.
+The [memory-map quick reference](documentation/memory-map.md) provides visual CPU
+and I/O maps, VRAM layouts, register addresses, bit fields, and address formulas.
+The [cartridge format](documentation/cartridge-format.md) specifies `.FCN`
+cartridges, 4 MiB ROM banking, battery-backed RAM, and `.SAV` persistence. The
+[cartridge-project guide](documentation/cartridge-projects.md) specifies
+manifests, bank-aware assembly, packaging, launching, and debugger requirements.
+The [system-details checklist](documentation/system-details-checklist.md)
+separates frozen v0.1 contracts from remaining implementation work.
 
 ## Run the Fanticon host
 

@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod assembler;
+pub mod audio;
 mod cpu;
+pub mod machine;
 pub mod video;
 
 pub use cpu::{Bus, ClockResult, Cpu, Pins, Status};

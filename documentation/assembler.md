@@ -1,5 +1,10 @@
 # Fanticon 6502 Macro Assembler
 
+This document describes current raw `.BIN` assembly. The frozen cartridge-build
+extensions—`FANTICON.CFG`, `BANK`, `FIXED`, and `BANKOF`—are specified in the
+[Fanticon Cartridge Projects](cartridge-projects.md) guide and remain to be
+implemented.
+
 Fanticon includes a native two-pass assembler for writing programs for its NMOS
 6502 VM. It accepts Merlin-inspired source, expands includes and macros, resolves
 labels, and writes a raw `.BIN` file. The binary contains only emitted bytes: the

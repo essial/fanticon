@@ -1,0 +1,61 @@
+# Rust and native build output
+/target/
+**/*.rs.bk
+*.dSYM/
+*.pdb
+*.ilk
+*.dmp
+core
+core.*
+
+# WebAssembly bundlers and local development servers
+/dist/
+/pkg/
+/.trunk/
+/.wasm-pack/
+
+# Shared VS Code launch configuration is tracked; everything else is personal.
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+/.idea/
+/.fleet/
+/.history/
+*.code-workspace
+*.swp
+*.swo
+*~
+
+# Operating-system metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Logs, temporary files, and test output
+*.log
+*.tmp
+*.temp
+/test-results/
+/junit.xml
+
+# Coverage and profiling artifacts
+/coverage/
+/tarpaulin-report.html
+/cobertura.xml
+/lcov.info
+*.profraw
+*.profdata
+/perf.data
+/perf.data.old
+/flamegraph.svg

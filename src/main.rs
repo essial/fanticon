@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use fanticon::video::Video;
 use host::{
-    AppMode, BootSplash, FramePacer, FrameStatus, Renderer, Terminal, TerminalAction,
-    draw_boot_logo,
+    AppMode, BootSplash, EditorAction, FramePacer, FrameStatus, Renderer, Terminal, TerminalAction,
+    TextEditor, draw_boot_logo,
 };
 use web_time::Instant;
 use winit::{
@@ -13,7 +13,7 @@ use winit::{
     dpi::LogicalSize,
     event::{ElementState, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::{Key, NamedKey},
+    keyboard::{Key, ModifiersState, NamedKey},
     window::{Window, WindowId},
 };
 
@@ -30,6 +30,8 @@ struct FanticonApp {
     frame_number: u64,
     boot_splash: BootSplash,
     terminal: Terminal,
+    text_editor: Option<TextEditor>,
+    modifiers: ModifiersState,
 }
 
 impl FanticonApp {
@@ -46,6 +48,8 @@ impl FanticonApp {
             frame_number: 0,
             boot_splash: BootSplash::new(now),
             terminal: Terminal::new(mode),
+            text_editor: None,
+            modifiers: ModifiersState::empty(),
         }
     }
 }
@@ -128,9 +132,10 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 if self.boot_splash.is_active(now) {
                     self.boot_splash.try_dismiss(now);
                 } else {
-                    self.handle_key(&event.logical_key);
+                    self.handle_key(&event.logical_key, event.physical_key);
                 }
             }
+            WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::MouseInput { state: ElementState::Pressed, .. } => {
                 let now = Instant::now();
                 if self.boot_splash.is_active(now) {
@@ -139,7 +144,8 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
             }
             WindowEvent::RedrawRequested => {
                 if let Some(renderer) = &mut self.renderer {
-                    match renderer.render(&mut self.video) {
+                    let text_mode = !self.boot_splash.is_active(Instant::now());
+                    match renderer.render(&mut self.video, text_mode) {
                         FrameStatus::Presented | FrameStatus::Skip => {}
                         FrameStatus::Reconfigure => renderer.resize(window.inner_size()),
                     }
@@ -177,15 +183,34 @@ impl FanticonApp {
         }
 
         let cursor_visible = (self.frame_number / 30).is_multiple_of(2);
-        self.terminal.render(&mut self.video, cursor_visible);
+        if let Some(editor) = &self.text_editor {
+            editor.render(&mut self.video, cursor_visible);
+        } else {
+            self.terminal.render(&mut self.video, cursor_visible);
+        }
         self.video.begin_frame();
         self.frame_number = self.frame_number.wrapping_add(1);
     }
 
-    fn handle_key(&mut self, key: &Key) {
+    fn handle_key(&mut self, key: &Key, physical_key: winit::keyboard::PhysicalKey) {
+        if let Some(editor) = &mut self.text_editor {
+            if editor.handle_key(key, physical_key, self.modifiers) == EditorAction::Exit {
+                self.text_editor = None;
+            }
+            return;
+        }
+
         let action = dispatch_terminal_key(&mut self.terminal, key);
-        if let TerminalAction::SwitchMode(mode) = action {
-            self.terminal.switch_mode(mode);
+        match action {
+            TerminalAction::SwitchMode(mode) => self.terminal.switch_mode(mode),
+            TerminalAction::Edit(filename) => {
+                self.text_editor = Some(TextEditor::new(
+                    self.terminal.filesystem(),
+                    self.terminal.colors(),
+                    filename,
+                ));
+            }
+            TerminalAction::None => {}
         }
     }
 }

@@ -1,14 +1,13 @@
 use fanticon::video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, Video};
 
 use super::character_rom::{CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH};
+use super::filesystem::{DirectoryEntry, SharedFilesystem, shared_filesystem};
+use super::ui_colors::{SharedUiColors, UiColors, parse_palette_index, shared_ui_colors};
 
 const COLUMNS: usize = DISPLAY_WIDTH / GLYPH_WIDTH;
 const ROWS: usize = DISPLAY_HEIGHT / GLYPH_HEIGHT;
 const CELL_COUNT: usize = COLUMNS * ROWS;
 const MAX_INPUT: usize = COLUMNS - 3;
-const BACKGROUND: u8 = 0;
-const GAME_FOREGROUND: u8 = 1;
-const EDITOR_FOREGROUND: u8 = 2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AppMode {
@@ -26,10 +25,11 @@ impl AppMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalAction {
     None,
     SwitchMode(AppMode),
+    Edit(Option<String>),
 }
 
 pub struct Terminal {
@@ -38,6 +38,8 @@ pub struct Terminal {
     cursor_y: usize,
     input: String,
     mode: AppMode,
+    filesystem: SharedFilesystem,
+    colors: SharedUiColors,
 }
 
 impl Terminal {
@@ -48,6 +50,8 @@ impl Terminal {
             cursor_y: 0,
             input: String::with_capacity(MAX_INPUT),
             mode,
+            filesystem: shared_filesystem(),
+            colors: shared_ui_colors(),
         };
         terminal.show_banner();
         terminal
@@ -59,7 +63,7 @@ impl Terminal {
         }
         let byte = character.to_ascii_uppercase() as u8;
         if byte.is_ascii_graphic() || byte == b' ' {
-            self.input.push(byte as char);
+            self.input.push(character);
             self.put_byte(byte);
         }
     }
@@ -75,7 +79,7 @@ impl Terminal {
         self.newline();
         let command = core::mem::take(&mut self.input);
         let action = self.execute(command.trim());
-        if matches!(action, TerminalAction::None) {
+        if matches!(&action, TerminalAction::None | TerminalAction::Edit(_)) {
             self.prompt();
         }
         action
@@ -87,15 +91,18 @@ impl Terminal {
         self.show_banner();
     }
 
+    pub fn filesystem(&self) -> SharedFilesystem {
+        self.filesystem.clone()
+    }
+
+    pub fn colors(&self) -> SharedUiColors {
+        self.colors.clone()
+    }
+
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
-        video.set_palette(GAME_FOREGROUND, [80, 245, 165, 255]);
-        video.set_palette(EDITOR_FOREGROUND, [115, 205, 255, 255]);
-        let foreground = match self.mode {
-            AppMode::Game => GAME_FOREGROUND,
-            AppMode::Editor => EDITOR_FOREGROUND,
-        };
+        let colors = self.colors.get();
         let pixels = video.pixels_mut();
-        pixels.fill(BACKGROUND);
+        pixels.fill(colors.background);
 
         for cell_y in 0..ROWS {
             for cell_x in 0..COLUMNS {
@@ -106,7 +113,7 @@ impl Terminal {
                         if bits & (0x80 >> glyph_x) != 0 {
                             let x = cell_x * GLYPH_WIDTH + glyph_x;
                             let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                            pixels[y * DISPLAY_WIDTH + x] = foreground;
+                            pixels[y * DISPLAY_WIDTH + x] = colors.foreground;
                         }
                     }
                 }
@@ -117,18 +124,21 @@ impl Terminal {
             let start_x = self.cursor_x * GLYPH_WIDTH + 1;
             let y = self.cursor_y * GLYPH_HEIGHT + GLYPH_HEIGHT - 1;
             for x in start_x..(start_x + 5).min(DISPLAY_WIDTH) {
-                pixels[y * DISPLAY_WIDTH + x] = foreground;
+                pixels[y * DISPLAY_WIDTH + x] = colors.foreground;
             }
         }
     }
 
     fn execute(&mut self, command: &str) -> TerminalAction {
         let (name, arguments) = command.split_once(' ').unwrap_or((command, ""));
-        match name {
+        let name = name.to_ascii_uppercase();
+        let arguments = arguments.trim();
+        match name.as_str() {
             "" => TerminalAction::None,
             "HELP" => {
-                self.write("COMMANDS: HELP CLS MODE EDITOR GAME\n");
-                self.write("          ECHO VERSION\n");
+                self.write("HELP CLS MODE EDITOR GAME EDIT\n");
+                self.write("ECHO VERSION COLOR CD MKDIR\n");
+                self.write("RMDIR DIR LS\n");
                 TerminalAction::None
             }
             "CLS" | "CLEAR" => {
@@ -152,9 +162,50 @@ impl Terminal {
                 self.write(concat!("FANTICON ", env!("CARGO_PKG_VERSION"), "\n"));
                 TerminalAction::None
             }
+            "COLOR" => {
+                self.set_colors(arguments);
+                TerminalAction::None
+            }
+            "EDIT" => TerminalAction::Edit((!arguments.is_empty()).then(|| arguments.to_owned())),
+            "CD" => {
+                if arguments.is_empty() {
+                    let directory = self.filesystem.borrow().current_directory();
+                    self.write(&directory);
+                    self.newline();
+                } else {
+                    let result = self.filesystem.borrow_mut().change_directory(arguments);
+                    if let Err(error) = result {
+                        self.write_error(&error);
+                    }
+                }
+                TerminalAction::None
+            }
+            "MKDIR" => {
+                let result = self.filesystem.borrow_mut().create_directory(arguments);
+                if let Err(error) = result {
+                    self.write_error(&error);
+                }
+                TerminalAction::None
+            }
+            "RMDIR" => {
+                let result = self.filesystem.borrow_mut().remove_directory(arguments);
+                if let Err(error) = result {
+                    self.write_error(&error);
+                }
+                TerminalAction::None
+            }
+            "DIR" | "LS" => {
+                let path = (!arguments.is_empty()).then_some(arguments);
+                let result = self.filesystem.borrow().list(path);
+                match result {
+                    Ok(entries) => self.write_directory(entries),
+                    Err(error) => self.write_error(&error),
+                }
+                TerminalAction::None
+            }
             _ => {
                 self.write("?UNKNOWN COMMAND: ");
-                self.write(name);
+                self.write(&name);
                 self.newline();
                 TerminalAction::None
             }
@@ -173,8 +224,51 @@ impl Terminal {
         self.prompt();
     }
 
+    fn write_directory(&mut self, entries: Vec<DirectoryEntry>) {
+        if entries.is_empty() {
+            self.write("<EMPTY>\n");
+            return;
+        }
+        for entry in entries {
+            if entry.is_directory {
+                self.write("<DIR> ");
+            } else {
+                self.write("      ");
+            }
+            self.write(&entry.name);
+            self.newline();
+        }
+    }
+
+    fn write_error(&mut self, error: &str) {
+        self.write("?");
+        self.write(error);
+        self.newline();
+    }
+
+    fn set_colors(&mut self, arguments: &str) {
+        if arguments.is_empty() {
+            let colors = self.colors.get();
+            self.write(&format!("COLOR BG {} FG {}\n", colors.background, colors.foreground));
+            return;
+        }
+        let values = arguments.split_whitespace().collect::<Vec<_>>();
+        if values.len() != 2 {
+            self.write_error("USAGE: COLOR BG FG");
+            return;
+        }
+        match (parse_palette_index(values[0]), parse_palette_index(values[1])) {
+            (Ok(background), Ok(foreground)) => {
+                self.colors.set(UiColors { background, foreground });
+            }
+            (Err(error), _) | (_, Err(error)) => self.write_error(&error),
+        }
+    }
+
     fn prompt(&mut self) {
         self.input.clear();
+        let directory = self.filesystem.borrow().current_directory();
+        self.write(&directory);
         self.write("> ");
     }
 
@@ -235,6 +329,15 @@ mod tests {
     }
 
     #[test]
+    fn edit_command_launches_text_editor_with_optional_filename() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        assert_eq!(
+            type_command(&mut terminal, "edit notes.txt"),
+            TerminalAction::Edit(Some("notes.txt".to_owned()))
+        );
+    }
+
+    #[test]
     fn editor_is_the_default_application_mode() {
         assert_eq!(AppMode::default(), AppMode::Editor);
     }
@@ -263,6 +366,29 @@ mod tests {
         let terminal = Terminal::new(AppMode::Game);
         let mut video = Video::new();
         terminal.render(&mut video, true);
-        assert!(video.pixels().contains(&GAME_FOREGROUND));
+        assert!(video.pixels().contains(&255));
+    }
+
+    #[test]
+    fn filesystem_commands_update_the_prompt_directory() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        assert_eq!(terminal.filesystem.borrow().current_directory(), "/");
+        type_command(&mut terminal, "mkdir Project");
+        type_command(&mut terminal, "cd PROJECT");
+        assert_eq!(terminal.filesystem.borrow().current_directory(), "/project");
+        type_command(&mut terminal, "cd /");
+        type_command(&mut terminal, "rmdir proJECT");
+        assert!(terminal.filesystem.borrow().list(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn color_command_sets_shared_background_and_foreground_indexes() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        type_command(&mut terminal, "color 3 $e0");
+        assert_eq!(terminal.colors.get(), UiColors { background: 3, foreground: 224 });
+        let mut video = Video::new();
+        terminal.render(&mut video, false);
+        assert!(video.pixels().contains(&3));
+        assert!(video.pixels().contains(&224));
     }
 }

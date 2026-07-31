@@ -12,6 +12,8 @@ struct DisplayUniform {
     surface_size: [f32; 2],
     crt_strength: f32,
     time_seconds: f32,
+    text_mode: f32,
+    _padding: f32,
 }
 
 pub struct Renderer {
@@ -25,6 +27,7 @@ pub struct Renderer {
     uniform_buffer: wgpu::Buffer,
     rgba_frame: Vec<u8>,
     start_time: Instant,
+    text_mode: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +120,8 @@ impl Renderer {
             surface_size: [size.width as f32, size.height as f32],
             crt_strength: 0.82,
             time_seconds: 0.0,
+            text_mode: 0.0,
+            _padding: 0.0,
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fanticon display uniform"),
@@ -215,6 +220,7 @@ impl Renderer {
             uniform_buffer,
             rgba_frame: vec![0; RGBA_FRAME_LEN],
             start_time: Instant::now(),
+            text_mode: false,
         })
     }
 
@@ -228,7 +234,8 @@ impl Renderer {
         self.write_uniform();
     }
 
-    pub fn render(&mut self, video: &mut Video) -> FrameStatus {
+    pub fn render(&mut self, video: &mut Video, text_mode: bool) -> FrameStatus {
+        self.text_mode = text_mode;
         self.write_uniform();
         video.resolve_rgba(&mut self.rgba_frame).expect("fixed-size display buffer");
         self.queue.write_texture(
@@ -296,6 +303,8 @@ impl Renderer {
             surface_size: [self.configuration.width as f32, self.configuration.height as f32],
             crt_strength: 0.82,
             time_seconds: self.start_time.elapsed().as_secs_f32(),
+            text_mode: u8::from(self.text_mode) as f32,
+            _padding: 0.0,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
     }

@@ -2,7 +2,7 @@
 
 Fanticon presents a fixed 320×200 virtual display. The host window may be any
 size: the GPU scales the display to the largest centered 8:5 rectangle and draws
-black letterbox or pillarbox bars around it.
+exact solid-black letterbox or pillarbox bars around it.
 
 ## Running the host
 
@@ -124,6 +124,13 @@ palette state. The single GPU pass currently provides:
 - very subtle monochrome CRT snow refreshed by the 60 Hz presentation clock; and
 - a thresholded phosphor/glass bloom that lets bright pixels softly illuminate
   their horizontal, vertical, and diagonal neighbors.
+
+The command console and text editor use a dedicated text presentation variant.
+It keeps a strong texel-centered character core, then adds restrained bilinear
+softness, horizontal phosphor spread, and bloom. Composite chroma filtering
+remains disabled so text stays readable, while scanline brightness, vignette,
+and subtle CRT snow preserve the monitor character. The startup logo and future
+game display continue using the fuller composite-style treatment.
 
 The snow changes luminance by at most 0.15% and never moves, scales, or distorts
 the image. It is presentation-only, so emulated pixels and raster timestamps

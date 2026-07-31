@@ -2,6 +2,8 @@ struct DisplayUniform {
     surface_size: vec2<f32>,
     crt_strength: f32,
     time_seconds: f32,
+    text_mode: f32,
+    _padding: f32,
 };
 
 @group(0) @binding(0)
@@ -88,7 +90,7 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if any(screen_position < content_origin)
         || any(screen_position >= content_origin + content_size)
     {
-        return vec4<f32>(0.003, 0.004, 0.006, 1.0);
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
 
     let stable_uv = (screen_position - content_origin) / content_size;
@@ -98,23 +100,34 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let uv = stable_uv;
     let texel = vec2<f32>(1.0 / 320.0, 1.0 / 200.0);
     let source_position = uv * source_size;
-    let center = beam_sample(uv);
+    let text_mode = display.text_mode > 0.5;
+    let sharp_text_uv = (floor(source_position) + vec2<f32>(0.5)) / source_size;
+    let raw_center = source_sample(select(uv, sharp_text_uv, text_mode));
+    let soft_center = source_sample(uv);
+    let center = select(beam_sample(uv), raw_center, text_mode);
     let left = source_sample(clamp(uv - vec2<f32>(texel.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)));
     let right = source_sample(clamp(uv + vec2<f32>(texel.x, 0.0), vec2<f32>(0.0), vec2<f32>(1.0)));
 
     // Composite-inspired signal reconstruction: retain luma resolution while
     // reducing chroma bandwidth, then add only a trace of phase-dependent
     // luma/chroma crosstalk at sharp brightness transitions.
-    var signal = rgb_to_yiq(center);
-    let left_signal = rgb_to_yiq(left);
-    let right_signal = rgb_to_yiq(right);
-    signal.y = signal.y * 0.78 + (left_signal.y + right_signal.y) * 0.11;
-    signal.z = signal.z * 0.78 + (left_signal.z + right_signal.z) * 0.11;
-    let luma_edge = right_signal.x - left_signal.x;
-    let composite_phase = source_position.x * 2.0943951;
-    signal.y += luma_edge * sin(composite_phase) * 0.008;
-    signal.z += luma_edge * cos(composite_phase) * 0.008;
-    var color = yiq_to_rgb(signal);
+    var color: vec3<f32>;
+    if text_mode {
+        // Retain a strong texel-centered core while allowing a restrained
+        // amount of glass softness and horizontal phosphor spread.
+        color = raw_center * 0.84 + soft_center * 0.10 + (left + right) * 0.03;
+    } else {
+        var signal = rgb_to_yiq(center);
+        let left_signal = rgb_to_yiq(left);
+        let right_signal = rgb_to_yiq(right);
+        signal.y = signal.y * 0.78 + (left_signal.y + right_signal.y) * 0.11;
+        signal.z = signal.z * 0.78 + (left_signal.z + right_signal.z) * 0.11;
+        let luma_edge = right_signal.x - left_signal.x;
+        let composite_phase = source_position.x * 2.0943951;
+        signal.y += luma_edge * sin(composite_phase) * 0.008;
+        signal.z += luma_edge * cos(composite_phase) * 0.008;
+        color = yiq_to_rgb(signal);
+    }
 
     let pixel_phase = fract(source_position);
     let vertical_beam = 0.58 + 0.42 * pow(sin(3.14159265 * pixel_phase.y), 0.55);
@@ -122,7 +135,8 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let centered = stable_uv * 2.0 - vec2<f32>(1.0);
     let vignette = clamp(1.08 - dot(centered, centered) * 0.18, 0.72, 1.0);
     let crt = color * vertical_beam * vignette;
-    color = mix(center, crt, display.crt_strength);
+    let presentation_strength = select(display.crt_strength, 0.34, text_mode);
+    color = mix(center, crt, presentation_strength);
 
     // A compact bright-pass halo approximates phosphor and glass bloom. The
     // asymmetric weights keep the spread predominantly horizontal, as expected
@@ -135,7 +149,9 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
         + bright_pass(uv + vec2<f32>(texel.x, -texel.y))
         + bright_pass(uv + vec2<f32>(-texel.x, texel.y))
         + bright_pass(uv + vec2<f32>(texel.x, texel.y));
-    color += bloom_horizontal * 0.026 + bloom_vertical * 0.018 + bloom_diagonal * 0.006;
+    let bloom_strength = select(1.0, 0.16, text_mode);
+    color += (bloom_horizontal * 0.026 + bloom_vertical * 0.018 + bloom_diagonal * 0.006)
+        * bloom_strength;
 
     let snow = hash_noise(floor(screen_position) + vec2<f32>(frame * 17.0, frame * 23.0));
     color += vec3<f32>((snow - 0.5) * 0.003);

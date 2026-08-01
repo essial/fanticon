@@ -15,8 +15,8 @@ use host::{
 use web_time::Instant;
 use winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
-    event::{ElementState, WindowEvent},
+    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey},
     window::{Window, WindowId},
@@ -39,6 +39,7 @@ struct FanticonApp {
     modifiers: ModifiersState,
     game: Option<GameSession>,
     audio_output: Option<AudioOutput>,
+    mouse_position: Option<PhysicalPosition<f64>>,
 }
 
 struct GameSession {
@@ -85,6 +86,7 @@ impl FanticonApp {
             audio_output: AudioOutput::new()
                 .map_err(|error| eprintln!("Fanticon audio disabled: {error}"))
                 .ok(),
+            mouse_position: None,
         }
     }
 }
@@ -176,10 +178,64 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
-            WindowEvent::MouseInput { state: ElementState::Pressed, .. } => {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.mouse_position = Some(position);
+                if !self.boot_splash.is_active(Instant::now())
+                    && self.game.is_none()
+                    && let Some((x, y)) = window_to_source_position(
+                        position,
+                        window.inner_size(),
+                        (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT),
+                    )
+                    && let Some(editor) = &mut self.text_editor
+                {
+                    editor.handle_mouse_move(x, y);
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
                 let now = Instant::now();
-                if self.boot_splash.is_active(now) {
+                if state == ElementState::Pressed && self.boot_splash.is_active(now) {
                     self.boot_splash.try_dismiss(now);
+                    return;
+                }
+                if button != MouseButton::Left || self.game.is_some() {
+                    return;
+                }
+                if state == ElementState::Released {
+                    if let Some(editor) = &mut self.text_editor {
+                        editor.handle_mouse_release();
+                    }
+                    return;
+                }
+                let Some(position) = self.mouse_position else { return };
+                let Some((x, y)) = window_to_source_position(
+                    position,
+                    window.inner_size(),
+                    (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT),
+                ) else {
+                    return;
+                };
+                if let Some(editor) = &mut self.text_editor {
+                    let action = editor.handle_mouse_press(x, y, self.modifiers.shift_key());
+                    self.apply_editor_action(action);
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if self.boot_splash.is_active(Instant::now()) || self.game.is_some() {
+                    return;
+                }
+                let (mut horizontal, mut vertical) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
+                    MouseScrollDelta::PixelDelta(position) => {
+                        (position.x / 24.0, position.y / 24.0)
+                    }
+                };
+                if self.modifiers.shift_key() && horizontal == 0.0 {
+                    horizontal = vertical;
+                    vertical = 0.0;
+                }
+                if let Some(editor) = &mut self.text_editor {
+                    editor.handle_mouse_wheel(horizontal, vertical);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -277,11 +333,8 @@ impl FanticonApp {
 
     fn handle_key(&mut self, key: &Key, physical_key: winit::keyboard::PhysicalKey) {
         if let Some(editor) = &mut self.text_editor {
-            match editor.handle_key(key, physical_key, self.modifiers) {
-                EditorAction::Exit => self.text_editor = None,
-                EditorAction::Run(launch) => self.start_game(launch, true),
-                EditorAction::None => {}
-            }
+            let action = editor.handle_key(key, physical_key, self.modifiers);
+            self.apply_editor_action(action);
             return;
         }
 
@@ -297,6 +350,14 @@ impl FanticonApp {
             }
             TerminalAction::Run(launch) => self.start_game(launch, true),
             TerminalAction::None => {}
+        }
+    }
+
+    fn apply_editor_action(&mut self, action: EditorAction) {
+        match action {
+            EditorAction::Exit => self.text_editor = None,
+            EditorAction::Run(launch) => self.start_game(launch, true),
+            EditorAction::None => {}
         }
     }
 
@@ -426,6 +487,33 @@ impl FanticonApp {
             _save_lock: save_lock,
         });
     }
+}
+
+fn window_to_source_position(
+    position: PhysicalPosition<f64>,
+    surface: PhysicalSize<u32>,
+    source: (usize, usize),
+) -> Option<(usize, usize)> {
+    if surface.width == 0 || surface.height == 0 || source.0 == 0 || source.1 == 0 {
+        return None;
+    }
+    let scale = (f64::from(surface.width) / source.0 as f64)
+        .min(f64::from(surface.height) / source.1 as f64);
+    let content_width = source.0 as f64 * scale;
+    let content_height = source.1 as f64 * scale;
+    let origin_x = ((f64::from(surface.width) - content_width) * 0.5).floor();
+    let origin_y = ((f64::from(surface.height) - content_height) * 0.5).floor();
+    if position.x < origin_x
+        || position.y < origin_y
+        || position.x >= origin_x + content_width
+        || position.y >= origin_y + content_height
+    {
+        return None;
+    }
+    Some((
+        ((position.x - origin_x) / scale).floor() as usize,
+        ((position.y - origin_y) / scale).floor() as usize,
+    ))
 }
 
 fn dispatch_terminal_key(terminal: &mut Terminal, key: &Key) -> TerminalAction {
@@ -573,5 +661,24 @@ mod tests {
         assert!(should_process_keyboard_input(ElementState::Pressed, true));
         assert!(!should_process_keyboard_input(ElementState::Released, false));
         assert!(!should_process_keyboard_input(ElementState::Released, true));
+    }
+
+    #[test]
+    fn mouse_coordinates_follow_letterboxed_source_image() {
+        let surface = PhysicalSize::new(1_000, 600);
+        let source = (640, 400);
+
+        assert_eq!(
+            window_to_source_position(PhysicalPosition::new(20.0, 0.0), surface, source),
+            Some((0, 0))
+        );
+        assert_eq!(
+            window_to_source_position(PhysicalPosition::new(979.0, 599.0), surface, source),
+            Some((639, 399))
+        );
+        assert_eq!(
+            window_to_source_position(PhysicalPosition::new(19.0, 300.0), surface, source),
+            None
+        );
     }
 }

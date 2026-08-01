@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use fanticon::{assembler::Diagnostic, project::MANIFEST_NAME, video::Video};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
@@ -9,13 +11,16 @@ use super::{
         BOX_VERTICAL, CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, SYMBOL_ARROW_RIGHT, SYMBOL_BUSY,
         SYMBOL_CHECK, SYMBOL_CROSS, configure_text_gradient, gradient_color,
     },
-    filesystem::SharedFilesystem,
+    filesystem::{ConsoleFilesystem, SharedFilesystem},
     ui_colors::SharedUiColors,
 };
 
 const COLUMNS: usize = EDITOR_DISPLAY_WIDTH / GLYPH_WIDTH;
 const ROWS: usize = EDITOR_DISPLAY_HEIGHT / GLYPH_HEIGHT;
 const TEXT_ROWS: usize = ROWS - 2;
+const PROJECT_WIDTH: usize = 20;
+const EDITOR_START: usize = PROJECT_WIDTH + 1;
+const EDITOR_COLUMNS: usize = COLUMNS - EDITOR_START;
 const ASM_TEXT_COLOR: u8 = 240;
 const ASM_LABEL_COLOR: u8 = 241;
 const ASM_OPCODE_COLOR: u8 = 242;
@@ -53,6 +58,14 @@ struct CellStyle {
 struct Snapshot {
     lines: Vec<String>,
     cursor: Position,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProjectEntry {
+    name: String,
+    path: String,
+    depth: usize,
+    is_directory: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +114,13 @@ pub struct TextEditor {
     build_message: Option<String>,
     build_and_run: bool,
     pending_launch: Option<GameLaunch>,
+    mouse_selecting: bool,
+    wheel_remainder: (f64, f64),
+    project_entries: Vec<ProjectEntry>,
+    project_selected: usize,
+    project_scroll: usize,
+    project_focused: bool,
+    expanded_directories: BTreeSet<String>,
 }
 
 impl TextEditor {
@@ -127,6 +147,13 @@ impl TextEditor {
             build_message: None,
             build_and_run: false,
             pending_launch: None,
+            mouse_selecting: false,
+            wheel_remainder: (0.0, 0.0),
+            project_entries: Vec::new(),
+            project_selected: 0,
+            project_scroll: 0,
+            project_focused: false,
+            expanded_directories: BTreeSet::new(),
         };
         if let Some(filename) = filename
             && let Err(error) = editor.load(&filename)
@@ -134,6 +161,7 @@ impl TextEditor {
             editor.overlay =
                 Overlay::Dialog { kind: DialogKind::Open, input: filename, error: Some(error) };
         }
+        editor.refresh_project_browser();
         editor
     }
 
@@ -189,6 +217,15 @@ impl TextEditor {
                 }
                 _ => EditorAction::None,
             };
+        }
+
+        if matches!(key, Key::Named(NamedKey::F6)) {
+            self.project_focused = !self.project_focused;
+            return EditorAction::None;
+        }
+
+        if self.project_focused {
+            return self.handle_project_key(key);
         }
 
         if modifiers.alt_key() {
@@ -265,6 +302,290 @@ impl TextEditor {
         self.pending_launch.take().map_or(EditorAction::None, EditorAction::Run)
     }
 
+    pub fn handle_mouse_press(&mut self, x: usize, y: usize, shift: bool) -> EditorAction {
+        let cell_x = (x / GLYPH_WIDTH).min(COLUMNS - 1);
+        let cell_y = (y / GLYPH_HEIGHT).min(ROWS - 1);
+
+        if cell_y == 0
+            && let Some(menu) = menu_bar_hit(cell_x)
+        {
+            self.mouse_selecting = false;
+            self.open_menu(menu);
+            return EditorAction::None;
+        }
+
+        match &self.overlay {
+            Overlay::Menu { menu, .. } => {
+                let menu = *menu;
+                let x = menu_origin(menu);
+                let selected = cell_y
+                    .checked_sub(2)
+                    .filter(|item| *item < menu_items(menu).len())
+                    .filter(|_| cell_x > x && cell_x < x + 15);
+                self.overlay = Overlay::None;
+                return selected.map_or(EditorAction::None, |item| self.activate_menu(menu, item));
+            }
+            Overlay::Dialog { kind, input, .. } => {
+                let kind = *kind;
+                let input = input.clone();
+                let width = 32;
+                let height = 8;
+                let dialog_x = (COLUMNS - width) / 2;
+                let dialog_y = (ROWS - height) / 2;
+                if cell_y == dialog_y + height - 2 {
+                    if cell_x < dialog_x + width / 2 {
+                        self.submit_dialog(kind, input);
+                    } else {
+                        self.overlay = Overlay::None;
+                    }
+                }
+                return EditorAction::None;
+            }
+            Overlay::Message { .. } => {
+                self.overlay = Overlay::None;
+                return EditorAction::None;
+            }
+            Overlay::Building { .. } => return EditorAction::None,
+            Overlay::None => {}
+        }
+
+        if cell_x < PROJECT_WIDTH && (1..ROWS - 1).contains(&cell_y) {
+            self.mouse_selecting = false;
+            self.project_focused = true;
+            if let Some(selected) = cell_y
+                .checked_sub(2)
+                .map(|row| self.project_scroll + row)
+                .filter(|selected| *selected < self.project_entries.len())
+            {
+                self.project_selected = selected;
+                return self.activate_project_entry(selected);
+            }
+            return EditorAction::None;
+        }
+        if cell_x <= PROJECT_WIDTH {
+            return EditorAction::None;
+        }
+
+        if !(1..ROWS - 1).contains(&cell_y) {
+            return EditorAction::None;
+        }
+        self.project_focused = false;
+        let previous = self.cursor;
+        let position = self.document_position(cell_x - EDITOR_START, cell_y);
+        if shift {
+            self.selection_anchor.get_or_insert(previous);
+        } else {
+            self.selection_anchor = Some(position);
+            if previous.line != position.line {
+                self.format_departed_line(previous.line);
+            }
+        }
+        self.cursor = position;
+        self.mouse_selecting = true;
+        self.ensure_cursor_visible();
+        EditorAction::None
+    }
+
+    pub fn handle_mouse_move(&mut self, x: usize, y: usize) {
+        let cell_x = (x / GLYPH_WIDTH).min(COLUMNS - 1);
+        let cell_y = (y / GLYPH_HEIGHT).min(ROWS - 1);
+        if let Overlay::Menu { menu, selected } = &mut self.overlay {
+            let origin = menu_origin(*menu);
+            if cell_x > origin
+                && cell_x < origin + 15
+                && let Some(item) = cell_y.checked_sub(2)
+                && item < menu_items(*menu).len()
+            {
+                *selected = item;
+            }
+            return;
+        }
+        if self.mouse_selecting && cell_x >= EDITOR_START && (1..ROWS - 1).contains(&cell_y) {
+            self.cursor = self.document_position(cell_x - EDITOR_START, cell_y);
+            self.ensure_cursor_visible();
+        }
+    }
+
+    pub fn handle_mouse_release(&mut self) {
+        self.mouse_selecting = false;
+        if self.selection_anchor == Some(self.cursor) {
+            self.selection_anchor = None;
+        }
+    }
+
+    pub fn handle_mouse_wheel(&mut self, horizontal: f64, vertical: f64) {
+        if !matches!(self.overlay, Overlay::None) {
+            return;
+        }
+        self.wheel_remainder.0 += horizontal;
+        self.wheel_remainder.1 += vertical;
+        let horizontal = self.wheel_remainder.0.trunc() as isize;
+        let vertical = self.wheel_remainder.1.trunc() as isize;
+        self.wheel_remainder.0 -= horizontal as f64;
+        self.wheel_remainder.1 -= vertical as f64;
+        let max_line = self.lines.len().saturating_sub(TEXT_ROWS);
+        let max_column =
+            self.lines.iter().map(String::len).max().unwrap_or(0).saturating_sub(EDITOR_COLUMNS);
+        if self.project_focused {
+            if !self.project_entries.is_empty() {
+                self.project_selected = self
+                    .project_selected
+                    .saturating_add_signed(-vertical)
+                    .min(self.project_entries.len() - 1);
+                self.ensure_project_selection_visible();
+            }
+        } else {
+            self.scroll_line = self.scroll_line.saturating_add_signed(-vertical).min(max_line);
+            self.scroll_column =
+                self.scroll_column.saturating_add_signed(horizontal).min(max_column);
+        }
+    }
+
+    fn document_position(&self, cell_x: usize, cell_y: usize) -> Position {
+        let line = (self.scroll_line + cell_y - 1).min(self.lines.len() - 1);
+        let column = (self.scroll_column + cell_x).min(self.lines[line].len());
+        Position { line, column }
+    }
+
+    fn handle_project_key(&mut self, key: &Key) -> EditorAction {
+        match key {
+            Key::Named(NamedKey::Escape | NamedKey::F6) => self.project_focused = false,
+            Key::Named(NamedKey::ArrowUp) if !self.project_entries.is_empty() => {
+                self.project_selected = self.project_selected.saturating_sub(1);
+            }
+            Key::Named(NamedKey::ArrowDown) if !self.project_entries.is_empty() => {
+                self.project_selected =
+                    (self.project_selected + 1).min(self.project_entries.len() - 1);
+            }
+            Key::Named(NamedKey::Home) if !self.project_entries.is_empty() => {
+                self.project_selected = 0;
+            }
+            Key::Named(NamedKey::End) if !self.project_entries.is_empty() => {
+                self.project_selected = self.project_entries.len() - 1;
+            }
+            Key::Named(NamedKey::Enter | NamedKey::ArrowRight)
+                if !self.project_entries.is_empty() =>
+            {
+                return self.activate_project_entry(self.project_selected);
+            }
+            Key::Named(NamedKey::ArrowLeft) if !self.project_entries.is_empty() => {
+                let entry = self.project_entries[self.project_selected].clone();
+                if entry.is_directory && self.expanded_directories.remove(&entry.path) {
+                    self.refresh_project_browser();
+                } else if let Some((parent, _)) = entry.path.rsplit_once('/')
+                    && let Some(index) = self
+                        .project_entries
+                        .iter()
+                        .position(|candidate| candidate.path.eq_ignore_ascii_case(parent))
+                {
+                    self.project_selected = index;
+                }
+            }
+            _ => {}
+        }
+        self.ensure_project_selection_visible();
+        EditorAction::None
+    }
+
+    fn activate_project_entry(&mut self, selected: usize) -> EditorAction {
+        let Some(entry) = self.project_entries.get(selected).cloned() else {
+            return EditorAction::None;
+        };
+        if entry.is_directory {
+            if !self.expanded_directories.insert(entry.path.clone()) {
+                self.expanded_directories.remove(&entry.path);
+            }
+            self.refresh_project_browser();
+            return EditorAction::None;
+        }
+        if self
+            .filename
+            .as_deref()
+            .is_some_and(|filename| filename.eq_ignore_ascii_case(&entry.path))
+        {
+            self.project_focused = false;
+            return EditorAction::None;
+        }
+        if self.dirty {
+            self.show_build_message(
+                "UNSAVED CHANGES",
+                &["SAVE THE CURRENT FILE BEFORE OPENING ANOTHER".to_owned()],
+            );
+            return EditorAction::None;
+        }
+        match self.load(&entry.path) {
+            Ok(()) => {
+                self.project_focused = false;
+                self.refresh_project_browser();
+            }
+            Err(error) => self.show_build_message("OPEN ERROR", &[error]),
+        }
+        EditorAction::None
+    }
+
+    fn refresh_project_browser(&mut self) {
+        let selected_path =
+            self.project_entries.get(self.project_selected).map(|entry| entry.path.clone());
+        let mut entries = Vec::new();
+        collect_project_entries(
+            &self.filesystem.borrow(),
+            "",
+            0,
+            &self.expanded_directories,
+            &mut entries,
+        );
+        self.project_entries = entries;
+        self.project_selected = selected_path
+            .and_then(|path| {
+                self.project_entries.iter().position(|entry| entry.path.eq_ignore_ascii_case(&path))
+            })
+            .unwrap_or(0)
+            .min(self.project_entries.len().saturating_sub(1));
+        self.ensure_project_selection_visible();
+    }
+
+    fn ensure_project_selection_visible(&mut self) {
+        let visible_rows = ROWS - 3;
+        if self.project_selected < self.project_scroll {
+            self.project_scroll = self.project_selected;
+        } else if self.project_selected >= self.project_scroll + visible_rows {
+            self.project_scroll = self.project_selected + 1 - visible_rows;
+        }
+        self.project_scroll =
+            self.project_scroll.min(self.project_entries.len().saturating_sub(visible_rows));
+    }
+
+    fn render_project_browser(&self, cells: &mut [u8], inverse: &mut [bool]) {
+        put_text_width(cells, 0, 1, " PROJECT", PROJECT_WIDTH);
+        inverse[COLUMNS..COLUMNS + PROJECT_WIDTH].fill(true);
+        for row in 1..ROWS - 1 {
+            put_cell(cells, PROJECT_WIDTH, row, BOX_VERTICAL);
+        }
+        for (screen_row, entry) in
+            self.project_entries.iter().skip(self.project_scroll).take(ROWS - 3).enumerate()
+        {
+            let row = screen_row + 2;
+            let mut label = " ".repeat((entry.depth * 2).min(PROJECT_WIDTH - 3));
+            if entry.is_directory {
+                label.push(if self.expanded_directories.contains(&entry.path) { '-' } else { '+' });
+            } else if self
+                .filename
+                .as_deref()
+                .is_some_and(|filename| filename.eq_ignore_ascii_case(&entry.path))
+            {
+                label.push('*');
+            } else {
+                label.push(' ');
+            }
+            label.push(' ');
+            label.push_str(&entry.name);
+            put_text_width(cells, 0, row, &label, PROJECT_WIDTH);
+            if self.project_focused && self.project_scroll + screen_row == self.project_selected {
+                inverse[row * COLUMNS..row * COLUMNS + PROJECT_WIDTH].fill(true);
+            }
+        }
+    }
+
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
         debug_assert_eq!(video.dimensions(), (EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT));
         let colors = self.colors.get();
@@ -282,14 +603,16 @@ impl TextEditor {
 
         put_text(&mut cells, 0, 0, " FILE  EDIT  BUILD");
         inverse[..COLUMNS].fill(true);
+        foregrounds[..COLUMNS].fill(UI_WHITE_COLOR);
 
         for screen_y in 0..TEXT_ROWS {
             let line_index = self.scroll_line + screen_y;
             let Some(line) = self.lines.get(line_index) else { break };
             let syntax = assembly_mode.then(|| assembly_syntax_colors(line, foreground));
-            for (screen_x, byte) in line.bytes().skip(self.scroll_column).take(COLUMNS).enumerate()
+            for (screen_x, byte) in
+                line.bytes().skip(self.scroll_column).take(EDITOR_COLUMNS).enumerate()
             {
-                let index = (screen_y + 1) * COLUMNS + screen_x;
+                let index = (screen_y + 1) * COLUMNS + EDITOR_START + screen_x;
                 let source_column = self.scroll_column + screen_x;
                 cells[index] = byte.to_ascii_uppercase();
                 if let Some(syntax) = &syntax
@@ -325,13 +648,19 @@ impl TextEditor {
             });
         put_text(&mut cells, 0, ROWS - 1, &status);
         inverse[(ROWS - 1) * COLUMNS..].fill(true);
+        foregrounds[(ROWS - 1) * COLUMNS..].fill(UI_WHITE_COLOR);
+
+        self.render_project_browser(&mut cells, &mut inverse);
+        for row in 1..ROWS - 1 {
+            foregrounds[row * COLUMNS..row * COLUMNS + EDITOR_START].fill(UI_WHITE_COLOR);
+        }
 
         self.render_overlay(
             &mut cells,
             &mut foregrounds,
             &mut backgrounds,
             &mut inverse,
-            CellStyle { foreground, background },
+            CellStyle { foreground: UI_WHITE_COLOR, background },
         );
         render_cells(
             video,
@@ -342,16 +671,17 @@ impl TextEditor {
             CellStyle { foreground, background },
         );
 
-        if cursor_visible && matches!(self.overlay, Overlay::None) {
-            let x = self.cursor.column.saturating_sub(self.scroll_column) * GLYPH_WIDTH + 1;
-            let y = (self.cursor.line.saturating_sub(self.scroll_line) + 1) * GLYPH_HEIGHT
-                + GLYPH_HEIGHT
-                - 1;
-            if x < EDITOR_DISPLAY_WIDTH && y < EDITOR_DISPLAY_HEIGHT - GLYPH_HEIGHT {
-                for pixel_x in x..(x + 5).min(EDITOR_DISPLAY_WIDTH) {
-                    video.pixels_mut()[y * EDITOR_DISPLAY_WIDTH + pixel_x] = foreground;
-                }
-            }
+        if cursor_visible
+            && !self.project_focused
+            && matches!(self.overlay, Overlay::None)
+            && let Some(screen_line) = self.cursor.line.checked_sub(self.scroll_line)
+            && screen_line < TEXT_ROWS
+            && let Some(screen_column) = self.cursor.column.checked_sub(self.scroll_column)
+            && screen_column < EDITOR_COLUMNS
+        {
+            let cell_x = EDITOR_START + screen_column;
+            let cell_y = screen_line + 1;
+            draw_block_cursor(video, cell_x, cell_y, cells[cell_y * COLUMNS + cell_x]);
         }
     }
 
@@ -601,6 +931,7 @@ impl TextEditor {
                 Ok(launch) => {
                     let title = launch.cartridge.title.clone();
                     self.show_build_message("BUILD SUCCESSFUL", &[format!("RUNNING: {title}")]);
+                    self.refresh_project_browser();
                     self.pending_launch = Some(launch);
                 }
                 Err(diagnostics) => {
@@ -640,6 +971,7 @@ impl TextEditor {
                             format!("SIZE: {} BYTES", success.size),
                         ],
                     );
+                    self.refresh_project_browser();
                 }
                 Err(diagnostics) => {
                     self.diagnostics = diagnostics;
@@ -684,6 +1016,7 @@ impl TextEditor {
                         format!("SIZE: {} BYTES", success.size),
                     ],
                 );
+                self.refresh_project_browser();
             }
             Err(diagnostics) => {
                 self.diagnostics = diagnostics;
@@ -769,6 +1102,7 @@ impl TextEditor {
         self.selection_anchor = None;
         self.filename = Some(filename.to_ascii_lowercase());
         self.dirty = false;
+        self.refresh_project_browser();
         Ok(())
     }
 
@@ -1036,8 +1370,8 @@ impl TextEditor {
         }
         if self.cursor.column < self.scroll_column {
             self.scroll_column = self.cursor.column;
-        } else if self.cursor.column >= self.scroll_column + COLUMNS {
-            self.scroll_column = self.cursor.column + 1 - COLUMNS;
+        } else if self.cursor.column >= self.scroll_column + EDITOR_COLUMNS {
+            self.scroll_column = self.cursor.column + 1 - EDITOR_COLUMNS;
         }
     }
 
@@ -1051,11 +1385,55 @@ impl TextEditor {
     }
 }
 
+fn collect_project_entries(
+    filesystem: &ConsoleFilesystem,
+    directory: &str,
+    depth: usize,
+    expanded: &BTreeSet<String>,
+    output: &mut Vec<ProjectEntry>,
+) {
+    let listing = filesystem.list((!directory.is_empty()).then_some(directory));
+    let Ok(entries) = listing else { return };
+    for entry in entries {
+        let path = if directory.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{directory}/{}", entry.name)
+        };
+        output.push(ProjectEntry {
+            name: entry.name,
+            path: path.clone(),
+            depth,
+            is_directory: entry.is_directory,
+        });
+        if entry.is_directory && expanded.contains(&path) {
+            collect_project_entries(filesystem, &path, depth + 1, expanded, output);
+        }
+    }
+}
+
 fn menu_items(menu: MenuKind) -> &'static [&'static str] {
     match menu {
         MenuKind::File => &["NEW", "OPEN...", "SAVE", "SAVE AS...", "EXIT"],
         MenuKind::Edit => &["UNDO", "CUT", "COPY", "PASTE", "SELECT ALL"],
         MenuKind::Build => &["ASSEMBLE", "BUILD & RUN", "NEXT ERROR", "PREV ERROR"],
+    }
+}
+
+const fn menu_origin(menu: MenuKind) -> usize {
+    match menu {
+        MenuKind::File => 0,
+        MenuKind::Edit => 6,
+        MenuKind::Build => 12,
+    }
+}
+
+const fn menu_bar_hit(column: usize) -> Option<MenuKind> {
+    match column {
+        0..=5 => Some(MenuKind::File),
+        6..=11 => Some(MenuKind::Edit),
+        12..=18 => Some(MenuKind::Build),
+        _ => None,
     }
 }
 
@@ -1207,7 +1585,7 @@ fn render_cells(
         for cell_x in 0..COLUMNS {
             let index = cell_y * COLUMNS + cell_x;
             let (cell_foreground, cell_background) = if inverse[index] {
-                (background, foreground)
+                (backgrounds[index], foregrounds[index])
             } else {
                 (foregrounds[index], backgrounds[index])
             };
@@ -1228,6 +1606,25 @@ fn render_cells(
                             gradient_color(&gradient, cell_foreground, glyph_y);
                     }
                 }
+            }
+        }
+    }
+}
+
+fn draw_block_cursor(video: &mut Video, cell_x: usize, cell_y: usize, character: u8) {
+    let origin_x = cell_x * GLYPH_WIDTH;
+    let origin_y = cell_y * GLYPH_HEIGHT;
+    let pixels = video.pixels_mut();
+    for y in origin_y..origin_y + GLYPH_HEIGHT {
+        pixels[y * EDITOR_DISPLAY_WIDTH + origin_x
+            ..y * EDITOR_DISPLAY_WIDTH + origin_x + GLYPH_WIDTH]
+            .fill(UI_WHITE_COLOR);
+    }
+    let glyph = CHARACTER_ROM[(character as usize).min(CHARACTER_ROM.len() - 1)];
+    for (glyph_y, bits) in glyph.into_iter().enumerate() {
+        for glyph_x in 0..GLYPH_WIDTH {
+            if bits & (0x80 >> glyph_x) != 0 {
+                pixels[(origin_y + glyph_y) * EDITOR_DISPLAY_WIDTH + origin_x + glyph_x] = 0;
             }
         }
     }
@@ -1563,6 +1960,116 @@ mod tests {
     }
 
     #[test]
+    fn mouse_click_places_cursor_and_drag_selects_text() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.lines = vec!["ABCDEFGH".to_owned(), "SECOND".to_owned()];
+
+        assert_eq!(
+            editor.handle_mouse_press((EDITOR_START + 1) * GLYPH_WIDTH, GLYPH_HEIGHT, false),
+            EditorAction::None
+        );
+        assert_eq!(editor.cursor, Position { line: 0, column: 1 });
+        editor.handle_mouse_move((EDITOR_START + 5) * GLYPH_WIDTH, GLYPH_HEIGHT);
+        editor.handle_mouse_release();
+
+        assert_eq!(
+            editor.selection(),
+            Some((Position { line: 0, column: 1 }, Position { line: 0, column: 5 }))
+        );
+        assert_eq!(editor.selected_text().as_deref(), Some("BCDE"));
+    }
+
+    #[test]
+    fn mouse_can_open_and_activate_editor_menus() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+
+        editor.handle_mouse_press(GLYPH_WIDTH * 13, 0, false);
+        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::Build, selected: 0 }));
+        editor.handle_mouse_move(GLYPH_WIDTH * 13, GLYPH_HEIGHT * 3);
+        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::Build, selected: 1 }));
+        editor.handle_mouse_press(GLYPH_WIDTH * 13, GLYPH_HEIGHT * 3, false);
+        assert!(matches!(editor.overlay, Overlay::Building { .. }));
+        assert!(editor.build_and_run);
+    }
+
+    #[test]
+    fn project_browser_expands_directories_and_opens_text_files() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("main.asm", " NOP").unwrap();
+        filesystem.borrow_mut().create_directory("source").unwrap();
+        filesystem.borrow_mut().write_text("source/defs.inc", "VALUE EQU 1").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+
+        let directory = editor
+            .project_entries
+            .iter()
+            .position(|entry| entry.path.eq_ignore_ascii_case("source"))
+            .unwrap();
+        editor.activate_project_entry(directory);
+        let include = editor
+            .project_entries
+            .iter()
+            .position(|entry| entry.path.eq_ignore_ascii_case("source/defs.inc"))
+            .unwrap();
+        assert_eq!(editor.project_entries[include].depth, 1);
+
+        editor.activate_project_entry(include);
+        assert_eq!(editor.filename.as_deref(), Some("source/defs.inc"));
+        assert_eq!(editor.lines, ["VALUE    EQU   1"]);
+        assert!(!editor.project_focused);
+    }
+
+    #[test]
+    fn project_browser_does_not_discard_unsaved_changes() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("one.asm", " NOP").unwrap();
+        filesystem.borrow_mut().write_text("two.asm", " RTS").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("one.asm".to_owned()));
+        editor.lines = vec!["CHANGED".to_owned()];
+        editor.dirty = true;
+        let second = editor
+            .project_entries
+            .iter()
+            .position(|entry| entry.path.eq_ignore_ascii_case("two.asm"))
+            .unwrap();
+
+        editor.activate_project_entry(second);
+
+        assert_eq!(editor.filename.as_deref(), Some("one.asm"));
+        assert_eq!(editor.lines, ["CHANGED"]);
+        assert!(matches!(
+            editor.overlay,
+            Overlay::Message { ref title, .. } if title == "UNSAVED CHANGES"
+        ));
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_document_without_moving_cursor() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.lines = (0..100).map(|line| format!("LINE {line}")).collect();
+
+        editor.handle_mouse_wheel(0.0, -3.0);
+        assert_eq!(editor.scroll_line, 3);
+        assert_eq!(editor.cursor, Position::default());
+        editor.handle_mouse_wheel(0.0, 2.0);
+        assert_eq!(editor.scroll_line, 1);
+    }
+
+    #[test]
+    fn mouse_wheel_accumulates_high_resolution_trackpad_motion() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.lines = (0..100).map(|line| format!("LINE {line}")).collect();
+
+        editor.handle_mouse_wheel(0.0, -0.4);
+        editor.handle_mouse_wheel(0.0, -0.4);
+        assert_eq!(editor.scroll_line, 0);
+        editor.handle_mouse_wheel(0.0, -0.4);
+        assert_eq!(editor.scroll_line, 1);
+    }
+
+    #[test]
     fn save_dialog_and_open_use_shared_virtual_filesystem() {
         let filesystem = shared_filesystem();
         let colors = shared_ui_colors();
@@ -1583,6 +2090,55 @@ mod tests {
         editor.render(&mut video, true);
         assert!(video.pixels().contains(&255));
         assert!(video.pixels().contains(&0));
+    }
+
+    #[test]
+    fn blinking_cursor_is_a_white_block_with_black_cell_character() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("note.txt", "A").unwrap();
+        let editor = TextEditor::new(filesystem, shared_ui_colors(), Some("note.txt".to_owned()));
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+
+        editor.render(&mut video, true);
+
+        let origin_x = EDITOR_START * GLYPH_WIDTH;
+        let origin_y = GLYPH_HEIGHT;
+        for (glyph_y, bits) in CHARACTER_ROM[b'A' as usize].iter().copied().enumerate() {
+            for glyph_x in 0..GLYPH_WIDTH {
+                let pixel = video.pixels()
+                    [(origin_y + glyph_y) * EDITOR_DISPLAY_WIDTH + origin_x + glyph_x];
+                let is_character = bits & (0x80 >> glyph_x) != 0;
+                assert_eq!(pixel, if is_character { 0 } else { UI_WHITE_COLOR });
+            }
+        }
+    }
+
+    #[test]
+    fn asm_mode_keeps_ide_chrome_white() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("code.asm", "START NOP").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("code.asm".to_owned()));
+        editor.open_menu(MenuKind::File);
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+
+        editor.render(&mut video, false);
+
+        assert_eq!(video.pixels()[0], UI_WHITE_COLOR);
+        let border = CHARACTER_ROM[BOX_TOP_LEFT as usize]
+            .iter()
+            .enumerate()
+            .find_map(|(y, bits)| {
+                (0..GLYPH_WIDTH).find(|x| bits & (0x80 >> x) != 0).map(|x| (x, y))
+            })
+            .unwrap();
+        let border_pixel =
+            video.pixels()[(GLYPH_HEIGHT + border.1) * EDITOR_DISPLAY_WIDTH + border.0];
+        let brightness = [255, 212, 170, 127][(border.1 / 2).min(3)];
+        assert_eq!(
+            video.palette()[border_pixel as usize][..3],
+            [brightness, brightness, brightness]
+        );
     }
 
     #[test]

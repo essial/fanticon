@@ -70,7 +70,10 @@ const fn build_character_rom() -> [[u8; GLYPH_HEIGHT]; 128] {
         let source = glyph_5x7(character as u8);
         let mut row = 0;
         while row < 7 {
-            let stroke = source[row] << 1;
+            // Center the five source columns in the 8-pixel cell. Bold glyphs
+            // expand one pixel to the right, leaving equal outer margins
+            // instead of touching the cell's right edge.
+            let stroke = source[row] << 2;
             rom[character][row] = if matches!(
                 character as u8,
                 b'A'..=b'Z' | b'0'..=b'9' | b'/' | b'\\' | b'>' | b'<' | b'|' | b'^'
@@ -186,27 +189,36 @@ mod tests {
 
     #[test]
     fn ascii_glyphs_use_bold_horizontal_strokes() {
-        // The top of A is 00011100 before emboldening; its right-hand neighbor
-        // is added to make the character visibly heavier without changing cells.
-        assert_eq!(CHARACTER_ROM[b'A' as usize][0], 0x1e);
+        // The top of A is 00111000 before emboldening; its right-hand neighbor
+        // is added without losing the centered cell margins.
+        assert_eq!(CHARACTER_ROM[b'A' as usize][0], 0x3c);
         assert!(CHARACTER_ROM[b'I' as usize].iter().any(|row| row.count_ones() >= 6));
     }
 
     #[test]
+    fn printable_ascii_keeps_both_cursor_cell_edges_clear() {
+        for character in b'!'..=b'~' {
+            for row in CHARACTER_ROM[character as usize] {
+                assert_eq!(row & 0x81, 0, "{} touches an outer cell edge", character as char);
+            }
+        }
+    }
+
+    #[test]
     fn punctuation_preserves_open_thin_strokes() {
-        assert_eq!(CHARACTER_ROM[b'$' as usize][1], 0x1e);
-        assert_eq!(CHARACTER_ROM[b'%' as usize][0], 0x32);
-        assert_eq!(CHARACTER_ROM[b'@' as usize][0], 0x1c);
+        assert_eq!(CHARACTER_ROM[b'$' as usize][1], 0x3c);
+        assert_eq!(CHARACTER_ROM[b'%' as usize][0], 0x64);
+        assert_eq!(CHARACTER_ROM[b'@' as usize][0], 0x38);
     }
 
     #[test]
     fn structural_symbols_are_bold_and_braces_are_available() {
-        assert_eq!(CHARACTER_ROM[b'/' as usize][0], 0x03);
-        assert_eq!(CHARACTER_ROM[b'\\' as usize][0], 0x30);
-        assert_eq!(CHARACTER_ROM[b'>' as usize][0], 0x18);
-        assert_eq!(CHARACTER_ROM[b'<' as usize][0], 0x06);
-        assert_eq!(CHARACTER_ROM[b'|' as usize][0], 0x0c);
-        assert_eq!(CHARACTER_ROM[b'^' as usize][0], 0x0c);
+        assert_eq!(CHARACTER_ROM[b'/' as usize][0], 0x06);
+        assert_eq!(CHARACTER_ROM[b'\\' as usize][0], 0x60);
+        assert_eq!(CHARACTER_ROM[b'>' as usize][0], 0x30);
+        assert_eq!(CHARACTER_ROM[b'<' as usize][0], 0x0c);
+        assert_eq!(CHARACTER_ROM[b'|' as usize][0], 0x18);
+        assert_eq!(CHARACTER_ROM[b'^' as usize][0], 0x18);
         assert_ne!(CHARACTER_ROM[b'{' as usize], [0; 8]);
         assert_ne!(CHARACTER_ROM[b'}' as usize], [0; 8]);
     }

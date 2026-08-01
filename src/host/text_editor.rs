@@ -17,10 +17,18 @@ use super::{
 
 const COLUMNS: usize = EDITOR_DISPLAY_WIDTH / GLYPH_WIDTH;
 const ROWS: usize = EDITOR_DISPLAY_HEIGHT / GLYPH_HEIGHT;
-const TEXT_ROWS: usize = ROWS - 2;
+const EDITOR_FIRST_ROW: usize = 2;
+const TEXT_ROWS: usize = ROWS - EDITOR_FIRST_ROW - 1;
 const PROJECT_WIDTH: usize = 20;
 const EDITOR_START: usize = PROJECT_WIDTH + 1;
 const EDITOR_COLUMNS: usize = COLUMNS - EDITOR_START;
+const TAB_WIDTH: usize = 14;
+const VISIBLE_TABS: usize = (EDITOR_COLUMNS - 2) / TAB_WIDTH;
+const SEARCH_RESULTS_X: usize = 2;
+const SEARCH_RESULTS_Y: usize = 3;
+const SEARCH_RESULTS_WIDTH: usize = COLUMNS - 4;
+const SEARCH_RESULTS_HEIGHT: usize = ROWS - 6;
+const SEARCH_RESULTS_VISIBLE: usize = SEARCH_RESULTS_HEIGHT - 5;
 const ASM_TEXT_COLOR: u8 = 240;
 const ASM_LABEL_COLOR: u8 = 241;
 const ASM_OPCODE_COLOR: u8 = 242;
@@ -60,6 +68,19 @@ struct Snapshot {
     cursor: Position,
 }
 
+#[derive(Clone)]
+struct DocumentState {
+    id: u32,
+    lines: Vec<String>,
+    cursor: Position,
+    selection_anchor: Option<Position>,
+    scroll_line: usize,
+    scroll_column: usize,
+    filename: Option<String>,
+    undo: Vec<Snapshot>,
+    dirty: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProjectEntry {
     name: String,
@@ -81,12 +102,70 @@ enum DialogKind {
     SaveAs,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchMode {
+    Find,
+    Replace,
+    Project,
+    GoToLine,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchField {
+    Query,
+    Replacement,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SearchResult {
+    path: String,
+    line: usize,
+    column: usize,
+    length: usize,
+    preview: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Location {
+    document_id: u32,
+    filename: Option<String>,
+    position: Position,
+}
+
 enum Overlay {
     None,
-    Menu { menu: MenuKind, selected: usize },
-    Dialog { kind: DialogKind, input: String, error: Option<String> },
-    Building { frames_remaining: u8 },
-    Message { title: String, lines: Vec<String> },
+    Menu {
+        menu: MenuKind,
+        selected: usize,
+    },
+    Dialog {
+        kind: DialogKind,
+        input: String,
+        error: Option<String>,
+    },
+    Building {
+        frames_remaining: u8,
+    },
+    Message {
+        title: String,
+        lines: Vec<String>,
+    },
+    CloseTab {
+        tab: usize,
+    },
+    SearchPrompt {
+        mode: SearchMode,
+        query: String,
+        replacement: String,
+        field: SearchField,
+        error: Option<String>,
+    },
+    SearchResults {
+        query: String,
+        results: Vec<SearchResult>,
+        selected: usize,
+        scroll: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,6 +200,15 @@ pub struct TextEditor {
     project_scroll: usize,
     project_focused: bool,
     expanded_directories: BTreeSet<String>,
+    tabs: Vec<DocumentState>,
+    active_tab: usize,
+    tab_scroll: usize,
+    document_id: u32,
+    next_document_id: u32,
+    close_after_save: Option<u32>,
+    last_search: String,
+    navigation_back: Vec<Location>,
+    navigation_forward: Vec<Location>,
 }
 
 impl TextEditor {
@@ -154,6 +242,15 @@ impl TextEditor {
             project_scroll: 0,
             project_focused: false,
             expanded_directories: BTreeSet::new(),
+            tabs: Vec::new(),
+            active_tab: 0,
+            tab_scroll: 0,
+            document_id: 1,
+            next_document_id: 2,
+            close_after_save: None,
+            last_search: String::new(),
+            navigation_back: Vec::new(),
+            navigation_forward: Vec::new(),
         };
         if let Some(filename) = filename
             && let Err(error) = editor.load(&filename)
@@ -161,6 +258,7 @@ impl TextEditor {
             editor.overlay =
                 Overlay::Dialog { kind: DialogKind::Open, input: filename, error: Some(error) };
         }
+        editor.tabs.push(editor.capture_document());
         editor.refresh_project_browser();
         editor
     }
@@ -173,6 +271,13 @@ impl TextEditor {
     ) -> EditorAction {
         if !matches!(self.overlay, Overlay::None) {
             return self.handle_overlay_key(key, modifiers);
+        }
+
+        if (modifiers.control_key() || modifiers.super_key())
+            && matches!(key, Key::Named(NamedKey::Tab))
+        {
+            self.cycle_tabs(!modifiers.shift_key());
+            return EditorAction::None;
         }
 
         if (modifiers.control_key() || modifiers.super_key())
@@ -200,7 +305,15 @@ impl TextEditor {
                     EditorAction::None
                 }
                 "s" => {
-                    self.save_or_prompt();
+                    if modifiers.shift_key() {
+                        self.save_all();
+                    } else {
+                        self.save_or_prompt();
+                    }
+                    EditorAction::None
+                }
+                "w" => {
+                    self.request_close_tab(self.active_tab);
                     EditorAction::None
                 }
                 "o" => {
@@ -215,8 +328,38 @@ impl TextEditor {
                     self.start_build(false);
                     EditorAction::None
                 }
+                "f" => {
+                    self.open_search_prompt(if modifiers.shift_key() {
+                        SearchMode::Project
+                    } else {
+                        SearchMode::Find
+                    });
+                    EditorAction::None
+                }
+                "h" => {
+                    self.open_search_prompt(SearchMode::Replace);
+                    EditorAction::None
+                }
+                "g" => {
+                    self.open_search_prompt(SearchMode::GoToLine);
+                    EditorAction::None
+                }
                 _ => EditorAction::None,
             };
+        }
+
+        if modifiers.alt_key() && matches!(key, Key::Named(NamedKey::ArrowLeft)) {
+            self.navigate_history(false);
+            return EditorAction::None;
+        }
+        if modifiers.alt_key() && matches!(key, Key::Named(NamedKey::ArrowRight)) {
+            self.navigate_history(true);
+            return EditorAction::None;
+        }
+
+        if matches!(key, Key::Named(NamedKey::F5)) {
+            self.start_build(true);
+            return EditorAction::None;
         }
 
         if matches!(key, Key::Named(NamedKey::F6)) {
@@ -241,9 +384,15 @@ impl TextEditor {
         match key {
             Key::Named(NamedKey::F10) => self.open_menu(MenuKind::File),
             Key::Named(NamedKey::F2) => self.save_or_prompt(),
-            Key::Named(NamedKey::F3) => self.open_dialog(DialogKind::Open),
+            Key::Named(NamedKey::F3) => self.find_next(!modifiers.shift_key()),
             Key::Named(NamedKey::F4) => self.move_diagnostic(!modifiers.shift_key()),
-            Key::Named(NamedKey::F5) => self.start_build(modifiers.shift_key()),
+            Key::Named(NamedKey::F12) => {
+                if modifiers.shift_key() {
+                    self.find_symbol_references();
+                } else {
+                    self.goto_symbol_definition();
+                }
+            }
             Key::Named(NamedKey::ArrowLeft) => self.move_cursor(modifiers.shift_key(), |editor| {
                 if editor.cursor.column > 0 {
                     editor.cursor.column -= 1;
@@ -302,6 +451,442 @@ impl TextEditor {
         self.pending_launch.take().map_or(EditorAction::None, EditorAction::Run)
     }
 
+    fn open_search_prompt(&mut self, mode: SearchMode) {
+        let query = if mode == SearchMode::GoToLine {
+            (self.cursor.line + 1).to_string()
+        } else if let Some(selected) = self.selected_text().filter(|text| !text.contains('\n')) {
+            selected
+        } else {
+            self.last_search.clone()
+        };
+        self.overlay = Overlay::SearchPrompt {
+            mode,
+            query,
+            replacement: String::new(),
+            field: SearchField::Query,
+            error: None,
+        };
+    }
+
+    fn submit_search_prompt(&mut self, mode: SearchMode, query: String, replacement: String) {
+        if query.is_empty() {
+            self.overlay = Overlay::SearchPrompt {
+                mode,
+                query,
+                replacement,
+                field: SearchField::Query,
+                error: Some("ENTER SEARCH TEXT".to_owned()),
+            };
+            return;
+        }
+        match mode {
+            SearchMode::Find => {
+                self.last_search = query;
+                self.overlay = Overlay::None;
+                self.find_next(true);
+            }
+            SearchMode::Replace => {
+                self.last_search = query.clone();
+                self.overlay = Overlay::None;
+                self.replace_next(&query, &replacement);
+            }
+            SearchMode::Project => self.show_project_search(&query),
+            SearchMode::GoToLine => match query.parse::<usize>() {
+                Ok(line) if line > 0 && line <= self.lines.len() => {
+                    self.push_navigation_origin();
+                    self.cursor = Position { line: line - 1, column: 0 };
+                    self.selection_anchor = None;
+                    self.ensure_cursor_visible();
+                    self.overlay = Overlay::None;
+                }
+                _ => {
+                    self.overlay = Overlay::SearchPrompt {
+                        mode,
+                        query,
+                        replacement,
+                        field: SearchField::Query,
+                        error: Some(format!("LINE MUST BE 1-{}", self.lines.len())),
+                    };
+                }
+            },
+        }
+    }
+
+    fn find_next(&mut self, forward: bool) {
+        if self.last_search.is_empty() {
+            self.open_search_prompt(SearchMode::Find);
+            return;
+        }
+        let matches = line_matches(&self.lines, &self.last_search, false);
+        if matches.is_empty() {
+            self.show_build_message("FIND", &[format!("NOT FOUND: {}", self.last_search)]);
+            return;
+        }
+        let boundary = if forward {
+            self.selection().map_or(self.cursor, |(_, end)| end)
+        } else {
+            self.selection().map_or(self.cursor, |(start, _)| start)
+        };
+        let found = if forward {
+            matches.iter().copied().find(|position| *position >= boundary).unwrap_or(matches[0])
+        } else {
+            matches
+                .iter()
+                .rev()
+                .copied()
+                .find(|position| *position < boundary)
+                .unwrap_or_else(|| *matches.last().expect("non-empty matches"))
+        };
+        self.select_search_match(found, self.last_search.len());
+    }
+
+    fn select_search_match(&mut self, start: Position, length: usize) {
+        self.selection_anchor = Some(start);
+        self.cursor = Position { line: start.line, column: start.column + length };
+        self.ensure_cursor_visible();
+    }
+
+    fn replace_next(&mut self, query: &str, replacement: &str) {
+        let selection_matches =
+            self.selected_text().is_some_and(|selected| selected.eq_ignore_ascii_case(query));
+        if !selection_matches {
+            self.find_next(true);
+        }
+        if self.selected_text().is_some_and(|selected| selected.eq_ignore_ascii_case(query)) {
+            self.insert_text(replacement);
+            self.find_next(true);
+        }
+    }
+
+    fn replace_all(&mut self, query: &str, replacement: &str) -> usize {
+        if query.is_empty() {
+            return 0;
+        }
+        let matches = line_matches(&self.lines, query, false);
+        if matches.is_empty() {
+            return 0;
+        }
+        self.record_undo();
+        for position in matches.iter().rev() {
+            self.lines[position.line]
+                .replace_range(position.column..position.column + query.len(), replacement);
+        }
+        self.selection_anchor = None;
+        self.dirty = true;
+        self.clamp_cursor();
+        matches.len()
+    }
+
+    fn show_project_search(&mut self, query: &str) {
+        self.last_search = query.to_owned();
+        let results = self.search_project(query, false, false);
+        if results.is_empty() {
+            self.show_build_message("PROJECT SEARCH", &[format!("NOT FOUND: {query}")]);
+        } else {
+            self.overlay =
+                Overlay::SearchResults { query: query.to_owned(), results, selected: 0, scroll: 0 };
+        }
+    }
+
+    fn search_project(
+        &mut self,
+        query: &str,
+        assembly_only: bool,
+        definitions_only: bool,
+    ) -> Vec<SearchResult> {
+        self.sync_active_document();
+        let mut paths = Vec::new();
+        collect_project_files(&self.filesystem.borrow(), "/", &mut paths);
+        let mut results = Vec::new();
+        for path in paths {
+            if assembly_only && !assembly_filename(&path) {
+                continue;
+            }
+            let lines = if let Some(document) = self.tabs.iter().find(|document| {
+                document
+                    .filename
+                    .as_deref()
+                    .is_some_and(|filename| filename.eq_ignore_ascii_case(&path))
+            }) {
+                document.lines.clone()
+            } else {
+                let Ok(text) = self.filesystem.borrow().read_text(&path) else { continue };
+                normalized_lines(&text)
+            };
+            for (line_index, line) in lines.iter().enumerate() {
+                if definitions_only {
+                    if assembly_definition(line)
+                        .is_some_and(|symbol| symbol.eq_ignore_ascii_case(query))
+                    {
+                        let column = line
+                            .find(|character: char| !character.is_ascii_whitespace())
+                            .unwrap_or(0);
+                        results.push(SearchResult {
+                            path: path.clone(),
+                            line: line_index,
+                            column,
+                            length: query.len(),
+                            preview: search_preview(line),
+                        });
+                    }
+                    continue;
+                }
+                for position in text_matches(line, query, assembly_only) {
+                    results.push(SearchResult {
+                        path: path.clone(),
+                        line: line_index,
+                        column: position,
+                        length: query.len(),
+                        preview: search_preview(line),
+                    });
+                }
+            }
+        }
+        results
+    }
+
+    fn word_under_cursor(&self) -> Option<String> {
+        let line = self.lines.get(self.cursor.line)?;
+        symbol_at(line, self.cursor.column).map(str::to_owned)
+    }
+
+    fn goto_symbol_definition(&mut self) {
+        let Some(symbol) = self.word_under_cursor() else {
+            self.show_build_message("DEFINITION", &["NO SYMBOL AT CURSOR".to_owned()]);
+            return;
+        };
+        let results = self.search_project(&symbol, true, true);
+        let Some(result) = results.first().cloned() else {
+            self.show_build_message("DEFINITION", &[format!("NOT FOUND: {symbol}")]);
+            return;
+        };
+        self.navigate_to_result(&result, true);
+    }
+
+    fn find_symbol_references(&mut self) {
+        let Some(symbol) = self.word_under_cursor() else {
+            self.show_build_message("REFERENCES", &["NO SYMBOL AT CURSOR".to_owned()]);
+            return;
+        };
+        let results = self.search_project(&symbol, true, false);
+        if results.is_empty() {
+            self.show_build_message("REFERENCES", &[format!("NOT FOUND: {symbol}")]);
+        } else {
+            self.overlay =
+                Overlay::SearchResults { query: symbol, results, selected: 0, scroll: 0 };
+        }
+    }
+
+    fn current_location(&self) -> Location {
+        Location {
+            document_id: self.document_id,
+            filename: self.filename.clone(),
+            position: self.cursor,
+        }
+    }
+
+    fn push_navigation_origin(&mut self) {
+        let location = self.current_location();
+        if self.navigation_back.last() != Some(&location) {
+            self.navigation_back.push(location);
+            if self.navigation_back.len() > 64 {
+                self.navigation_back.remove(0);
+            }
+        }
+        self.navigation_forward.clear();
+    }
+
+    fn navigate_to_result(&mut self, result: &SearchResult, record_history: bool) {
+        if record_history {
+            self.push_navigation_origin();
+        }
+        if !self
+            .filename
+            .as_deref()
+            .is_some_and(|filename| filename.eq_ignore_ascii_case(&result.path))
+            && self.load(&result.path).is_err()
+        {
+            return;
+        }
+        let line = result.line.min(self.lines.len() - 1);
+        let column = result.column.min(self.lines[line].len());
+        let length = result.length.min(self.lines[line].len() - column);
+        self.select_search_match(Position { line, column }, length);
+        self.overlay = Overlay::None;
+    }
+
+    fn navigate_history(&mut self, forward: bool) {
+        let destination =
+            if forward { self.navigation_forward.pop() } else { self.navigation_back.pop() };
+        let Some(destination) = destination else { return };
+        let current = self.current_location();
+        if forward {
+            self.navigation_back.push(current);
+        } else {
+            self.navigation_forward.push(current);
+        }
+        self.goto_location(destination);
+    }
+
+    fn goto_location(&mut self, location: Location) {
+        if let Some(tab) = self.tabs.iter().position(|document| document.id == location.document_id)
+        {
+            self.switch_tab(tab);
+        } else if let Some(filename) = &location.filename
+            && self.load(filename).is_err()
+        {
+            return;
+        }
+        self.cursor.line = location.position.line.min(self.lines.len() - 1);
+        self.cursor.column = location.position.column.min(self.lines[self.cursor.line].len());
+        self.selection_anchor = None;
+        self.ensure_cursor_visible();
+        self.overlay = Overlay::None;
+    }
+
+    fn capture_document(&self) -> DocumentState {
+        DocumentState {
+            id: self.document_id,
+            lines: self.lines.clone(),
+            cursor: self.cursor,
+            selection_anchor: self.selection_anchor,
+            scroll_line: self.scroll_line,
+            scroll_column: self.scroll_column,
+            filename: self.filename.clone(),
+            undo: self.undo.clone(),
+            dirty: self.dirty,
+        }
+    }
+
+    fn restore_document(&mut self, document: DocumentState) {
+        self.document_id = document.id;
+        self.lines = document.lines;
+        self.cursor = document.cursor;
+        self.selection_anchor = document.selection_anchor;
+        self.scroll_line = document.scroll_line;
+        self.scroll_column = document.scroll_column;
+        self.filename = document.filename;
+        self.undo = document.undo;
+        self.dirty = document.dirty;
+    }
+
+    fn sync_active_document(&mut self) {
+        if self.active_tab < self.tabs.len() {
+            self.tabs[self.active_tab] = self.capture_document();
+        }
+    }
+
+    fn switch_tab(&mut self, tab: usize) {
+        if tab >= self.tabs.len() || tab == self.active_tab {
+            return;
+        }
+        if self.selection_anchor.is_none() {
+            self.format_departed_line(self.cursor.line);
+        }
+        self.sync_active_document();
+        self.active_tab = tab;
+        self.restore_document(self.tabs[tab].clone());
+        self.project_focused = false;
+        self.mouse_selecting = false;
+        self.ensure_active_tab_visible();
+    }
+
+    fn cycle_tabs(&mut self, forward: bool) {
+        if self.tabs.len() < 2 {
+            return;
+        }
+        let next = if forward {
+            (self.active_tab + 1) % self.tabs.len()
+        } else {
+            (self.active_tab + self.tabs.len() - 1) % self.tabs.len()
+        };
+        self.switch_tab(next);
+    }
+
+    fn ensure_active_tab_visible(&mut self) {
+        if self.active_tab < self.tab_scroll {
+            self.tab_scroll = self.active_tab;
+        } else if self.active_tab >= self.tab_scroll + VISIBLE_TABS {
+            self.tab_scroll = self.active_tab + 1 - VISIBLE_TABS;
+        }
+        self.tab_scroll = self.tab_scroll.min(self.tabs.len().saturating_sub(VISIBLE_TABS));
+    }
+
+    fn tab_dirty(&self, tab: usize) -> bool {
+        if tab == self.active_tab { self.dirty } else { self.tabs[tab].dirty }
+    }
+
+    fn any_dirty_tabs(&self) -> bool {
+        (0..self.tabs.len()).any(|tab| self.tab_dirty(tab))
+    }
+
+    fn active_tab_is_disposable(&self) -> bool {
+        self.filename.is_none() && !self.dirty
+    }
+
+    fn tab_title(&self, tab: usize) -> String {
+        let (filename, id) = if tab == self.active_tab {
+            (self.filename.as_deref(), self.document_id)
+        } else {
+            let document = &self.tabs[tab];
+            (document.filename.as_deref(), document.id)
+        };
+        filename
+            .and_then(|path| path.rsplit('/').next())
+            .map(str::to_ascii_uppercase)
+            .unwrap_or_else(|| format!("UNTITLED{id}"))
+    }
+
+    fn request_close_tab(&mut self, tab: usize) {
+        if tab >= self.tabs.len() {
+            return;
+        }
+        if self.tab_dirty(tab) {
+            self.overlay = Overlay::CloseTab { tab };
+        } else {
+            self.close_tab(tab);
+        }
+    }
+
+    fn close_tab(&mut self, tab: usize) {
+        if tab >= self.tabs.len() {
+            return;
+        }
+        let closing_active = tab == self.active_tab;
+        let active_id = self.document_id;
+        self.sync_active_document();
+        self.tabs.remove(tab);
+        if self.tabs.is_empty() {
+            let document = self.blank_document();
+            self.tabs.push(document);
+        }
+        let next = if closing_active {
+            tab.min(self.tabs.len() - 1)
+        } else {
+            self.tabs.iter().position(|document| document.id == active_id).unwrap_or(0)
+        };
+        self.active_tab = next;
+        self.restore_document(self.tabs[next].clone());
+        self.ensure_active_tab_visible();
+        self.overlay = Overlay::None;
+    }
+
+    fn blank_document(&mut self) -> DocumentState {
+        let id = self.next_document_id;
+        self.next_document_id += 1;
+        DocumentState {
+            id,
+            lines: vec![String::new()],
+            cursor: Position::default(),
+            selection_anchor: None,
+            scroll_line: 0,
+            scroll_column: 0,
+            filename: None,
+            undo: Vec::new(),
+            dirty: false,
+        }
+    }
+
     pub fn handle_mouse_press(&mut self, x: usize, y: usize, shift: bool) -> EditorAction {
         let cell_x = (x / GLYPH_WIDTH).min(COLUMNS - 1);
         let cell_y = (y / GLYPH_HEIGHT).min(ROWS - 1);
@@ -322,6 +907,9 @@ impl TextEditor {
                     .checked_sub(2)
                     .filter(|item| *item < menu_items(menu).len())
                     .filter(|_| cell_x > x && cell_x < x + 15);
+                if selected.is_some_and(|item| menu_item_is_separator(menu, item)) {
+                    return EditorAction::None;
+                }
                 self.overlay = Overlay::None;
                 return selected.map_or(EditorAction::None, |item| self.activate_menu(menu, item));
             }
@@ -336,6 +924,7 @@ impl TextEditor {
                     if cell_x < dialog_x + width / 2 {
                         self.submit_dialog(kind, input);
                     } else {
+                        self.close_after_save = None;
                         self.overlay = Overlay::None;
                     }
                 }
@@ -345,8 +934,46 @@ impl TextEditor {
                 self.overlay = Overlay::None;
                 return EditorAction::None;
             }
+            Overlay::CloseTab { .. } => return EditorAction::None,
+            Overlay::SearchPrompt { .. } => return EditorAction::None,
+            Overlay::SearchResults { results, scroll, .. } => {
+                let result = (cell_x > SEARCH_RESULTS_X
+                    && cell_x < SEARCH_RESULTS_X + SEARCH_RESULTS_WIDTH - 1)
+                    .then_some(cell_y)
+                    .and_then(|row| row.checked_sub(SEARCH_RESULTS_Y + 3))
+                    .filter(|row| *row < SEARCH_RESULTS_VISIBLE)
+                    .map(|row| *scroll + row)
+                    .and_then(|index| results.get(index))
+                    .cloned();
+                if let Some(result) = result {
+                    self.navigate_to_result(&result, true);
+                }
+                return EditorAction::None;
+            }
             Overlay::Building { .. } => return EditorAction::None,
             Overlay::None => {}
+        }
+
+        if cell_y == 1 && cell_x >= EDITOR_START {
+            if cell_x == EDITOR_START && self.tab_scroll > 0 {
+                self.tab_scroll -= 1;
+                return EditorAction::None;
+            }
+            if cell_x == COLUMNS - 1 && self.tab_scroll + VISIBLE_TABS < self.tabs.len() {
+                self.tab_scroll += 1;
+                return EditorAction::None;
+            }
+            let relative = cell_x.saturating_sub(EDITOR_START + 1);
+            let slot = relative / TAB_WIDTH;
+            let tab = self.tab_scroll + slot;
+            if slot < VISIBLE_TABS && tab < self.tabs.len() {
+                if relative % TAB_WIDTH == TAB_WIDTH - 1 {
+                    self.request_close_tab(tab);
+                } else {
+                    self.switch_tab(tab);
+                }
+            }
+            return EditorAction::None;
         }
 
         if cell_x < PROJECT_WIDTH && (1..ROWS - 1).contains(&cell_y) {
@@ -366,7 +993,7 @@ impl TextEditor {
             return EditorAction::None;
         }
 
-        if !(1..ROWS - 1).contains(&cell_y) {
+        if !(EDITOR_FIRST_ROW..ROWS - 1).contains(&cell_y) {
             return EditorAction::None;
         }
         self.project_focused = false;
@@ -395,12 +1022,16 @@ impl TextEditor {
                 && cell_x < origin + 15
                 && let Some(item) = cell_y.checked_sub(2)
                 && item < menu_items(*menu).len()
+                && !menu_item_is_separator(*menu, item)
             {
                 *selected = item;
             }
             return;
         }
-        if self.mouse_selecting && cell_x >= EDITOR_START && (1..ROWS - 1).contains(&cell_y) {
+        if self.mouse_selecting
+            && cell_x >= EDITOR_START
+            && (EDITOR_FIRST_ROW..ROWS - 1).contains(&cell_y)
+        {
             self.cursor = self.document_position(cell_x - EDITOR_START, cell_y);
             self.ensure_cursor_visible();
         }
@@ -442,7 +1073,7 @@ impl TextEditor {
     }
 
     fn document_position(&self, cell_x: usize, cell_y: usize) -> Position {
-        let line = (self.scroll_line + cell_y - 1).min(self.lines.len() - 1);
+        let line = (self.scroll_line + cell_y - EDITOR_FIRST_ROW).min(self.lines.len() - 1);
         let column = (self.scroll_column + cell_x).min(self.lines[line].len());
         Position { line, column }
     }
@@ -504,13 +1135,6 @@ impl TextEditor {
             .is_some_and(|filename| filename.eq_ignore_ascii_case(&entry.path))
         {
             self.project_focused = false;
-            return EditorAction::None;
-        }
-        if self.dirty {
-            self.show_build_message(
-                "UNSAVED CHANGES",
-                &["SAVE THE CURRENT FILE BEFORE OPENING ANOTHER".to_owned()],
-            );
             return EditorAction::None;
         }
         match self.load(&entry.path) {
@@ -586,6 +1210,49 @@ impl TextEditor {
         }
     }
 
+    fn render_tabs(&self, cells: &mut [u8], foregrounds: &mut [u8], inverse: &mut [bool]) {
+        let row = 1;
+        let row_start = row * COLUMNS;
+        foregrounds[row_start + EDITOR_START..row_start + COLUMNS].fill(UI_WHITE_COLOR);
+        inverse[row_start + EDITOR_START..row_start + COLUMNS].fill(true);
+        put_cell(cells, EDITOR_START, row, if self.tab_scroll > 0 { b'<' } else { b' ' });
+        put_cell(
+            cells,
+            COLUMNS - 1,
+            row,
+            if self.tab_scroll + VISIBLE_TABS < self.tabs.len() { b'>' } else { b' ' },
+        );
+        for slot in 0..VISIBLE_TABS {
+            let tab = self.tab_scroll + slot;
+            let start = EDITOR_START + 1 + slot * TAB_WIDTH;
+            if tab >= self.tabs.len() {
+                continue;
+            }
+            let (filename, id) = if tab == self.active_tab {
+                (self.filename.as_deref(), self.document_id)
+            } else {
+                let document = &self.tabs[tab];
+                (document.filename.as_deref(), document.id)
+            };
+            let title = filename
+                .and_then(|path| path.rsplit('/').next())
+                .map(str::to_ascii_uppercase)
+                .unwrap_or_else(|| format!("UNTITLED{id}"));
+            let mut label = format!(" {title}");
+            label.truncate(TAB_WIDTH - 3);
+            while label.len() < TAB_WIDTH - 3 {
+                label.push(' ');
+            }
+            label.push(if self.tab_dirty(tab) { '*' } else { ' ' });
+            label.push(' ');
+            label.push('X');
+            put_text_width(cells, start, row, &label, TAB_WIDTH);
+            if tab == self.active_tab {
+                inverse[row_start + start..row_start + start + TAB_WIDTH].fill(false);
+            }
+        }
+    }
+
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
         debug_assert_eq!(video.dimensions(), (EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT));
         let colors = self.colors.get();
@@ -612,7 +1279,7 @@ impl TextEditor {
             for (screen_x, byte) in
                 line.bytes().skip(self.scroll_column).take(EDITOR_COLUMNS).enumerate()
             {
-                let index = (screen_y + 1) * COLUMNS + EDITOR_START + screen_x;
+                let index = (screen_y + EDITOR_FIRST_ROW) * COLUMNS + EDITOR_START + screen_x;
                 let source_column = self.scroll_column + screen_x;
                 cells[index] = byte.to_ascii_uppercase();
                 if let Some(syntax) = &syntax
@@ -651,6 +1318,7 @@ impl TextEditor {
         foregrounds[(ROWS - 1) * COLUMNS..].fill(UI_WHITE_COLOR);
 
         self.render_project_browser(&mut cells, &mut inverse);
+        self.render_tabs(&mut cells, &mut foregrounds, &mut inverse);
         for row in 1..ROWS - 1 {
             foregrounds[row * COLUMNS..row * COLUMNS + EDITOR_START].fill(UI_WHITE_COLOR);
         }
@@ -680,17 +1348,138 @@ impl TextEditor {
             && screen_column < EDITOR_COLUMNS
         {
             let cell_x = EDITOR_START + screen_column;
-            let cell_y = screen_line + 1;
+            let cell_y = screen_line + EDITOR_FIRST_ROW;
             draw_block_cursor(video, cell_x, cell_y, cells[cell_y * COLUMNS + cell_x]);
         }
     }
 
     fn handle_overlay_key(&mut self, key: &Key, modifiers: ModifiersState) -> EditorAction {
+        if matches!(self.overlay, Overlay::SearchResults { .. }) {
+            let mut activate = None;
+            if let Overlay::SearchResults { results, selected, scroll, .. } = &mut self.overlay {
+                match key {
+                    Key::Named(NamedKey::Escape) => self.overlay = Overlay::None,
+                    Key::Named(NamedKey::ArrowUp) => {
+                        *selected = selected.saturating_sub(1);
+                        *scroll = (*scroll).min(*selected);
+                    }
+                    Key::Named(NamedKey::ArrowDown) if !results.is_empty() => {
+                        *selected = (*selected + 1).min(results.len() - 1);
+                        if *selected >= *scroll + SEARCH_RESULTS_VISIBLE {
+                            *scroll = *selected + 1 - SEARCH_RESULTS_VISIBLE;
+                        }
+                    }
+                    Key::Named(NamedKey::PageUp) => {
+                        *selected = selected.saturating_sub(SEARCH_RESULTS_VISIBLE);
+                        *scroll = scroll.saturating_sub(SEARCH_RESULTS_VISIBLE);
+                    }
+                    Key::Named(NamedKey::PageDown) if !results.is_empty() => {
+                        *selected = (*selected + SEARCH_RESULTS_VISIBLE).min(results.len() - 1);
+                        *scroll = (*selected + 1)
+                            .saturating_sub(SEARCH_RESULTS_VISIBLE)
+                            .min(results.len().saturating_sub(SEARCH_RESULTS_VISIBLE));
+                    }
+                    Key::Named(NamedKey::Enter) => activate = results.get(*selected).cloned(),
+                    _ => {}
+                }
+            }
+            if let Some(result) = activate {
+                self.navigate_to_result(&result, true);
+            }
+            return EditorAction::None;
+        }
+
+        if matches!(self.overlay, Overlay::SearchPrompt { .. }) {
+            let mut submit = None;
+            let mut replace_all = None;
+            if let Overlay::SearchPrompt { mode, query, replacement, field, error } =
+                &mut self.overlay
+            {
+                match key {
+                    Key::Named(NamedKey::Escape) => self.overlay = Overlay::None,
+                    Key::Named(NamedKey::Tab) if *mode == SearchMode::Replace => {
+                        *field = if *field == SearchField::Query {
+                            SearchField::Replacement
+                        } else {
+                            SearchField::Query
+                        };
+                        *error = None;
+                    }
+                    Key::Named(NamedKey::Backspace) => {
+                        if *field == SearchField::Query {
+                            query.pop();
+                        } else {
+                            replacement.pop();
+                        }
+                        *error = None;
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        submit = Some((*mode, query.clone(), replacement.clone()));
+                    }
+                    Key::Named(NamedKey::F8) if *mode == SearchMode::Replace => {
+                        replace_all = Some((query.clone(), replacement.clone()));
+                    }
+                    Key::Named(NamedKey::Space) if *mode != SearchMode::GoToLine => {
+                        if *field == SearchField::Query {
+                            query.push(' ');
+                        } else {
+                            replacement.push(' ');
+                        }
+                    }
+                    Key::Character(text) if !modifiers.control_key() && !modifiers.super_key() => {
+                        let filtered = text
+                            .chars()
+                            .filter(|character| {
+                                character.is_ascii_graphic()
+                                    && (*mode != SearchMode::GoToLine || character.is_ascii_digit())
+                            })
+                            .collect::<String>();
+                        if *field == SearchField::Query {
+                            query.push_str(&filtered);
+                        } else {
+                            replacement.push_str(&filtered);
+                        }
+                        *error = None;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some((mode, query, replacement)) = submit {
+                self.submit_search_prompt(mode, query, replacement);
+            } else if let Some((query, replacement)) = replace_all {
+                let count = self.replace_all(&query, &replacement);
+                self.last_search = query;
+                self.show_build_message("REPLACE", &[format!("REPLACED {count} MATCHES")]);
+            }
+            return EditorAction::None;
+        }
+
+        if let Overlay::CloseTab { tab } = &self.overlay {
+            let tab = *tab;
+            match key {
+                Key::Named(NamedKey::Escape) => self.overlay = Overlay::None,
+                Key::Character(text) if text.eq_ignore_ascii_case("d") => self.close_tab(tab),
+                Key::Character(text) if text.eq_ignore_ascii_case("s") => {
+                    match self.save_tab(tab) {
+                        Ok(true) => self.close_tab(tab),
+                        Ok(false) => {
+                            self.close_after_save = self.tabs.get(tab).map(|document| document.id);
+                            self.overlay = Overlay::None;
+                            self.switch_tab(tab);
+                            self.open_dialog(DialogKind::SaveAs);
+                        }
+                        Err(error) => self.show_build_message("SAVE ERROR", &[error]),
+                    }
+                }
+                _ => {}
+            }
+            return EditorAction::None;
+        }
         if matches!(self.overlay, Overlay::Message { .. }) {
             match key {
                 Key::Named(NamedKey::F4) => self.move_diagnostic(!modifiers.shift_key()),
                 Key::Named(NamedKey::Enter | NamedKey::Escape) => self.overlay = Overlay::None,
-                Key::Named(NamedKey::F5) => self.start_build(modifiers.shift_key()),
+                Key::Named(NamedKey::F5) => self.start_build(true),
                 _ => {}
             }
             return EditorAction::None;
@@ -703,43 +1492,47 @@ impl TextEditor {
         }
 
         match &mut self.overlay {
-            Overlay::Menu { menu, selected } => {
-                let count = menu_items(*menu).len();
-                match key {
-                    Key::Named(NamedKey::Escape) | Key::Named(NamedKey::F10) => {
-                        self.overlay = Overlay::None;
-                    }
-                    Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowRight) => {
-                        *menu = match (*menu, key) {
-                            (MenuKind::File, Key::Named(NamedKey::ArrowLeft)) => MenuKind::Build,
-                            (MenuKind::File, _) => MenuKind::Edit,
-                            (MenuKind::Edit, Key::Named(NamedKey::ArrowLeft)) => MenuKind::File,
-                            (MenuKind::Edit, _) => MenuKind::Build,
-                            (MenuKind::Build, Key::Named(NamedKey::ArrowLeft)) => MenuKind::Edit,
-                            (MenuKind::Build, _) => MenuKind::File,
-                        };
-                        *selected = 0;
-                    }
-                    Key::Named(NamedKey::ArrowUp) => *selected = (*selected + count - 1) % count,
-                    Key::Named(NamedKey::ArrowDown) => *selected = (*selected + 1) % count,
-                    Key::Named(NamedKey::Enter) => {
-                        let menu = *menu;
-                        let selected = *selected;
-                        self.overlay = Overlay::None;
-                        return self.activate_menu(menu, selected);
-                    }
-                    Key::Character(text) => {
-                        if let Some(item) = menu_hotkey(*menu, text) {
-                            let menu = *menu;
-                            self.overlay = Overlay::None;
-                            return self.activate_menu(menu, item);
-                        }
-                    }
-                    _ => {}
+            Overlay::Menu { menu, selected } => match key {
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::F10) => {
+                    self.overlay = Overlay::None;
                 }
-            }
+                Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowRight) => {
+                    *menu = match (*menu, key) {
+                        (MenuKind::File, Key::Named(NamedKey::ArrowLeft)) => MenuKind::Build,
+                        (MenuKind::File, _) => MenuKind::Edit,
+                        (MenuKind::Edit, Key::Named(NamedKey::ArrowLeft)) => MenuKind::File,
+                        (MenuKind::Edit, _) => MenuKind::Build,
+                        (MenuKind::Build, Key::Named(NamedKey::ArrowLeft)) => MenuKind::Edit,
+                        (MenuKind::Build, _) => MenuKind::File,
+                    };
+                    *selected = 0;
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    *selected = next_menu_item(*menu, *selected, false)
+                }
+                Key::Named(NamedKey::ArrowDown) => {
+                    *selected = next_menu_item(*menu, *selected, true)
+                }
+                Key::Named(NamedKey::Enter) => {
+                    let menu = *menu;
+                    let selected = *selected;
+                    self.overlay = Overlay::None;
+                    return self.activate_menu(menu, selected);
+                }
+                Key::Character(text) => {
+                    if let Some(item) = menu_hotkey(*menu, text) {
+                        let menu = *menu;
+                        self.overlay = Overlay::None;
+                        return self.activate_menu(menu, item);
+                    }
+                }
+                _ => {}
+            },
             Overlay::Dialog { kind, input, .. } => match key {
-                Key::Named(NamedKey::Escape) => self.overlay = Overlay::None,
+                Key::Named(NamedKey::Escape) => {
+                    self.close_after_save = None;
+                    self.overlay = Overlay::None;
+                }
                 Key::Named(NamedKey::Backspace) => {
                     input.pop();
                 }
@@ -759,7 +1552,12 @@ impl TextEditor {
                 }
                 _ => {}
             },
-            Overlay::None | Overlay::Building { .. } | Overlay::Message { .. } => {}
+            Overlay::None
+            | Overlay::Building { .. }
+            | Overlay::Message { .. }
+            | Overlay::CloseTab { .. }
+            | Overlay::SearchPrompt { .. }
+            | Overlay::SearchResults { .. } => {}
         }
         EditorAction::None
     }
@@ -768,18 +1566,35 @@ impl TextEditor {
         match (menu, selected) {
             (MenuKind::File, 0) => self.new_document(),
             (MenuKind::File, 1) => self.open_dialog(DialogKind::Open),
-            (MenuKind::File, 2) => self.save_or_prompt(),
-            (MenuKind::File, 3) => self.open_dialog(DialogKind::SaveAs),
-            (MenuKind::File, 4) => return EditorAction::Exit,
+            (MenuKind::File, 3) => self.save_or_prompt(),
+            (MenuKind::File, 4) => self.open_dialog(DialogKind::SaveAs),
+            (MenuKind::File, 5) => self.save_all(),
+            (MenuKind::File, 7) => self.request_close_tab(self.active_tab),
+            (MenuKind::File, 9) => {
+                if self.any_dirty_tabs() {
+                    self.show_build_message(
+                        "UNSAVED TABS",
+                        &["SAVE OR CLOSE DIRTY TABS BEFORE EXIT".to_owned()],
+                    );
+                } else {
+                    return EditorAction::Exit;
+                }
+            }
             (MenuKind::Edit, 0) => self.undo(),
-            (MenuKind::Edit, 1) => self.cut_selection(),
-            (MenuKind::Edit, 2) => self.copy_selection(),
-            (MenuKind::Edit, 3) => self.paste(),
-            (MenuKind::Edit, 4) => self.select_all(),
+            (MenuKind::Edit, 2) => self.cut_selection(),
+            (MenuKind::Edit, 3) => self.copy_selection(),
+            (MenuKind::Edit, 4) => self.paste(),
+            (MenuKind::Edit, 5) => self.select_all(),
+            (MenuKind::Edit, 7) => self.open_search_prompt(SearchMode::Find),
+            (MenuKind::Edit, 8) => self.open_search_prompt(SearchMode::Replace),
+            (MenuKind::Edit, 9) => self.open_search_prompt(SearchMode::Project),
+            (MenuKind::Edit, 10) => self.open_search_prompt(SearchMode::GoToLine),
+            (MenuKind::Edit, 12) => self.navigate_history(false),
+            (MenuKind::Edit, 13) => self.navigate_history(true),
             (MenuKind::Build, 0) => self.start_build(false),
             (MenuKind::Build, 1) => self.start_build(true),
-            (MenuKind::Build, 2) => self.move_diagnostic(true),
-            (MenuKind::Build, 3) => self.move_diagnostic(false),
+            (MenuKind::Build, 3) => self.move_diagnostic(true),
+            (MenuKind::Build, 4) => self.move_diagnostic(false),
             _ => {}
         }
         EditorAction::None
@@ -813,6 +1628,12 @@ impl TextEditor {
                 );
                 for (index, item) in menu_labels(*menu).iter().enumerate() {
                     let row = y + index + 1;
+                    if item.is_empty() {
+                        for column in x + 1..x + width - 1 {
+                            put_cell(cells, column, row, BOX_HORIZONTAL);
+                        }
+                        continue;
+                    }
                     put_text_width(cells, x + 3, row, item, width - 4);
                     if index == *selected {
                         inverse[row * COLUMNS + x + 1..row * COLUMNS + x + width - 1].fill(true);
@@ -873,6 +1694,129 @@ impl TextEditor {
                     lines,
                 );
             }
+            Overlay::CloseTab { tab } => {
+                let name = self.tab_title(*tab);
+                render_message_box(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    inverse,
+                    style,
+                    "UNSAVED TAB",
+                    &[name],
+                );
+            }
+            Overlay::SearchPrompt { mode, query, replacement, field, error } => {
+                let title = match mode {
+                    SearchMode::Find => "FIND",
+                    SearchMode::Replace => "FIND AND REPLACE",
+                    SearchMode::Project => "FIND IN PROJECT",
+                    SearchMode::GoToLine => "GO TO LINE",
+                };
+                let width = 54;
+                let height = if *mode == SearchMode::Replace { 11 } else { 9 };
+                let x = (COLUMNS - width) / 2;
+                let y = (ROWS - height) / 2;
+                draw_window(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    inverse,
+                    CellRect { x, y, width, height },
+                    style,
+                );
+                put_text_width(cells, x + 3, y, title, width - 6);
+                let query_label = if *mode == SearchMode::GoToLine { "LINE:" } else { "FIND:" };
+                put_cell(
+                    cells,
+                    x + 2,
+                    y + 2,
+                    if *field == SearchField::Query { SYMBOL_ARROW_RIGHT } else { b' ' },
+                );
+                put_text(cells, x + 4, y + 2, query_label);
+                put_text_width(cells, x + 13, y + 2, query, width - 15);
+                if *mode == SearchMode::Replace {
+                    put_cell(
+                        cells,
+                        x + 2,
+                        y + 4,
+                        if *field == SearchField::Replacement { SYMBOL_ARROW_RIGHT } else { b' ' },
+                    );
+                    put_text(cells, x + 4, y + 4, "REPLACE:");
+                    put_text_width(cells, x + 13, y + 4, replacement, width - 15);
+                    put_text(
+                        cells,
+                        x + 3,
+                        y + height - 2,
+                        "ENTER=NEXT  F8=ALL  TAB=FIELD  ESC=CANCEL",
+                    );
+                } else {
+                    put_text(cells, x + 3, y + height - 2, "ENTER=OK  ESC=CANCEL");
+                }
+                if let Some(error) = error {
+                    put_cell(cells, x + 2, y + height - 4, SYMBOL_CROSS);
+                    put_text_width(cells, x + 4, y + height - 4, error, width - 6);
+                }
+            }
+            Overlay::SearchResults { query, results, selected, scroll } => {
+                draw_window(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    inverse,
+                    CellRect {
+                        x: SEARCH_RESULTS_X,
+                        y: SEARCH_RESULTS_Y,
+                        width: SEARCH_RESULTS_WIDTH,
+                        height: SEARCH_RESULTS_HEIGHT,
+                    },
+                    style,
+                );
+                put_text_width(
+                    cells,
+                    SEARCH_RESULTS_X + 3,
+                    SEARCH_RESULTS_Y,
+                    &format!("SEARCH: {query}  {} MATCHES", results.len()),
+                    SEARCH_RESULTS_WIDTH - 6,
+                );
+                put_text(
+                    cells,
+                    SEARCH_RESULTS_X + 2,
+                    SEARCH_RESULTS_Y + 2,
+                    "FILE:LINE:COL  SOURCE",
+                );
+                for (screen_row, result) in
+                    results.iter().skip(*scroll).take(SEARCH_RESULTS_VISIBLE).enumerate()
+                {
+                    let row = SEARCH_RESULTS_Y + 3 + screen_row;
+                    let label = format!(
+                        "{}:{}:{}  {}",
+                        result.path,
+                        result.line + 1,
+                        result.column + 1,
+                        result.preview
+                    );
+                    put_text_width(
+                        cells,
+                        SEARCH_RESULTS_X + 2,
+                        row,
+                        &label,
+                        SEARCH_RESULTS_WIDTH - 4,
+                    );
+                    if *scroll + screen_row == *selected {
+                        inverse[row * COLUMNS + SEARCH_RESULTS_X + 1
+                            ..row * COLUMNS + SEARCH_RESULTS_X + SEARCH_RESULTS_WIDTH - 1]
+                            .fill(true);
+                        put_cell(cells, SEARCH_RESULTS_X + 1, row, SYMBOL_ARROW_RIGHT);
+                    }
+                }
+                put_text(
+                    cells,
+                    SEARCH_RESULTS_X + 2,
+                    SEARCH_RESULTS_Y + SEARCH_RESULTS_HEIGHT - 2,
+                    "ENTER/CLICK=OPEN  ESC=CLOSE",
+                );
+            }
         }
     }
 
@@ -911,22 +1855,86 @@ impl TextEditor {
         }
     }
 
+    fn save_all(&mut self) {
+        self.sync_active_document();
+        if self.tabs.iter().any(|document| document.dirty && document.filename.is_none()) {
+            self.show_build_message(
+                "SAVE ALL",
+                &["SAVE UNTITLED TABS WITH SAVE AS FIRST".to_owned()],
+            );
+            return;
+        }
+        match self.save_named_tabs() {
+            Ok(()) => self.show_build_message("SAVE ALL", &["ALL NAMED FILES SAVED".to_owned()]),
+            Err(error) => self.show_build_message("SAVE ERROR", &[error]),
+        }
+    }
+
+    fn save_named_tabs(&mut self) -> Result<(), String> {
+        self.sync_active_document();
+        let mut failure = None;
+        for document in &mut self.tabs {
+            let Some(filename) = document.filename.clone().filter(|_| document.dirty) else {
+                continue;
+            };
+            let mut lines = document.lines.clone();
+            if assembly_filename(&filename) {
+                format_assembly_lines(&mut lines);
+            }
+            let save_result = self.filesystem.borrow_mut().write_text(&filename, &lines.join("\n"));
+            if let Err(error) = save_result {
+                failure = Some(format!("{filename}: {error}"));
+                break;
+            }
+            document.lines = lines;
+            document.cursor.line = document.cursor.line.min(document.lines.len() - 1);
+            document.cursor.column =
+                document.cursor.column.min(document.lines[document.cursor.line].len());
+            document.selection_anchor = None;
+            document.dirty = false;
+        }
+        self.restore_document(self.tabs[self.active_tab].clone());
+        self.refresh_project_browser();
+        failure.map_or(Ok(()), Err)
+    }
+
+    fn save_tab(&mut self, tab: usize) -> Result<bool, String> {
+        if tab >= self.tabs.len() {
+            return Ok(true);
+        }
+        self.sync_active_document();
+        let Some(filename) = self.tabs[tab].filename.clone() else { return Ok(false) };
+        let mut lines = self.tabs[tab].lines.clone();
+        if assembly_filename(&filename) {
+            format_assembly_lines(&mut lines);
+        }
+        self.filesystem.borrow_mut().write_text(&filename, &lines.join("\n"))?;
+        self.tabs[tab].lines = lines;
+        self.tabs[tab].cursor.line = self.tabs[tab].cursor.line.min(self.tabs[tab].lines.len() - 1);
+        self.tabs[tab].cursor.column = self.tabs[tab]
+            .cursor
+            .column
+            .min(self.tabs[tab].lines[self.tabs[tab].cursor.line].len());
+        self.tabs[tab].selection_anchor = None;
+        self.tabs[tab].dirty = false;
+        if tab == self.active_tab {
+            self.restore_document(self.tabs[tab].clone());
+        }
+        self.refresh_project_browser();
+        Ok(true)
+    }
+
     fn start_build(&mut self, run_after: bool) {
         self.build_and_run = run_after;
         self.overlay = Overlay::Building { frames_remaining: BUILD_PROGRESS_FRAMES };
     }
 
     fn perform_build(&mut self) {
+        if let Err(error) = self.save_named_tabs() {
+            self.show_build_message("BUILD ERROR", &[error]);
+            return;
+        }
         if self.build_and_run {
-            if let Some(filename) = &self.filename {
-                let source = self.lines.join("\n");
-                let save_result = self.filesystem.borrow_mut().write_text(filename, &source);
-                if let Err(error) = save_result {
-                    self.show_build_message("BUILD ERROR", &[error]);
-                    return;
-                }
-                self.dirty = false;
-            }
             match build_and_load_project(&self.filesystem) {
                 Ok(launch) => {
                     let title = launch.cartridge.title.clone();
@@ -947,15 +1955,6 @@ impl TextEditor {
         // File presence selects cartridge mode. Parse errors belong to the
         // project build and must never fall through to raw `.BIN` assembly.
         if self.filesystem.borrow().read_binary(MANIFEST_NAME).is_ok() {
-            if let Some(filename) = &self.filename {
-                let source = self.lines.join("\n");
-                let save_result = self.filesystem.borrow_mut().write_text(filename, &source);
-                if let Err(error) = save_result {
-                    self.show_build_message("BUILD ERROR", &[error]);
-                    return;
-                }
-                self.dirty = false;
-            }
             match build_project(&self.filesystem) {
                 Ok(success) => {
                     self.diagnostics.clear();
@@ -1059,9 +2058,15 @@ impl TextEditor {
     }
 
     fn goto_current_diagnostic(&mut self) {
-        let Some(diagnostic) = self.current_diagnostic() else { return };
+        let Some(diagnostic) = self.current_diagnostic().cloned() else { return };
         if !self.source_is_current(&diagnostic.source) {
-            return;
+            let diagnostics = self.diagnostics.clone();
+            let diagnostic_index = self.diagnostic_index;
+            if self.load(&diagnostic.source).is_err() {
+                return;
+            }
+            self.diagnostics = diagnostics;
+            self.diagnostic_index = diagnostic_index;
         }
         let line = diagnostic.line.saturating_sub(1).min(self.lines.len() - 1);
         let column = diagnostic.column.saturating_sub(1).min(self.lines[line].len());
@@ -1091,6 +2096,15 @@ impl TextEditor {
     }
 
     fn save_as(&mut self, filename: &str) -> Result<(), String> {
+        if self.tabs.iter().enumerate().any(|(tab, document)| {
+            tab != self.active_tab
+                && document
+                    .filename
+                    .as_deref()
+                    .is_some_and(|open| open.eq_ignore_ascii_case(filename))
+        }) {
+            return Err("FILE IS ALREADY OPEN".to_owned());
+        }
         let mut lines = self.lines.clone();
         if assembly_filename(filename) {
             format_assembly_lines(&mut lines);
@@ -1102,38 +2116,92 @@ impl TextEditor {
         self.selection_anchor = None;
         self.filename = Some(filename.to_ascii_lowercase());
         self.dirty = false;
+        self.sync_active_document();
         self.refresh_project_browser();
+        if self.close_after_save.take() == Some(self.document_id) {
+            self.close_tab(self.active_tab);
+        }
         Ok(())
     }
 
     fn load(&mut self, filename: &str) -> Result<(), String> {
+        if let Some(tab) = self.tabs.iter().position(|document| {
+            document.filename.as_deref().is_some_and(|open| open.eq_ignore_ascii_case(filename))
+        }) {
+            let disposable_tab = self.active_tab_is_disposable().then_some(self.active_tab);
+            self.switch_tab(tab);
+            if let Some(disposable_tab) = disposable_tab {
+                self.close_tab(disposable_tab);
+            }
+            return Ok(());
+        }
         let text = self.filesystem.borrow().read_text(filename)?;
-        self.lines =
-            text.replace("\r\n", "\n").replace('\r', "\n").split('\n').map(str::to_owned).collect();
+        let mut lines = text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .split('\n')
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         if assembly_filename(filename) {
-            format_assembly_lines(&mut self.lines);
+            format_assembly_lines(&mut lines);
         }
-        if self.lines.is_empty() {
-            self.lines.push(String::new());
+        if lines.is_empty() {
+            lines.push(String::new());
         }
-        self.cursor = Position::default();
-        self.selection_anchor = None;
-        self.scroll_line = 0;
-        self.scroll_column = 0;
-        self.filename = Some(filename.to_ascii_lowercase());
-        self.undo.clear();
-        self.dirty = false;
+        if self.tabs.is_empty() {
+            self.lines = lines;
+            self.cursor = Position::default();
+            self.selection_anchor = None;
+            self.scroll_line = 0;
+            self.scroll_column = 0;
+            self.filename = Some(filename.to_ascii_lowercase());
+            self.undo.clear();
+            self.dirty = false;
+        } else if self.active_tab_is_disposable() {
+            let document = DocumentState {
+                id: self.document_id,
+                lines,
+                cursor: Position::default(),
+                selection_anchor: None,
+                scroll_line: 0,
+                scroll_column: 0,
+                filename: Some(filename.to_ascii_lowercase()),
+                undo: Vec::new(),
+                dirty: false,
+            };
+            self.tabs[self.active_tab] = document.clone();
+            self.restore_document(document);
+        } else {
+            self.sync_active_document();
+            let id = self.next_document_id;
+            self.next_document_id += 1;
+            let document = DocumentState {
+                id,
+                lines,
+                cursor: Position::default(),
+                selection_anchor: None,
+                scroll_line: 0,
+                scroll_column: 0,
+                filename: Some(filename.to_ascii_lowercase()),
+                undo: Vec::new(),
+                dirty: false,
+            };
+            self.tabs.push(document.clone());
+            self.active_tab = self.tabs.len() - 1;
+            self.restore_document(document);
+            self.ensure_active_tab_visible();
+        }
         self.invalidate_build();
         Ok(())
     }
 
     fn new_document(&mut self) {
-        self.record_undo();
-        self.lines = vec![String::new()];
-        self.cursor = Position::default();
-        self.selection_anchor = None;
-        self.filename = None;
-        self.dirty = false;
+        self.sync_active_document();
+        let document = self.blank_document();
+        self.tabs.push(document.clone());
+        self.active_tab = self.tabs.len() - 1;
+        self.restore_document(document);
+        self.ensure_active_tab_visible();
         self.invalidate_build();
     }
 
@@ -1412,11 +2480,45 @@ fn collect_project_entries(
     }
 }
 
+fn collect_project_files(
+    filesystem: &ConsoleFilesystem,
+    directory: &str,
+    output: &mut Vec<String>,
+) {
+    let Ok(entries) = filesystem.list(Some(directory)) else { return };
+    for entry in entries {
+        let path =
+            if directory == "/" { entry.name } else { format!("{directory}/{}", entry.name) };
+        if entry.is_directory {
+            collect_project_files(filesystem, &path, output);
+        } else {
+            output.push(path);
+        }
+    }
+}
+
 fn menu_items(menu: MenuKind) -> &'static [&'static str] {
     match menu {
-        MenuKind::File => &["NEW", "OPEN...", "SAVE", "SAVE AS...", "EXIT"],
-        MenuKind::Edit => &["UNDO", "CUT", "COPY", "PASTE", "SELECT ALL"],
-        MenuKind::Build => &["ASSEMBLE", "BUILD & RUN", "NEXT ERROR", "PREV ERROR"],
+        MenuKind::File => {
+            &["NEW", "OPEN...", "", "SAVE", "SAVE AS...", "SAVE ALL", "", "CLOSE TAB", "", "EXIT"]
+        }
+        MenuKind::Edit => &[
+            "UNDO",
+            "",
+            "CUT",
+            "COPY",
+            "PASTE",
+            "SELECT ALL",
+            "",
+            "FIND",
+            "REPLACE",
+            "PROJECT FIND",
+            "GO TO LINE",
+            "",
+            "BACK",
+            "FORWARD",
+        ],
+        MenuKind::Build => &["ASSEMBLE", "BUILD & RUN", "", "NEXT ERROR", "PREV ERROR"],
     }
 }
 
@@ -1439,24 +2541,73 @@ const fn menu_bar_hit(column: usize) -> Option<MenuKind> {
 
 fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
     match menu {
-        MenuKind::File => {
-            &["NEW       N", "OPEN      O", "SAVE      S", "SAVE AS   A", "EXIT      X"]
-        }
-        MenuKind::Edit => {
-            &["UNDO      U", "CUT       T", "COPY      C", "PASTE     P", "SELECT ALL A"]
-        }
-        MenuKind::Build => &["ASSEMBLE  B", "BUILD+RUN R", "NEXT ERR  N", "PREV ERR  P"],
+        MenuKind::File => &[
+            "NEW       N",
+            "OPEN      O",
+            "",
+            "SAVE      S",
+            "SAVE AS   A",
+            "SAVE ALL  L",
+            "",
+            "CLOSE TAB W",
+            "",
+            "EXIT      X",
+        ],
+        MenuKind::Edit => &[
+            "UNDO      U",
+            "",
+            "CUT       T",
+            "COPY      C",
+            "PASTE     P",
+            "SELECT ALL A",
+            "",
+            "FIND      F",
+            "REPLACE   R",
+            "PROJ FIND J",
+            "GO LINE   G",
+            "",
+            "BACK      K",
+            "FORWARD   L",
+        ],
+        MenuKind::Build => &["ASSEMBLE  B", "BUILD+RUN F5", "", "NEXT ERR  N", "PREV ERR  P"],
     }
 }
 
 fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
     let key = key.to_ascii_lowercase();
-    let hotkeys = match menu {
-        MenuKind::File => ["n", "o", "s", "a", "x"],
-        MenuKind::Edit => ["u", "t", "c", "p", "a"],
-        MenuKind::Build => ["b", "r", "n", "p", ""],
+    let hotkeys: &[(usize, &str)] = match menu {
+        MenuKind::File => &[(0, "n"), (1, "o"), (3, "s"), (4, "a"), (5, "l"), (7, "w"), (9, "x")],
+        MenuKind::Edit => &[
+            (0, "u"),
+            (2, "t"),
+            (3, "c"),
+            (4, "p"),
+            (5, "a"),
+            (7, "f"),
+            (8, "r"),
+            (9, "j"),
+            (10, "g"),
+            (12, "k"),
+            (13, "l"),
+        ],
+        MenuKind::Build => &[(0, "b"), (1, "r"), (3, "n"), (4, "p")],
     };
-    hotkeys.iter().position(|hotkey| *hotkey == key)
+    hotkeys.iter().find_map(|(index, hotkey)| (*hotkey == key).then_some(*index))
+}
+
+fn menu_item_is_separator(menu: MenuKind, item: usize) -> bool {
+    menu_items(menu).get(item).is_some_and(|label| label.is_empty())
+}
+
+fn next_menu_item(menu: MenuKind, current: usize, forward: bool) -> usize {
+    let count = menu_items(menu).len();
+    let mut item = current;
+    loop {
+        item = if forward { (item + 1) % count } else { (item + count - 1) % count };
+        if !menu_item_is_separator(menu, item) {
+            return item;
+        }
+    }
 }
 
 fn render_message_box(
@@ -1486,7 +2637,11 @@ fn render_message_box(
     for (index, line) in lines.iter().take(visible_lines).enumerate() {
         put_text_width(cells, x + 2, y + 2 + index, line, width - 4);
     }
-    let footer = if title == "BUILD ERRORS" { "ENTER=OK  F4=NEXT" } else { "ENTER=OK  ESC=CLOSE" };
+    let footer = match title {
+        "BUILD ERRORS" => "ENTER=OK  F4=NEXT",
+        "UNSAVED TAB" => "S=SAVE D=DISCARD ESC=CANCEL",
+        _ => "ENTER=OK  ESC=CLOSE",
+    };
     put_text(cells, x + 2, y + height - 2, footer);
 }
 
@@ -1636,6 +2791,91 @@ fn assembly_filename(filename: &str) -> bool {
             matches!(extension.to_ascii_lowercase().as_str(), "asm" | "inc")
         })
     })
+}
+
+fn normalized_lines(text: &str) -> Vec<String> {
+    let mut lines = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .split('\n')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn line_matches(lines: &[String], query: &str, whole_symbol: bool) -> Vec<Position> {
+    lines
+        .iter()
+        .enumerate()
+        .flat_map(|(line, text)| {
+            text_matches(text, query, whole_symbol)
+                .into_iter()
+                .map(move |column| Position { line, column })
+        })
+        .collect()
+}
+
+fn text_matches(text: &str, query: &str, whole_symbol: bool) -> Vec<usize> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let searchable = if whole_symbol { split_assembly_comment(text).0 } else { text };
+    let lowercase = searchable.to_ascii_lowercase();
+    let query = query.to_ascii_lowercase();
+    lowercase
+        .match_indices(&query)
+        .filter_map(|(column, _)| {
+            let before = searchable[..column].chars().next_back();
+            let after = searchable[column + query.len()..].chars().next();
+            (!whole_symbol
+                || (before.is_none_or(|character| !is_symbol_character(character))
+                    && after.is_none_or(|character| !is_symbol_character(character))))
+            .then_some(column)
+        })
+        .collect()
+}
+
+fn is_symbol_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | ']')
+}
+
+fn symbol_at(line: &str, cursor: usize) -> Option<&str> {
+    if line.is_empty() {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let mut position = cursor.min(bytes.len());
+    if position == bytes.len() || !is_symbol_character(char::from(bytes[position])) {
+        position = position.checked_sub(1)?;
+    }
+    if !is_symbol_character(char::from(bytes[position])) {
+        return None;
+    }
+    let mut start = position;
+    while start > 0 && is_symbol_character(char::from(bytes[start - 1])) {
+        start -= 1;
+    }
+    let mut end = position + 1;
+    while end < bytes.len() && is_symbol_character(char::from(bytes[end])) {
+        end += 1;
+    }
+    Some(&line[start..end])
+}
+
+fn assembly_definition(line: &str) -> Option<&str> {
+    if line.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let code = split_assembly_comment(line).0.trim();
+    let symbol = code.split_whitespace().next()?.trim_end_matches(':');
+    (!symbol.is_empty() && !is_operation(symbol)).then_some(symbol)
+}
+
+fn search_preview(line: &str) -> String {
+    line.trim().chars().take(48).collect()
 }
 
 fn configure_ui_palette(video: &mut Video) {
@@ -1965,11 +3205,15 @@ mod tests {
         editor.lines = vec!["ABCDEFGH".to_owned(), "SECOND".to_owned()];
 
         assert_eq!(
-            editor.handle_mouse_press((EDITOR_START + 1) * GLYPH_WIDTH, GLYPH_HEIGHT, false),
+            editor.handle_mouse_press(
+                (EDITOR_START + 1) * GLYPH_WIDTH,
+                EDITOR_FIRST_ROW * GLYPH_HEIGHT,
+                false,
+            ),
             EditorAction::None
         );
         assert_eq!(editor.cursor, Position { line: 0, column: 1 });
-        editor.handle_mouse_move((EDITOR_START + 5) * GLYPH_WIDTH, GLYPH_HEIGHT);
+        editor.handle_mouse_move((EDITOR_START + 5) * GLYPH_WIDTH, EDITOR_FIRST_ROW * GLYPH_HEIGHT);
         editor.handle_mouse_release();
 
         assert_eq!(
@@ -1990,6 +3234,35 @@ mod tests {
         editor.handle_mouse_press(GLYPH_WIDTH * 13, GLYPH_HEIGHT * 3, false);
         assert!(matches!(editor.overlay, Overlay::Building { .. }));
         assert!(editor.build_and_run);
+    }
+
+    #[test]
+    fn menu_separators_render_and_are_skipped_by_mouse_and_keyboard() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.open_menu(MenuKind::File);
+
+        editor.handle_overlay_key(&Key::Named(NamedKey::ArrowUp), ModifiersState::empty());
+        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 9 }));
+        editor.handle_overlay_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty());
+        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 0 }));
+
+        editor.handle_mouse_press(4 * GLYPH_WIDTH, 4 * GLYPH_HEIGHT, false);
+        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, .. }));
+
+        let mut cells = [b' '; COLUMNS * ROWS];
+        let mut foregrounds = [0; COLUMNS * ROWS];
+        let mut backgrounds = [0; COLUMNS * ROWS];
+        let mut inverse = [false; COLUMNS * ROWS];
+        editor.render_overlay(
+            &mut cells,
+            &mut foregrounds,
+            &mut backgrounds,
+            &mut inverse,
+            CellStyle { foreground: UI_WHITE_COLOR, background: 0 },
+        );
+        assert!(
+            cells[4 * COLUMNS + 1..4 * COLUMNS + 15].iter().all(|cell| *cell == BOX_HORIZONTAL)
+        );
     }
 
     #[test]
@@ -2021,7 +3294,7 @@ mod tests {
     }
 
     #[test]
-    fn project_browser_does_not_discard_unsaved_changes() {
+    fn project_browser_keeps_unsaved_changes_in_their_tab() {
         let filesystem = shared_filesystem();
         filesystem.borrow_mut().write_text("one.asm", " NOP").unwrap();
         filesystem.borrow_mut().write_text("two.asm", " RTS").unwrap();
@@ -2037,12 +3310,391 @@ mod tests {
 
         editor.activate_project_entry(second);
 
+        assert_eq!(editor.filename.as_deref(), Some("two.asm"));
+        assert_eq!(editor.tabs.len(), 2);
+        editor.switch_tab(0);
         assert_eq!(editor.filename.as_deref(), Some("one.asm"));
         assert_eq!(editor.lines, ["CHANGED"]);
+        assert!(editor.dirty);
+    }
+
+    #[test]
+    fn project_browser_replaces_an_unmodified_untitled_tab() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("game.asm", " NOP").unwrap();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        let source = editor
+            .project_entries
+            .iter()
+            .position(|entry| entry.path.eq_ignore_ascii_case("game.asm"))
+            .unwrap();
+
+        editor.activate_project_entry(source);
+
+        assert_eq!(editor.tabs.len(), 1);
+        assert_eq!(editor.filename.as_deref(), Some("game.asm"));
+        assert_eq!(editor.lines, ["         NOP"]);
+    }
+
+    #[test]
+    fn project_browser_keeps_a_modified_untitled_tab() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("game.txt", "GAME").unwrap();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.insert_text("NOTES");
+        let source = editor
+            .project_entries
+            .iter()
+            .position(|entry| entry.path.eq_ignore_ascii_case("game.txt"))
+            .unwrap();
+
+        editor.activate_project_entry(source);
+
+        assert_eq!(editor.tabs.len(), 2);
+        editor.switch_tab(0);
+        assert_eq!(editor.filename, None);
+        assert_eq!(editor.lines, ["NOTES"]);
+        assert!(editor.dirty);
+    }
+
+    #[test]
+    fn find_next_previous_and_replace_operations_are_case_insensitive() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.lines = vec!["ONE two one".to_owned(), "TWO".to_owned()];
+        editor.last_search = "one".to_owned();
+
+        editor.find_next(true);
+        assert_eq!(
+            editor.selection(),
+            Some((Position { line: 0, column: 0 }, Position { line: 0, column: 3 }))
+        );
+        editor.find_next(true);
+        assert_eq!(
+            editor.selection(),
+            Some((Position { line: 0, column: 8 }, Position { line: 0, column: 11 }))
+        );
+        editor.find_next(false);
+        assert_eq!(
+            editor.selection(),
+            Some((Position { line: 0, column: 0 }, Position { line: 0, column: 3 }))
+        );
+
+        editor.selection_anchor = None;
+        editor.cursor = Position::default();
+        editor.last_search = "two".to_owned();
+        editor.replace_next("two", "THREE");
+        assert_eq!(editor.lines[0], "ONE THREE one");
+        assert_eq!(editor.selected_text().as_deref(), Some("TWO"));
+        assert_eq!(editor.replace_all("one", "1"), 2);
+        assert_eq!(editor.lines, ["1 THREE 1", "TWO"]);
+    }
+
+    #[test]
+    fn project_search_reads_collapsed_folders_and_click_opens_a_result() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("source").unwrap();
+        filesystem.borrow_mut().write_text("source/defs.inc", "UNIQUE EQU 1").unwrap();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+
+        editor.show_project_search("unique");
         assert!(matches!(
             editor.overlay,
-            Overlay::Message { ref title, .. } if title == "UNSAVED CHANGES"
+            Overlay::SearchResults { ref results, .. }
+                if results.len() == 1 && results[0].path == "source/defs.inc"
         ));
+        editor.handle_mouse_press(
+            (SEARCH_RESULTS_X + 3) * GLYPH_WIDTH,
+            (SEARCH_RESULTS_Y + 3) * GLYPH_HEIGHT,
+            false,
+        );
+
+        assert_eq!(editor.filename.as_deref(), Some("source/defs.inc"));
+        assert_eq!(editor.selected_text().as_deref(), Some("UNIQUE"));
+    }
+
+    #[test]
+    fn project_search_uses_unsaved_open_tab_contents() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("main.asm", "OLD NOP").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+        editor.lines = vec!["NEWVALUE NOP".to_owned()];
+        editor.dirty = true;
+
+        let results = editor.search_project("newvalue", false, false);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "main.asm");
+    }
+
+    #[test]
+    fn symbol_definition_references_and_navigation_history_cross_files() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("main.asm", " LDA VALUE").unwrap();
+        filesystem.borrow_mut().create_directory("source").unwrap();
+        filesystem.borrow_mut().write_text("source/defs.inc", "VALUE EQU 1").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+        editor.cursor.column = editor.lines[0].find("VALUE").unwrap();
+        let origin = editor.cursor;
+
+        editor.handle_key(
+            &Key::Named(NamedKey::F12),
+            PhysicalKey::Code(KeyCode::F12),
+            ModifiersState::empty(),
+        );
+        assert_eq!(editor.filename.as_deref(), Some("source/defs.inc"));
+        assert_eq!(editor.selected_text().as_deref(), Some("VALUE"));
+
+        editor.navigate_history(false);
+        assert_eq!(editor.filename.as_deref(), Some("main.asm"));
+        assert_eq!(editor.cursor, origin);
+        editor.navigate_history(true);
+        assert_eq!(editor.filename.as_deref(), Some("source/defs.inc"));
+
+        editor.overlay = Overlay::None;
+        editor.handle_key(
+            &Key::Named(NamedKey::F12),
+            PhysicalKey::Code(KeyCode::F12),
+            ModifiersState::SHIFT,
+        );
+        assert!(matches!(
+            editor.overlay,
+            Overlay::SearchResults { ref results, .. } if results.len() == 2
+        ));
+    }
+
+    #[test]
+    fn search_and_go_to_shortcuts_open_the_expected_prompts() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.lines = vec!["FIRST".to_owned(), "SECOND".to_owned()];
+
+        editor.handle_key(
+            &key("f"),
+            PhysicalKey::Code(KeyCode::KeyF),
+            ModifiersState::SUPER | ModifiersState::SHIFT,
+        );
+        assert!(matches!(editor.overlay, Overlay::SearchPrompt { mode: SearchMode::Project, .. }));
+
+        editor.overlay = Overlay::None;
+        editor.handle_key(&key("h"), PhysicalKey::Code(KeyCode::KeyH), ModifiersState::SUPER);
+        assert!(matches!(editor.overlay, Overlay::SearchPrompt { mode: SearchMode::Replace, .. }));
+
+        editor.overlay = Overlay::None;
+        editor.handle_key(&key("g"), PhysicalKey::Code(KeyCode::KeyG), ModifiersState::SUPER);
+        editor.submit_search_prompt(SearchMode::GoToLine, "2".to_owned(), String::new());
+        assert_eq!(editor.cursor, Position { line: 1, column: 0 });
+
+        editor.last_search = "first".to_owned();
+        editor.selection_anchor = None;
+        editor.cursor = Position::default();
+        editor.handle_key(
+            &Key::Named(NamedKey::F3),
+            PhysicalKey::Code(KeyCode::F3),
+            ModifiersState::empty(),
+        );
+        assert_eq!(editor.selected_text().as_deref(), Some("FIRST"));
+    }
+
+    #[test]
+    fn f5_always_starts_build_and_run_even_when_project_browser_is_focused() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.project_focused = true;
+
+        editor.handle_key(
+            &Key::Named(NamedKey::F5),
+            PhysicalKey::Code(KeyCode::F5),
+            ModifiersState::empty(),
+        );
+
+        assert!(editor.build_and_run);
+        assert!(matches!(editor.overlay, Overlay::Building { .. }));
+    }
+
+    #[test]
+    fn tabs_preserve_independent_editing_cursor_scroll_and_undo_state() {
+        let filesystem = shared_filesystem();
+        filesystem
+            .borrow_mut()
+            .write_text("one.txt", &(0..60).map(|line| format!("ONE {line}\n")).collect::<String>())
+            .unwrap();
+        filesystem.borrow_mut().write_text("two.txt", "TWO").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("one.txt".to_owned()));
+        editor.cursor = Position { line: 40, column: 3 };
+        editor.scroll_line = 30;
+        editor.insert_text("!");
+
+        editor.load("two.txt").unwrap();
+        editor.cursor.column = 3;
+        editor.insert_text("?");
+        assert_eq!(editor.tabs.len(), 2);
+
+        editor.switch_tab(0);
+        assert_eq!(editor.filename.as_deref(), Some("one.txt"));
+        assert_eq!(editor.cursor, Position { line: 40, column: 4 });
+        assert_eq!(editor.scroll_line, 30);
+        assert!(editor.lines[40].contains("ONE! 40"));
+        editor.undo();
+        assert_eq!(editor.lines[40], "ONE 40");
+
+        editor.switch_tab(1);
+        assert_eq!(editor.lines, ["TWO?"]);
+        assert_eq!(editor.cursor, Position { line: 0, column: 4 });
+    }
+
+    #[test]
+    fn opening_an_existing_document_focuses_its_tab_without_duplicates() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("one.txt", "ONE").unwrap();
+        filesystem.borrow_mut().write_text("two.txt", "TWO").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("one.txt".to_owned()));
+
+        editor.load("two.txt").unwrap();
+        editor.load("ONE.TXT").unwrap();
+
+        assert_eq!(editor.tabs.len(), 2);
+        assert_eq!(editor.active_tab, 0);
+        assert_eq!(editor.filename.as_deref(), Some("one.txt"));
+    }
+
+    #[test]
+    fn tab_shortcuts_cycle_and_dirty_close_requires_a_choice() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("one.txt", "ONE").unwrap();
+        filesystem.borrow_mut().write_text("two.txt", "TWO").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("one.txt".to_owned()));
+        editor.load("two.txt").unwrap();
+
+        editor.handle_key(
+            &Key::Named(NamedKey::Tab),
+            PhysicalKey::Code(KeyCode::Tab),
+            ModifiersState::SUPER,
+        );
+        assert_eq!(editor.active_tab, 0);
+        editor.insert_text("!");
+        editor.request_close_tab(0);
+        assert!(matches!(editor.overlay, Overlay::CloseTab { tab: 0 }));
+
+        editor.handle_overlay_key(&key("d"), ModifiersState::empty());
+        assert_eq!(editor.tabs.len(), 1);
+        assert_eq!(editor.filename.as_deref(), Some("two.txt"));
+    }
+
+    #[test]
+    fn mouse_selects_and_closes_tabs() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("one.txt", "ONE").unwrap();
+        filesystem.borrow_mut().write_text("two.txt", "TWO").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("one.txt".to_owned()));
+        editor.load("two.txt").unwrap();
+
+        editor.handle_mouse_press((EDITOR_START + 2) * GLYPH_WIDTH, GLYPH_HEIGHT, false);
+        assert_eq!(editor.active_tab, 0);
+        editor.handle_mouse_press((EDITOR_START + TAB_WIDTH) * GLYPH_WIDTH, GLYPH_HEIGHT, false);
+
+        assert_eq!(editor.tabs.len(), 1);
+        assert_eq!(editor.filename.as_deref(), Some("two.txt"));
+    }
+
+    #[test]
+    fn tab_strip_separates_the_active_dirty_document_and_close_target() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.new_document();
+        editor.insert_text("CHANGED");
+        let mut cells = [b' '; COLUMNS * ROWS];
+        let mut foregrounds = [0; COLUMNS * ROWS];
+        let mut inverse = [false; COLUMNS * ROWS];
+
+        editor.render_tabs(&mut cells, &mut foregrounds, &mut inverse);
+
+        let strip_start = COLUMNS + EDITOR_START;
+        let inactive_start = COLUMNS + EDITOR_START + 1;
+        let start = inactive_start + TAB_WIDTH;
+        assert!(inverse[strip_start]);
+        assert!(inverse[inactive_start..inactive_start + TAB_WIDTH].iter().all(|cell| *cell));
+        assert!(inverse[start..start + TAB_WIDTH].iter().all(|cell| !*cell));
+        assert!(inverse[start + TAB_WIDTH]);
+        assert_eq!(cells[start + TAB_WIDTH - 3], b'*');
+        assert_eq!(cells[start + TAB_WIDTH - 1], b'X');
+        assert!(foregrounds[start..start + TAB_WIDTH].iter().all(|color| *color == UI_WHITE_COLOR));
+    }
+
+    #[test]
+    fn saving_an_untitled_dirty_tab_from_close_finishes_the_close() {
+        let filesystem = shared_filesystem();
+        let mut editor = TextEditor::new(filesystem.clone(), shared_ui_colors(), None);
+        editor.insert_text("SAVED");
+        editor.request_close_tab(0);
+
+        editor.handle_overlay_key(&key("s"), ModifiersState::empty());
+        assert!(matches!(editor.overlay, Overlay::Dialog { kind: DialogKind::SaveAs, .. }));
+        editor.submit_dialog(DialogKind::SaveAs, "note.txt".to_owned());
+
+        assert_eq!(filesystem.borrow().read_text("note.txt").unwrap(), "SAVED");
+        assert_eq!(editor.tabs.len(), 1);
+        assert_eq!(editor.filename, None);
+        assert_eq!(editor.lines, [""]);
+        assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn save_as_rejects_a_filename_already_open_in_another_tab() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("one.txt", "ONE").unwrap();
+        filesystem.borrow_mut().write_text("two.txt", "TWO").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("one.txt".to_owned()));
+        editor.load("two.txt").unwrap();
+
+        assert_eq!(editor.save_as("ONE.TXT"), Err("FILE IS ALREADY OPEN".to_owned()));
+        assert_eq!(editor.filename.as_deref(), Some("two.txt"));
+    }
+
+    #[test]
+    fn save_all_writes_every_named_dirty_tab() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("one.txt", "ONE").unwrap();
+        filesystem.borrow_mut().write_text("two.txt", "TWO").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem.clone(), shared_ui_colors(), Some("one.txt".to_owned()));
+        editor.cursor.column = 3;
+        editor.insert_text("!");
+        editor.load("two.txt").unwrap();
+        editor.cursor.column = 3;
+        editor.insert_text("?");
+
+        editor.save_all();
+
+        assert_eq!(filesystem.borrow().read_text("one.txt").unwrap(), "ONE!");
+        assert_eq!(filesystem.borrow().read_text("two.txt").unwrap(), "TWO?");
+        assert!(editor.tabs.iter().all(|document| !document.dirty));
+        assert!(!editor.dirty);
+    }
+
+    #[test]
+    fn project_build_saves_dirty_include_tabs_before_assembly() {
+        let filesystem = shared_filesystem();
+        filesystem
+            .borrow_mut()
+            .write_text("main.asm", " PUT defs.inc\n ORG $8000\n LDA #VALUE")
+            .unwrap();
+        filesystem.borrow_mut().write_text("defs.inc", "VALUE EQU 1").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem.clone(), shared_ui_colors(), Some("main.asm".to_owned()));
+        editor.load("defs.inc").unwrap();
+        editor.lines = vec!["VALUE EQU 2".to_owned()];
+        editor.dirty = true;
+        editor.switch_tab(0);
+
+        editor.start_build(false);
+        finish_pending_build(&mut editor);
+
+        assert_eq!(filesystem.borrow().read_binary("main.bin").unwrap(), [0xa9, 0x02]);
+        assert_eq!(filesystem.borrow().read_text("defs.inc").unwrap(), "VALUE    EQU   2");
     }
 
     #[test]
@@ -2102,7 +3754,7 @@ mod tests {
         editor.render(&mut video, true);
 
         let origin_x = EDITOR_START * GLYPH_WIDTH;
-        let origin_y = GLYPH_HEIGHT;
+        let origin_y = EDITOR_FIRST_ROW * GLYPH_HEIGHT;
         for (glyph_y, bits) in CHARACTER_ROM[b'A' as usize].iter().copied().enumerate() {
             for glyph_x in 0..GLYPH_WIDTH {
                 let pixel = video.pixels()
@@ -2395,5 +4047,29 @@ mod tests {
         editor.overlay = Overlay::None;
         editor.insert_text("1");
         assert!(editor.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn include_errors_open_the_correct_source_tab() {
+        let filesystem = shared_filesystem();
+        filesystem
+            .borrow_mut()
+            .write_text("main.asm", " PUT bad.inc\n ORG $8000\n LDA #VALUE")
+            .unwrap();
+        filesystem.borrow_mut().write_text("bad.inc", "VALUE EQU").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+
+        editor.start_build(false);
+        finish_pending_build(&mut editor);
+
+        assert_eq!(editor.filename.as_deref(), Some("bad.inc"));
+        assert_eq!(editor.tabs.len(), 2);
+        assert_eq!(editor.cursor.line, 0);
+        assert!(
+            editor
+                .current_diagnostic()
+                .is_some_and(|diagnostic| { diagnostic.source.eq_ignore_ascii_case("bad.inc") })
+        );
     }
 }

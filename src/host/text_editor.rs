@@ -1,6 +1,13 @@
 use std::collections::BTreeSet;
 
-use fanticon::{assembler::Diagnostic, project::MANIFEST_NAME, video::Video};
+use fanticon::{
+    assembler::{CartridgeSourceMapEntry, Diagnostic, SymbolSection},
+    debugger::DebugSnapshot,
+    disassemble_instruction,
+    machine::{VIDEO_DOTS_PER_CPU_CYCLE, bank_kind},
+    project::MANIFEST_NAME,
+    video::{DOTS_PER_SCANLINE, SCANLINES_PER_FRAME, Video},
+};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 use super::{
@@ -21,7 +28,8 @@ const EDITOR_FIRST_ROW: usize = 2;
 const TEXT_ROWS: usize = ROWS - EDITOR_FIRST_ROW - 1;
 const PROJECT_WIDTH: usize = 20;
 const EDITOR_START: usize = PROJECT_WIDTH + 1;
-const EDITOR_COLUMNS: usize = COLUMNS - EDITOR_START;
+const EDITOR_CODE_START: usize = EDITOR_START + 2;
+const EDITOR_COLUMNS: usize = COLUMNS - EDITOR_CODE_START;
 const TAB_WIDTH: usize = 14;
 const VISIBLE_TABS: usize = (EDITOR_COLUMNS - 2) / TAB_WIDTH;
 const SEARCH_RESULTS_X: usize = 2;
@@ -94,6 +102,7 @@ enum MenuKind {
     File,
     Edit,
     Build,
+    Debug,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +123,13 @@ enum SearchMode {
 enum SearchField {
     Query,
     Replacement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DebugPromptKind {
+    ReadWatchpoint,
+    WriteWatchpoint,
+    RasterBreakpoint,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +182,11 @@ enum Overlay {
         selected: usize,
         scroll: usize,
     },
+    DebugPrompt {
+        kind: DebugPromptKind,
+        input: String,
+        error: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,6 +194,22 @@ pub enum EditorAction {
     None,
     Exit,
     Run(GameLaunch),
+    Debug(DebugCommand),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DebugCommand {
+    Continue,
+    Stop,
+    StepInstruction,
+    StepCycle,
+    StepOver,
+    StepOut,
+    SyncBreakpoints(Vec<(SymbolSection, u16)>),
+    AddReadWatchpoint(u16),
+    AddWriteWatchpoint(u16),
+    AddRasterBreakpoint { dot: u16, line: u16 },
+    ClearBreakpoints,
 }
 
 pub struct TextEditor {
@@ -209,6 +246,11 @@ pub struct TextEditor {
     last_search: String,
     navigation_back: Vec<Location>,
     navigation_forward: Vec<Location>,
+    source_breakpoints: BTreeSet<(String, usize)>,
+    debug_source_map: Vec<CartridgeSourceMapEntry>,
+    debug_snapshot: Option<DebugSnapshot>,
+    debug_active: bool,
+    debug_location: Option<(String, usize)>,
 }
 
 impl TextEditor {
@@ -251,6 +293,11 @@ impl TextEditor {
             last_search: String::new(),
             navigation_back: Vec::new(),
             navigation_forward: Vec::new(),
+            source_breakpoints: BTreeSet::new(),
+            debug_source_map: Vec::new(),
+            debug_snapshot: None,
+            debug_active: false,
+            debug_location: None,
         };
         if let Some(filename) = filename
             && let Err(error) = editor.load(&filename)
@@ -358,8 +405,36 @@ impl TextEditor {
         }
 
         if matches!(key, Key::Named(NamedKey::F5)) {
+            if modifiers.shift_key() && self.debug_active {
+                return EditorAction::Debug(DebugCommand::Stop);
+            }
+            if self.debug_active && self.debug_snapshot.is_some() {
+                self.debug_snapshot = None;
+                return EditorAction::Debug(DebugCommand::Continue);
+            }
             self.start_build(true);
             return EditorAction::None;
+        }
+        if matches!(key, Key::Named(NamedKey::F9)) {
+            return self.toggle_source_breakpoint();
+        }
+        if self.debug_active
+            && self.debug_snapshot.is_some()
+            && matches!(key, Key::Named(NamedKey::F10))
+        {
+            return EditorAction::Debug(DebugCommand::StepOver);
+        }
+        if self.debug_active
+            && self.debug_snapshot.is_some()
+            && matches!(key, Key::Named(NamedKey::F11))
+        {
+            return EditorAction::Debug(if modifiers.control_key() || modifiers.super_key() {
+                DebugCommand::StepCycle
+            } else if modifiers.shift_key() {
+                DebugCommand::StepOut
+            } else {
+                DebugCommand::StepInstruction
+            });
         }
 
         if matches!(key, Key::Named(NamedKey::F6)) {
@@ -376,6 +451,7 @@ impl TextEditor {
                 PhysicalKey::Code(KeyCode::KeyF) => self.open_menu(MenuKind::File),
                 PhysicalKey::Code(KeyCode::KeyE) => self.open_menu(MenuKind::Edit),
                 PhysicalKey::Code(KeyCode::KeyB) => self.open_menu(MenuKind::Build),
+                PhysicalKey::Code(KeyCode::KeyD) => self.open_menu(MenuKind::Debug),
                 _ => {}
             }
             return EditorAction::None;
@@ -449,6 +525,106 @@ impl TextEditor {
             self.perform_build();
         }
         self.pending_launch.take().map_or(EditorAction::None, EditorAction::Run)
+    }
+
+    pub fn set_debug_snapshot(&mut self, snapshot: DebugSnapshot) {
+        self.debug_active = true;
+        let (section, address) = if snapshot.instruction_boundary {
+            (execution_section(&snapshot), snapshot.pc)
+        } else {
+            snapshot.trace.last().map_or((execution_section(&snapshot), snapshot.pc), |trace| {
+                (trace.section, trace.address)
+            })
+        };
+        let location = section.and_then(|section| {
+            self.debug_source_map
+                .iter()
+                .find(|entry| {
+                    entry.section == section
+                        && address >= entry.address
+                        && usize::from(address - entry.address) < entry.length
+                })
+                .cloned()
+        });
+        self.debug_snapshot = Some(snapshot);
+        self.debug_location =
+            location.as_ref().map(|entry| (entry.source.clone(), entry.line.saturating_sub(1)));
+        if let Some(location) = location {
+            if !self
+                .filename
+                .as_deref()
+                .is_some_and(|filename| filename.eq_ignore_ascii_case(&location.source))
+            {
+                let _ = self.load(&location.source);
+            }
+            self.cursor.line = location.line.saturating_sub(1).min(self.lines.len() - 1);
+            self.cursor.column = 0;
+            self.selection_anchor = None;
+            self.ensure_cursor_visible();
+        }
+        self.overlay = Overlay::None;
+    }
+
+    pub fn stop_debug_session(&mut self) {
+        self.debug_active = false;
+        self.debug_snapshot = None;
+        self.debug_source_map.clear();
+        self.debug_location = None;
+    }
+
+    fn toggle_source_breakpoint(&mut self) -> EditorAction {
+        let Some(source) = self.filename.clone().filter(|filename| assembly_filename(filename))
+        else {
+            self.show_build_message("BREAKPOINT", &["OPEN AN ASM OR INC FILE".to_owned()]);
+            return EditorAction::None;
+        };
+        let breakpoint = (source, self.cursor.line);
+        if !self.source_breakpoints.insert(breakpoint.clone()) {
+            self.source_breakpoints.remove(&breakpoint);
+        }
+        if self.debug_active {
+            EditorAction::Debug(DebugCommand::SyncBreakpoints(
+                self.resolved_source_breakpoints(&self.debug_source_map),
+            ))
+        } else {
+            EditorAction::None
+        }
+    }
+
+    fn resolved_source_breakpoints(
+        &self,
+        source_map: &[CartridgeSourceMapEntry],
+    ) -> Vec<(SymbolSection, u16)> {
+        let mut resolved = BTreeSet::new();
+        for (source, line) in &self.source_breakpoints {
+            let requested = *line + 1;
+            let next_line = source_map
+                .iter()
+                .filter(|entry| {
+                    entry.source.eq_ignore_ascii_case(source) && entry.line >= requested
+                })
+                .map(|entry| entry.line)
+                .min();
+            if let Some(next_line) = next_line {
+                resolved.extend(
+                    source_map
+                        .iter()
+                        .filter(|entry| {
+                            entry.source.eq_ignore_ascii_case(source) && entry.line == next_line
+                        })
+                        .map(|entry| (entry.section, entry.address)),
+                );
+            }
+        }
+        resolved.into_iter().collect()
+    }
+
+    fn line_has_breakpoint(&self, line: usize) -> bool {
+        self.filename.as_deref().is_some_and(|filename| {
+            self.source_breakpoints.iter().any(|(source, breakpoint_line)| {
+                *breakpoint_line == line && source.eq_ignore_ascii_case(filename)
+            })
+        })
     }
 
     fn open_search_prompt(&mut self, mode: SearchMode) {
@@ -903,10 +1079,11 @@ impl TextEditor {
             Overlay::Menu { menu, .. } => {
                 let menu = *menu;
                 let x = menu_origin(menu);
+                let width = menu_width(menu);
                 let selected = cell_y
                     .checked_sub(2)
                     .filter(|item| *item < menu_items(menu).len())
-                    .filter(|_| cell_x > x && cell_x < x + 15);
+                    .filter(|_| cell_x > x && cell_x < x + width - 1);
                 if selected.is_some_and(|item| menu_item_is_separator(menu, item)) {
                     return EditorAction::None;
                 }
@@ -936,6 +1113,7 @@ impl TextEditor {
             }
             Overlay::CloseTab { .. } => return EditorAction::None,
             Overlay::SearchPrompt { .. } => return EditorAction::None,
+            Overlay::DebugPrompt { .. } => return EditorAction::None,
             Overlay::SearchResults { results, scroll, .. } => {
                 let result = (cell_x > SEARCH_RESULTS_X
                     && cell_x < SEARCH_RESULTS_X + SEARCH_RESULTS_WIDTH - 1)
@@ -996,9 +1174,15 @@ impl TextEditor {
         if !(EDITOR_FIRST_ROW..ROWS - 1).contains(&cell_y) {
             return EditorAction::None;
         }
+        if cell_x < EDITOR_CODE_START {
+            let line = (self.scroll_line + cell_y - EDITOR_FIRST_ROW).min(self.lines.len() - 1);
+            self.cursor.line = line;
+            self.cursor.column = self.cursor.column.min(self.lines[line].len());
+            return self.toggle_source_breakpoint();
+        }
         self.project_focused = false;
         let previous = self.cursor;
-        let position = self.document_position(cell_x - EDITOR_START, cell_y);
+        let position = self.document_position(cell_x - EDITOR_CODE_START, cell_y);
         if shift {
             self.selection_anchor.get_or_insert(previous);
         } else {
@@ -1018,8 +1202,9 @@ impl TextEditor {
         let cell_y = (y / GLYPH_HEIGHT).min(ROWS - 1);
         if let Overlay::Menu { menu, selected } = &mut self.overlay {
             let origin = menu_origin(*menu);
+            let width = menu_width(*menu);
             if cell_x > origin
-                && cell_x < origin + 15
+                && cell_x < origin + width - 1
                 && let Some(item) = cell_y.checked_sub(2)
                 && item < menu_items(*menu).len()
                 && !menu_item_is_separator(*menu, item)
@@ -1029,10 +1214,10 @@ impl TextEditor {
             return;
         }
         if self.mouse_selecting
-            && cell_x >= EDITOR_START
+            && cell_x >= EDITOR_CODE_START
             && (EDITOR_FIRST_ROW..ROWS - 1).contains(&cell_y)
         {
-            self.cursor = self.document_position(cell_x - EDITOR_START, cell_y);
+            self.cursor = self.document_position(cell_x - EDITOR_CODE_START, cell_y);
             self.ensure_cursor_visible();
         }
     }
@@ -1253,6 +1438,156 @@ impl TextEditor {
         }
     }
 
+    fn render_debug_panel(
+        &self,
+        cells: &mut [u8],
+        foregrounds: &mut [u8],
+        backgrounds: &mut [u8],
+        inverse: &mut [bool],
+        style: CellStyle,
+    ) {
+        let Some(snapshot) = &self.debug_snapshot else { return };
+        let x = 52;
+        let y = 2;
+        let width = 28;
+        let height = ROWS - 3;
+        draw_window(
+            cells,
+            foregrounds,
+            backgrounds,
+            inverse,
+            CellRect { x, y, width, height },
+            style,
+        );
+        put_text(cells, x + 3, y, "DEBUGGER - PAUSED");
+        put_text(cells, x + 2, y + 2, &format!("PC ${:04X}  SP ${:02X}", snapshot.pc, snapshot.sp));
+        put_text(
+            cells,
+            x + 2,
+            y + 3,
+            &format!("A ${:02X} X ${:02X} Y ${:02X}", snapshot.a, snapshot.x, snapshot.y),
+        );
+        put_text(
+            cells,
+            x + 2,
+            y + 4,
+            &format!("P ${:02X}  {}", snapshot.status, status_flags(snapshot.status)),
+        );
+        put_text(cells, x + 2, y + 5, &format!("CYCLES {}", snapshot.cycles));
+        put_text(
+            cells,
+            x + 2,
+            y + 6,
+            &format!("BANK {}:{:02X}", bank_kind_name(snapshot.bank_kind), snapshot.bank_number),
+        );
+        put_text(
+            cells,
+            x + 2,
+            y + 7,
+            &format!("IRQ {:X}/{:X}", snapshot.irq_pending, snapshot.irq_enable),
+        );
+        put_text(
+            cells,
+            x + 2,
+            y + 8,
+            &format!("RASTER {},{}", snapshot.raster_line, snapshot.raster_dot),
+        );
+        put_text(
+            cells,
+            x + 2,
+            y + 9,
+            &format!("APU {:02X} OUT {:04X}", snapshot.apu.master, snapshot.apu.sample),
+        );
+        put_text(
+            cells,
+            x + 2,
+            y + 10,
+            &format!(
+                "P1 {:02X}/{:03X} P2 {:02X}/{:03X}",
+                snapshot.apu.pulse_control[0],
+                snapshot.apu.pulse_timer[0],
+                snapshot.apu.pulse_control[1],
+                snapshot.apu.pulse_timer[1]
+            ),
+        );
+        put_text(
+            cells,
+            x + 2,
+            y + 11,
+            &format!(
+                "TRI {:02X}/{:03X} NOI {:02X}/{:X}",
+                snapshot.apu.triangle_control,
+                snapshot.apu.triangle_timer,
+                snapshot.apu.noise_control,
+                snapshot.apu.noise_period
+            ),
+        );
+        put_text_width(cells, x + 2, y + 12, &format!("STOP {:?}", snapshot.reason), width - 4);
+        let current_instruction = if snapshot.instruction_boundary {
+            format!("NEXT {}", disassemble_instruction(snapshot.pc, snapshot.instruction_bytes))
+        } else {
+            format!("BUS PC ${:04X}", snapshot.pc)
+        };
+        put_text_width(cells, x + 2, y + 13, &current_instruction, width - 4);
+        put_text(cells, x + 2, y + 14, "STACK");
+        for row in 0..4 {
+            let offset = row * 4;
+            put_text(
+                cells,
+                x + 2,
+                y + 15 + row,
+                &format!(
+                    "{:02X}: {:02X} {:02X} {:02X} {:02X}",
+                    snapshot.sp.wrapping_add(1 + offset as u8),
+                    snapshot.stack[offset],
+                    snapshot.stack[offset + 1],
+                    snapshot.stack[offset + 2],
+                    snapshot.stack[offset + 3]
+                ),
+            );
+        }
+        put_text(cells, x + 2, y + 20, "RECENT CODE");
+        for (row, trace) in snapshot.trace.iter().rev().take(8).enumerate() {
+            let section = match trace.section {
+                Some(SymbolSection::Fixed) => "F".to_owned(),
+                Some(SymbolSection::Bank(bank)) => format!("B{bank:02X}"),
+                None => "RAM".to_owned(),
+            };
+            put_text_width(
+                cells,
+                x + 2,
+                y + 21 + row,
+                &format!(
+                    "{section} {:04X}: {}",
+                    trace.address,
+                    disassemble_instruction(trace.address, trace.bytes)
+                ),
+                width - 4,
+            );
+        }
+        put_text(cells, x + 2, y + 30, &format!("MEMORY ${:04X}", snapshot.memory_start));
+        for row in 0..4 {
+            let offset = row * 4;
+            put_text(
+                cells,
+                x + 2,
+                y + 31 + row,
+                &format!(
+                    "{:04X}: {:02X} {:02X} {:02X} {:02X}",
+                    snapshot.memory_start + offset as u16,
+                    snapshot.memory[offset],
+                    snapshot.memory[offset + 1],
+                    snapshot.memory[offset + 2],
+                    snapshot.memory[offset + 3]
+                ),
+            );
+        }
+        put_text(cells, x + 2, y + height - 6, "F5 CONT  SF5 STOP");
+        put_text(cells, x + 2, y + height - 5, "F10 OVER  F11 INTO");
+        put_text(cells, x + 2, y + height - 4, "SF11 OUT  CF11 CYCLE");
+        put_text(cells, x + 2, y + height - 3, "F9 TOGGLE BREAKPOINT");
+    }
+
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
         debug_assert_eq!(video.dimensions(), (EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT));
         let colors = self.colors.get();
@@ -1268,7 +1603,7 @@ impl TextEditor {
         let mut foregrounds = [foreground; COLUMNS * ROWS];
         let mut backgrounds = [background; COLUMNS * ROWS];
 
-        put_text(&mut cells, 0, 0, " FILE  EDIT  BUILD");
+        put_text(&mut cells, 0, 0, " FILE  EDIT  BUILD  DEBUG");
         inverse[..COLUMNS].fill(true);
         foregrounds[..COLUMNS].fill(UI_WHITE_COLOR);
 
@@ -1279,7 +1614,7 @@ impl TextEditor {
             for (screen_x, byte) in
                 line.bytes().skip(self.scroll_column).take(EDITOR_COLUMNS).enumerate()
             {
-                let index = (screen_y + EDITOR_FIRST_ROW) * COLUMNS + EDITOR_START + screen_x;
+                let index = (screen_y + EDITOR_FIRST_ROW) * COLUMNS + EDITOR_CODE_START + screen_x;
                 let source_column = self.scroll_column + screen_x;
                 cells[index] = byte.to_ascii_uppercase();
                 if let Some(syntax) = &syntax
@@ -1292,6 +1627,21 @@ impl TextEditor {
                 }
                 let position = Position { line: line_index, column: source_column };
                 inverse[index] = self.position_selected(position);
+            }
+            let row = screen_y + EDITOR_FIRST_ROW;
+            if self.line_has_breakpoint(line_index) {
+                put_cell(&mut cells, EDITOR_START, row, b'@');
+                foregrounds[row * COLUMNS + EDITOR_START] = UI_WHITE_COLOR;
+            }
+            if self.debug_location.as_ref().is_some_and(|(source, line)| {
+                *line == line_index
+                    && self
+                        .filename
+                        .as_deref()
+                        .is_some_and(|filename| filename.eq_ignore_ascii_case(source))
+            }) {
+                put_cell(&mut cells, EDITOR_START + 1, row, SYMBOL_ARROW_RIGHT);
+                foregrounds[row * COLUMNS + EDITOR_START + 1] = UI_WHITE_COLOR;
             }
         }
 
@@ -1323,6 +1673,14 @@ impl TextEditor {
             foregrounds[row * COLUMNS..row * COLUMNS + EDITOR_START].fill(UI_WHITE_COLOR);
         }
 
+        self.render_debug_panel(
+            &mut cells,
+            &mut foregrounds,
+            &mut backgrounds,
+            &mut inverse,
+            CellStyle { foreground: UI_WHITE_COLOR, background },
+        );
+
         self.render_overlay(
             &mut cells,
             &mut foregrounds,
@@ -1347,13 +1705,38 @@ impl TextEditor {
             && let Some(screen_column) = self.cursor.column.checked_sub(self.scroll_column)
             && screen_column < EDITOR_COLUMNS
         {
-            let cell_x = EDITOR_START + screen_column;
+            let cell_x = EDITOR_CODE_START + screen_column;
             let cell_y = screen_line + EDITOR_FIRST_ROW;
             draw_block_cursor(video, cell_x, cell_y, cells[cell_y * COLUMNS + cell_x]);
         }
     }
 
     fn handle_overlay_key(&mut self, key: &Key, modifiers: ModifiersState) -> EditorAction {
+        if matches!(self.overlay, Overlay::DebugPrompt { .. }) {
+            let mut submit = None;
+            if let Overlay::DebugPrompt { kind, input, error } = &mut self.overlay {
+                match key {
+                    Key::Named(NamedKey::Escape) => self.overlay = Overlay::None,
+                    Key::Named(NamedKey::Backspace) => {
+                        input.pop();
+                        *error = None;
+                    }
+                    Key::Named(NamedKey::Enter) => submit = Some((*kind, input.clone())),
+                    Key::Named(NamedKey::Space) => input.push(' '),
+                    Key::Character(text) if !modifiers.control_key() && !modifiers.super_key() => {
+                        input.extend(text.chars().filter(|character| {
+                            character.is_ascii_hexdigit()
+                                || matches!(character, '$' | 'x' | 'X' | ',' | ':' | ' ')
+                        }));
+                        *error = None;
+                    }
+                    _ => {}
+                }
+            }
+            return submit
+                .map_or(EditorAction::None, |(kind, input)| self.submit_debug_prompt(kind, input));
+        }
+
         if matches!(self.overlay, Overlay::SearchResults { .. }) {
             let mut activate = None;
             if let Overlay::SearchResults { results, selected, scroll, .. } = &mut self.overlay {
@@ -1497,14 +1880,7 @@ impl TextEditor {
                     self.overlay = Overlay::None;
                 }
                 Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowRight) => {
-                    *menu = match (*menu, key) {
-                        (MenuKind::File, Key::Named(NamedKey::ArrowLeft)) => MenuKind::Build,
-                        (MenuKind::File, _) => MenuKind::Edit,
-                        (MenuKind::Edit, Key::Named(NamedKey::ArrowLeft)) => MenuKind::File,
-                        (MenuKind::Edit, _) => MenuKind::Build,
-                        (MenuKind::Build, Key::Named(NamedKey::ArrowLeft)) => MenuKind::Edit,
-                        (MenuKind::Build, _) => MenuKind::File,
-                    };
+                    *menu = adjacent_menu(*menu, matches!(key, Key::Named(NamedKey::ArrowRight)));
                     *selected = 0;
                 }
                 Key::Named(NamedKey::ArrowUp) => {
@@ -1557,7 +1933,8 @@ impl TextEditor {
             | Overlay::Message { .. }
             | Overlay::CloseTab { .. }
             | Overlay::SearchPrompt { .. }
-            | Overlay::SearchResults { .. } => {}
+            | Overlay::SearchResults { .. }
+            | Overlay::DebugPrompt { .. } => {}
         }
         EditorAction::None
     }
@@ -1595,6 +1972,36 @@ impl TextEditor {
             (MenuKind::Build, 1) => self.start_build(true),
             (MenuKind::Build, 3) => self.move_diagnostic(true),
             (MenuKind::Build, 4) => self.move_diagnostic(false),
+            (MenuKind::Debug, 0) => {
+                if self.debug_active && self.debug_snapshot.is_some() {
+                    self.debug_snapshot = None;
+                    return EditorAction::Debug(DebugCommand::Continue);
+                }
+                self.start_build(true);
+            }
+            (MenuKind::Debug, 1) if self.debug_active => {
+                return EditorAction::Debug(DebugCommand::Stop);
+            }
+            (MenuKind::Debug, 2) => return self.toggle_source_breakpoint(),
+            (MenuKind::Debug, 4) if self.debug_active && self.debug_snapshot.is_some() => {
+                return EditorAction::Debug(DebugCommand::StepOver);
+            }
+            (MenuKind::Debug, 5) if self.debug_active && self.debug_snapshot.is_some() => {
+                return EditorAction::Debug(DebugCommand::StepInstruction);
+            }
+            (MenuKind::Debug, 6) if self.debug_active && self.debug_snapshot.is_some() => {
+                return EditorAction::Debug(DebugCommand::StepOut);
+            }
+            (MenuKind::Debug, 7) if self.debug_active && self.debug_snapshot.is_some() => {
+                return EditorAction::Debug(DebugCommand::StepCycle);
+            }
+            (MenuKind::Debug, 9) => self.open_debug_prompt(DebugPromptKind::ReadWatchpoint),
+            (MenuKind::Debug, 10) => self.open_debug_prompt(DebugPromptKind::WriteWatchpoint),
+            (MenuKind::Debug, 11) => self.open_debug_prompt(DebugPromptKind::RasterBreakpoint),
+            (MenuKind::Debug, 13) => {
+                self.source_breakpoints.clear();
+                return EditorAction::Debug(DebugCommand::ClearBreakpoints);
+            }
             _ => {}
         }
         EditorAction::None
@@ -1615,8 +2022,9 @@ impl TextEditor {
                     MenuKind::File => 0,
                     MenuKind::Edit => 6,
                     MenuKind::Build => 12,
+                    MenuKind::Debug => 19,
                 };
-                let width = 16;
+                let width = menu_width(*menu);
                 let y = 1;
                 draw_window(
                     cells,
@@ -1663,6 +2071,39 @@ impl TextEditor {
                 if let Some(error) = error {
                     put_cell(cells, x + 2, y + 4, SYMBOL_CROSS);
                     put_text_width(cells, x + 4, y + 4, error, width - 5);
+                }
+            }
+            Overlay::DebugPrompt { kind, input, error } => {
+                let title = match kind {
+                    DebugPromptKind::ReadWatchpoint => "READ WATCHPOINT",
+                    DebugPromptKind::WriteWatchpoint => "WRITE WATCHPOINT",
+                    DebugPromptKind::RasterBreakpoint => "RASTER BREAKPOINT",
+                };
+                let label = if *kind == DebugPromptKind::RasterBreakpoint {
+                    "LINE,DOT:"
+                } else {
+                    "ADDRESS:"
+                };
+                let width = 42;
+                let height = 9;
+                let x = (COLUMNS - width) / 2;
+                let y = (ROWS - height) / 2;
+                draw_window(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    inverse,
+                    CellRect { x, y, width, height },
+                    style,
+                );
+                put_text_width(cells, x + 3, y, title, width - 6);
+                put_cell(cells, x + 2, y + 2, SYMBOL_ARROW_RIGHT);
+                put_text(cells, x + 4, y + 2, label);
+                put_text_width(cells, x + 14, y + 2, input, width - 16);
+                put_text(cells, x + 3, y + height - 2, "ENTER=ADD  ESC=CANCEL");
+                if let Some(error) = error {
+                    put_cell(cells, x + 2, y + 4, SYMBOL_CROSS);
+                    put_text_width(cells, x + 4, y + 4, error, width - 6);
                 }
             }
             Overlay::Building { .. } => {
@@ -1829,6 +2270,40 @@ impl TextEditor {
             Overlay::Dialog { kind, input: self.filename.clone().unwrap_or_default(), error: None };
     }
 
+    fn open_debug_prompt(&mut self, kind: DebugPromptKind) {
+        if !self.debug_active {
+            self.show_build_message("DEBUGGER", &["START A DEBUG SESSION FIRST".to_owned()]);
+            return;
+        }
+        self.overlay = Overlay::DebugPrompt { kind, input: String::new(), error: None };
+    }
+
+    fn submit_debug_prompt(&mut self, kind: DebugPromptKind, input: String) -> EditorAction {
+        let result = match kind {
+            DebugPromptKind::ReadWatchpoint | DebugPromptKind::WriteWatchpoint => {
+                parse_debug_number(&input).map(|address| {
+                    if kind == DebugPromptKind::ReadWatchpoint {
+                        DebugCommand::AddReadWatchpoint(address)
+                    } else {
+                        DebugCommand::AddWriteWatchpoint(address)
+                    }
+                })
+            }
+            DebugPromptKind::RasterBreakpoint => parse_raster_breakpoint(&input)
+                .map(|(line, dot)| DebugCommand::AddRasterBreakpoint { dot, line }),
+        };
+        match result {
+            Ok(command) => {
+                self.overlay = Overlay::None;
+                EditorAction::Debug(command)
+            }
+            Err(error) => {
+                self.overlay = Overlay::DebugPrompt { kind, input, error: Some(error) };
+                EditorAction::None
+            }
+        }
+    }
+
     fn submit_dialog(&mut self, kind: DialogKind, filename: String) {
         let result = match kind {
             DialogKind::Open => self.load(&filename),
@@ -1936,8 +2411,12 @@ impl TextEditor {
         }
         if self.build_and_run {
             match build_and_load_project(&self.filesystem) {
-                Ok(launch) => {
+                Ok(mut launch) => {
                     let title = launch.cartridge.title.clone();
+                    launch.breakpoints = self.resolved_source_breakpoints(&launch.source_map);
+                    self.debug_source_map = launch.source_map.clone();
+                    self.debug_snapshot = None;
+                    self.debug_active = true;
                     self.show_build_message("BUILD SUCCESSFUL", &[format!("RUNNING: {title}")]);
                     self.refresh_project_browser();
                     self.pending_launch = Some(launch);
@@ -2519,6 +2998,22 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "FORWARD",
         ],
         MenuKind::Build => &["ASSEMBLE", "BUILD & RUN", "", "NEXT ERROR", "PREV ERROR"],
+        MenuKind::Debug => &[
+            "START/CONTINUE",
+            "STOP",
+            "TOGGLE BREAK",
+            "",
+            "STEP OVER",
+            "STEP INTO",
+            "STEP OUT",
+            "STEP CYCLE",
+            "",
+            "READ WATCH",
+            "WRITE WATCH",
+            "RASTER BREAK",
+            "",
+            "CLEAR BREAKS",
+        ],
     }
 }
 
@@ -2527,7 +3022,12 @@ const fn menu_origin(menu: MenuKind) -> usize {
         MenuKind::File => 0,
         MenuKind::Edit => 6,
         MenuKind::Build => 12,
+        MenuKind::Debug => 19,
     }
+}
+
+const fn menu_width(menu: MenuKind) -> usize {
+    if matches!(menu, MenuKind::Debug) { 27 } else { 16 }
 }
 
 const fn menu_bar_hit(column: usize) -> Option<MenuKind> {
@@ -2535,6 +3035,7 @@ const fn menu_bar_hit(column: usize) -> Option<MenuKind> {
         0..=5 => Some(MenuKind::File),
         6..=11 => Some(MenuKind::Edit),
         12..=18 => Some(MenuKind::Build),
+        19..=25 => Some(MenuKind::Debug),
         _ => None,
     }
 }
@@ -2570,6 +3071,22 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "FORWARD   L",
         ],
         MenuKind::Build => &["ASSEMBLE  B", "BUILD+RUN F5", "", "NEXT ERR  N", "PREV ERR  P"],
+        MenuKind::Debug => &[
+            "CONTINUE             F5",
+            "STOP           SHIFT+F5",
+            "TOGGLE BREAK         F9",
+            "",
+            "STEP OVER           F10",
+            "STEP INTO           F11",
+            "STEP OUT      SHIFT+F11",
+            "STEP CYCLE CTRL/CMD+F11",
+            "",
+            "READ WATCH            R",
+            "WRITE WATCH           W",
+            "RASTER BREAK          A",
+            "",
+            "CLEAR BREAKS          C",
+        ],
     }
 }
 
@@ -2591,6 +3108,9 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
             (13, "l"),
         ],
         MenuKind::Build => &[(0, "b"), (1, "r"), (3, "n"), (4, "p")],
+        MenuKind::Debug => {
+            &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c")]
+        }
     };
     hotkeys.iter().find_map(|(index, hotkey)| (*hotkey == key).then_some(*index))
 }
@@ -2607,6 +3127,15 @@ fn next_menu_item(menu: MenuKind, current: usize, forward: bool) -> usize {
         if !menu_item_is_separator(menu, item) {
             return item;
         }
+    }
+}
+
+const fn adjacent_menu(menu: MenuKind, forward: bool) -> MenuKind {
+    match (menu, forward) {
+        (MenuKind::File, true) | (MenuKind::Build, false) => MenuKind::Edit,
+        (MenuKind::Edit, true) | (MenuKind::Debug, false) => MenuKind::Build,
+        (MenuKind::Build, true) | (MenuKind::File, false) => MenuKind::Debug,
+        (MenuKind::Debug, true) | (MenuKind::Edit, false) => MenuKind::File,
     }
 }
 
@@ -2791,6 +3320,61 @@ fn assembly_filename(filename: &str) -> bool {
             matches!(extension.to_ascii_lowercase().as_str(), "asm" | "inc")
         })
     })
+}
+
+fn execution_section(snapshot: &DebugSnapshot) -> Option<SymbolSection> {
+    match snapshot.pc {
+        0x8000..=0xbfff if snapshot.bank_kind == bank_kind::CARTRIDGE_ROM => {
+            Some(SymbolSection::Bank(snapshot.bank_number))
+        }
+        0xc100..=0xffff => Some(SymbolSection::Fixed),
+        _ => None,
+    }
+}
+
+fn parse_debug_number(input: &str) -> Result<u16, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("VALUE REQUIRED".to_owned());
+    }
+    let (digits, radix) = input.strip_prefix('$').map_or_else(
+        || input.strip_prefix("0x").map_or((input, 10), |digits| (digits, 16)),
+        |digits| (digits, 16),
+    );
+    u16::from_str_radix(digits, radix).map_err(|_| "ENTER A 16-BIT ADDRESS".to_owned())
+}
+
+fn parse_raster_breakpoint(input: &str) -> Result<(u16, u16), String> {
+    let fields = input.split([',', ':', ' ']).filter(|field| !field.is_empty()).collect::<Vec<_>>();
+    if fields.len() != 2 {
+        return Err("USE LINE,DOT".to_owned());
+    }
+    let line = parse_debug_number(fields[0])?;
+    let dot = parse_debug_number(fields[1])?;
+    if line >= SCANLINES_PER_FRAME || dot >= DOTS_PER_SCANLINE {
+        return Err(format!("LINE 0-{} DOT 0-{}", SCANLINES_PER_FRAME - 1, DOTS_PER_SCANLINE - 1));
+    }
+    if !u32::from(dot).is_multiple_of(VIDEO_DOTS_PER_CPU_CYCLE) {
+        return Err("DOT MUST BE EVEN (CPU CYCLE BOUNDARY)".to_owned());
+    }
+    Ok((line, dot))
+}
+
+fn status_flags(status: u8) -> String {
+    [(0x80, 'N'), (0x40, 'V'), (0x08, 'D'), (0x04, 'I'), (0x02, 'Z'), (0x01, 'C')]
+        .into_iter()
+        .map(|(mask, name)| if status & mask != 0 { name } else { '-' })
+        .collect()
+}
+
+fn bank_kind_name(kind: u8) -> &'static str {
+    match kind {
+        bank_kind::CARTRIDGE_ROM => "ROM",
+        bank_kind::WORK_RAM => "WRK",
+        bank_kind::VIDEO_RAM => "VID",
+        bank_kind::SAVE_RAM => "SAV",
+        _ => "???",
+    }
 }
 
 fn normalized_lines(text: &str) -> Vec<String> {
@@ -3206,14 +3790,17 @@ mod tests {
 
         assert_eq!(
             editor.handle_mouse_press(
-                (EDITOR_START + 1) * GLYPH_WIDTH,
+                (EDITOR_CODE_START + 1) * GLYPH_WIDTH,
                 EDITOR_FIRST_ROW * GLYPH_HEIGHT,
                 false,
             ),
             EditorAction::None
         );
         assert_eq!(editor.cursor, Position { line: 0, column: 1 });
-        editor.handle_mouse_move((EDITOR_START + 5) * GLYPH_WIDTH, EDITOR_FIRST_ROW * GLYPH_HEIGHT);
+        editor.handle_mouse_move(
+            (EDITOR_CODE_START + 5) * GLYPH_WIDTH,
+            EDITOR_FIRST_ROW * GLYPH_HEIGHT,
+        );
         editor.handle_mouse_release();
 
         assert_eq!(
@@ -3263,6 +3850,15 @@ mod tests {
         assert!(
             cells[4 * COLUMNS + 1..4 * COLUMNS + 15].iter().all(|cell| *cell == BOX_HORIZONTAL)
         );
+    }
+
+    #[test]
+    fn debug_menu_shortcuts_share_one_right_aligned_column() {
+        let content_width = menu_width(MenuKind::Debug) - 4;
+        for label in menu_labels(MenuKind::Debug).iter().filter(|label| !label.is_empty()) {
+            assert_eq!(label.len(), content_width, "misaligned debug menu label: {label}");
+            assert_ne!(label.as_bytes().last(), Some(&b' '));
+        }
     }
 
     #[test]
@@ -3512,6 +4108,131 @@ mod tests {
     }
 
     #[test]
+    fn f9_and_the_gutter_toggle_source_breakpoints() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("main.asm", " NOP\n RTS").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+
+        assert_eq!(
+            editor.handle_key(
+                &Key::Named(NamedKey::F9),
+                PhysicalKey::Code(KeyCode::F9),
+                ModifiersState::empty(),
+            ),
+            EditorAction::None
+        );
+        assert!(editor.line_has_breakpoint(0));
+
+        editor.handle_mouse_press(
+            EDITOR_START * GLYPH_WIDTH,
+            EDITOR_FIRST_ROW * GLYPH_HEIGHT,
+            false,
+        );
+        assert!(!editor.line_has_breakpoint(0));
+    }
+
+    #[test]
+    fn build_and_run_resolves_source_breakpoints_into_fixed_rom_addresses() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text(
+            "fanticon.cfg",
+            "TITLE=DEBUG TEST\nID=0123456789ABCDEF\nMAIN=MAIN.ASM\nOUTPUT=DEBUG.FCN\nSAVE_BANKS=0\nMACHINE=1.0\n",
+        ).unwrap();
+        filesystem.borrow_mut().write_text(
+            "main.asm",
+            " FIXED\n ORG $C100\nRESET NOP\nLOOP JMP LOOP\nNMI RTI\nIRQ RTI\n ORG $FFFA\n DA NMI,RESET,IRQ",
+        ).unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+        editor.cursor.line = 2;
+        editor.toggle_source_breakpoint();
+        editor.start_build(true);
+
+        let mut action = EditorAction::None;
+        for _ in 0..=BUILD_PROGRESS_FRAMES {
+            action = editor.update();
+        }
+        let EditorAction::Run(launch) = action else { panic!("expected debug launch") };
+        assert_eq!(launch.breakpoints, [(SymbolSection::Fixed, 0xc100)]);
+        assert!(launch.source_map.iter().any(|entry| {
+            entry.source == "main.asm" && entry.line == 3 && entry.address == 0xc100
+        }));
+        assert!(editor.debug_active);
+    }
+
+    #[test]
+    fn paused_debug_snapshot_opens_source_and_debug_shortcuts_emit_commands() {
+        use fanticon::{
+            cartridge::Cartridge, debugger::Debugger, machine::BANK_SIZE, system::FanticonMachine,
+        };
+
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("main.asm", "RESET NOP").unwrap();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.debug_source_map = vec![CartridgeSourceMapEntry {
+            source: "main.asm".to_owned(),
+            line: 1,
+            address: 0xc100,
+            length: 1,
+            section: SymbolSection::Fixed,
+        }];
+        let mut fixed = [0xff; BANK_SIZE];
+        fixed[0x100] = 0xea;
+        fixed[0x3ffa..].copy_from_slice(&[0x00, 0xc1, 0x00, 0xc1, 0x00, 0xc1]);
+        let mut debugger = Debugger::new(FanticonMachine::new(
+            Cartridge::new("DEBUG", 1, 0, fixed, Vec::new()).unwrap(),
+            None,
+        ));
+        debugger.step_instruction();
+        editor.set_debug_snapshot(debugger.snapshot());
+
+        assert_eq!(editor.filename.as_deref(), Some("main.asm"));
+        assert_eq!(editor.debug_location, Some(("main.asm".to_owned(), 0)));
+        assert_eq!(
+            editor.handle_key(
+                &Key::Named(NamedKey::F10),
+                PhysicalKey::Code(KeyCode::F10),
+                ModifiersState::empty(),
+            ),
+            EditorAction::Debug(DebugCommand::StepOver)
+        );
+        assert_eq!(
+            editor.handle_key(
+                &Key::Named(NamedKey::F11),
+                PhysicalKey::Code(KeyCode::F11),
+                ModifiersState::CONTROL,
+            ),
+            EditorAction::Debug(DebugCommand::StepCycle)
+        );
+        assert_eq!(
+            editor.handle_key(
+                &Key::Named(NamedKey::F5),
+                PhysicalKey::Code(KeyCode::F5),
+                ModifiersState::empty(),
+            ),
+            EditorAction::Debug(DebugCommand::Continue)
+        );
+    }
+
+    #[test]
+    fn debugger_watchpoint_and_raster_dialogs_validate_their_inputs() {
+        assert_eq!(parse_debug_number("$C020"), Ok(0xc020));
+        assert_eq!(parse_debug_number("49184"), Ok(0xc020));
+        assert_eq!(parse_raster_breakpoint("199,318"), Ok((199, 318)));
+        assert!(parse_raster_breakpoint("999,999").is_err());
+        assert!(parse_raster_breakpoint("1,3").is_err());
+
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.debug_active = true;
+        editor.open_debug_prompt(DebugPromptKind::WriteWatchpoint);
+        assert_eq!(
+            editor.submit_debug_prompt(DebugPromptKind::WriteWatchpoint, "$2000".to_owned()),
+            EditorAction::Debug(DebugCommand::AddWriteWatchpoint(0x2000))
+        );
+    }
+
+    #[test]
     fn tabs_preserve_independent_editing_cursor_scroll_and_undo_state() {
         let filesystem = shared_filesystem();
         filesystem
@@ -3753,7 +4474,7 @@ mod tests {
 
         editor.render(&mut video, true);
 
-        let origin_x = EDITOR_START * GLYPH_WIDTH;
+        let origin_x = EDITOR_CODE_START * GLYPH_WIDTH;
         let origin_y = EDITOR_FIRST_ROW * GLYPH_HEIGHT;
         for (glyph_y, bits) in CHARACTER_ROM[b'A' as usize].iter().copied().enumerate() {
             for glyph_x in 0..GLYPH_WIDTH {

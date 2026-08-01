@@ -16,6 +16,15 @@ pub struct AssembledProgram {
     pub bytes: Vec<u8>,
     pub symbols: BTreeMap<String, u16>,
     pub segments: Vec<AssembledSegment>,
+    pub source_map: Vec<SourceMapEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceMapEntry {
+    pub source: String,
+    pub line: usize,
+    pub address: u16,
+    pub length: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,7 +33,7 @@ pub struct AssembledSegment {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SymbolSection {
     Fixed,
     Bank(u8),
@@ -41,6 +50,16 @@ pub struct AssembledCartridge {
     pub fixed_rom: [u8; 0x4000],
     pub rom_banks: Vec<[u8; 0x4000]>,
     pub symbols: BTreeMap<String, CartridgeSymbol>,
+    pub source_map: Vec<CartridgeSourceMapEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CartridgeSourceMapEntry {
+    pub source: String,
+    pub line: usize,
+    pub address: u16,
+    pub length: usize,
+    pub section: SymbolSection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -304,6 +323,7 @@ where
     let mut banks = vec![[0xff; 0x4000]; highest_bank.map_or(0, |bank| usize::from(bank) + 1)];
     let mut bank_written = vec![[false; 0x4000]; banks.len()];
     let mut public_symbols = BTreeMap::new();
+    let mut source_map = Vec::new();
 
     for (index, block) in blocks.iter().enumerate() {
         let seed = resolved
@@ -332,6 +352,16 @@ where
                 );
             }
         }
+        source_map.extend(program.source_map.iter().map(|entry| CartridgeSourceMapEntry {
+            source: entry.source.clone(),
+            line: entry.line,
+            address: entry.address,
+            length: entry.length,
+            section: match block.section {
+                CartridgeSection::Fixed => SymbolSection::Fixed,
+                CartridgeSection::Bank(bank) => SymbolSection::Bank(bank),
+            },
+        }));
         for segment in program.segments {
             let (image, written, start, end) = match block.section {
                 CartridgeSection::Fixed => {
@@ -401,7 +431,12 @@ where
         });
     }
     if diagnostics.is_empty() {
-        Ok(AssembledCartridge { fixed_rom: fixed, rom_banks: banks, symbols: public_symbols })
+        Ok(AssembledCartridge {
+            fixed_rom: fixed,
+            rom_banks: banks,
+            symbols: public_symbols,
+            source_map,
+        })
     } else {
         Err(diagnostics)
     }
@@ -822,6 +857,7 @@ fn emit_program(
     let mut cursor = origin;
     let mut bytes = Vec::new();
     let mut segments = Vec::<AssembledSegment>::new();
+    let mut source_map = Vec::new();
     let mut segment = None::<AssembledSegment>;
     for line in plan {
         if matches!(line.kind, PlanKind::Origin) {
@@ -843,6 +879,14 @@ fn emit_program(
         cursor = line.address;
         let mut line_bytes = Vec::with_capacity(line.size);
         emit_line(line, &symbols, &mut line_bytes, diagnostics);
+        if !line_bytes.is_empty() {
+            source_map.push(SourceMapEntry {
+                source: line.statement.source.clone(),
+                line: line.statement.line,
+                address: line.address,
+                length: line_bytes.len(),
+            });
+        }
         bytes.extend_from_slice(&line_bytes);
         let active = segment
             .get_or_insert_with(|| AssembledSegment { origin: line.address, bytes: Vec::new() });
@@ -858,7 +902,7 @@ fn emit_program(
         .into_iter()
         .filter_map(|(name, value)| u16::try_from(value).ok().map(|value| (name, value)))
         .collect();
-    Ok(AssembledProgram { origin, bytes, symbols: public_symbols, segments })
+    Ok(AssembledProgram { origin, bytes, symbols: public_symbols, segments, source_map })
 }
 
 fn emit_line(
@@ -1692,6 +1736,50 @@ fn opcode(mnemonic: &str, mode: Mode) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_maps_preserve_file_line_address_length_and_cartridge_bank() {
+        let program = assemble_with_loader(
+            "main.asm",
+            " ORG $8000\n PUT defs.inc\n LDA #VALUE\n RTS",
+            |path| {
+                (path == "defs.inc")
+                    .then(|| "VALUE EQU 1".to_owned())
+                    .ok_or_else(|| "not found".to_owned())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            program.source_map,
+            [
+                SourceMapEntry {
+                    source: "main.asm".to_owned(),
+                    line: 3,
+                    address: 0x8000,
+                    length: 2,
+                },
+                SourceMapEntry {
+                    source: "main.asm".to_owned(),
+                    line: 4,
+                    address: 0x8002,
+                    length: 1,
+                },
+            ]
+        );
+
+        let cartridge = assemble_cartridge_with_loader(
+            "main.asm",
+            " BANK 3\n ORG $8000\nENTRY NOP\n FIXED\n ORG $C100\nRESET JMP RESET\nNMI RTI\nIRQ RTI\n ORG $FFFA\n DA NMI,RESET,IRQ",
+            |_| Err("not found".to_owned()),
+        )
+        .unwrap();
+        assert!(cartridge.source_map.iter().any(|entry| {
+            entry.line == 3 && entry.address == 0x8000 && entry.section == SymbolSection::Bank(3)
+        }));
+        assert!(cartridge.source_map.iter().any(|entry| {
+            entry.line == 6 && entry.address == 0xc100 && entry.section == SymbolSection::Fixed
+        }));
+    }
 
     #[test]
     fn assembles_labels_branches_data_and_addressing_modes() {

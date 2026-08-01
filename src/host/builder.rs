@@ -1,5 +1,10 @@
+use std::collections::BTreeMap;
+
 use fanticon::{
-    assembler::{AssembledProgram, Diagnostic, assemble_with_loader},
+    assembler::{
+        AssembledProgram, CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic,
+        assemble_with_loader,
+    },
     cartridge::{Cartridge, SaveImage},
     project::{MANIFEST_NAME, build_project_with_loader},
 };
@@ -19,6 +24,8 @@ pub struct ProjectBuildSuccess {
     pub title: String,
     pub banks: usize,
     pub size: usize,
+    pub symbols: BTreeMap<String, CartridgeSymbol>,
+    pub source_map: Vec<CartridgeSourceMapEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +34,9 @@ pub struct GameLaunch {
     pub cartridge_path: String,
     pub save_path: Option<String>,
     pub save_ram: Vec<u8>,
+    pub symbols: BTreeMap<String, CartridgeSymbol>,
+    pub source_map: Vec<CartridgeSourceMapEntry>,
+    pub breakpoints: Vec<(fanticon::assembler::SymbolSection, u16)>,
 }
 
 pub fn build_project(
@@ -47,6 +57,8 @@ pub fn build_project(
         title: build.manifest.title,
         banks: build.cartridge.rom_banks.len(),
         size: build.bytes.len(),
+        symbols: build.symbols,
+        source_map: build.source_map,
     })
 }
 
@@ -54,7 +66,10 @@ pub fn build_and_load_project(
     filesystem: &SharedFilesystem,
 ) -> Result<GameLaunch, Vec<Diagnostic>> {
     let success = build_project(filesystem)?;
-    load_cartridge(filesystem, &success.output)
+    let mut launch = load_cartridge(filesystem, &success.output)?;
+    launch.symbols = success.symbols;
+    launch.source_map = success.source_map;
+    Ok(launch)
 }
 
 pub fn load_cartridge(
@@ -92,7 +107,15 @@ pub fn load_cartridge(
     } else {
         Vec::new()
     };
-    Ok(GameLaunch { cartridge, cartridge_path: path.to_owned(), save_path, save_ram })
+    Ok(GameLaunch {
+        cartridge,
+        cartridge_path: path.to_owned(),
+        save_path,
+        save_ram,
+        symbols: BTreeMap::new(),
+        source_map: Vec::new(),
+        breakpoints: Vec::new(),
+    })
 }
 
 pub fn write_save(

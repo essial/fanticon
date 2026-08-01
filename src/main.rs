@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fanticon::{
+    debugger::Debugger,
+    machine::CPU_CYCLES_PER_FRAME,
     system::{ControllerState, FanticonMachine},
     video::Video,
 };
 use host::{
-    AppMode, AudioOutput, BootSplash, EditorAction, FramePacer, FrameStatus, Renderer, Terminal,
-    TerminalAction, TextEditor, draw_boot_logo,
+    AppMode, AudioOutput, BootSplash, DebugCommand, EditorAction, FramePacer, FrameStatus,
+    Renderer, Terminal, TerminalAction, TextEditor, draw_boot_logo,
 };
 use web_time::Instant;
 use winit::{
@@ -43,7 +45,7 @@ struct FanticonApp {
 }
 
 struct GameSession {
-    machine: FanticonMachine,
+    debugger: Debugger,
     save_backing: SaveBacking,
     last_save_generation: u64,
     last_save_write: Option<Instant>,
@@ -171,17 +173,25 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                     if event.state == ElementState::Pressed {
                         self.boot_splash.try_dismiss(now);
                     }
-                } else if self.game.is_some() {
+                } else if self.game_running() {
                     self.handle_game_key(event.state, &event.logical_key, event.physical_key);
-                } else if should_process_keyboard_input(event.state, event.repeat) {
-                    self.handle_key(&event.logical_key, event.physical_key);
+                } else {
+                    // A breakpoint can take focus while a controller key is held. Its
+                    // eventual release must still clear the host-side controller latch,
+                    // even though other input now belongs to the editor/debugger.
+                    if event.state == ElementState::Released {
+                        self.update_game_controller_key(event.state, event.physical_key);
+                    }
+                    if should_process_keyboard_input(event.state, event.repeat) {
+                        self.handle_key(&event.logical_key, event.physical_key);
+                    }
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_position = Some(position);
                 if !self.boot_splash.is_active(Instant::now())
-                    && self.game.is_none()
+                    && !self.game_running()
                     && let Some((x, y)) = window_to_source_position(
                         position,
                         window.inner_size(),
@@ -198,7 +208,7 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                     self.boot_splash.try_dismiss(now);
                     return;
                 }
-                if button != MouseButton::Left || self.game.is_some() {
+                if button != MouseButton::Left || self.game_running() {
                     return;
                 }
                 if state == ElementState::Released {
@@ -221,7 +231,7 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                if self.boot_splash.is_active(Instant::now()) || self.game.is_some() {
+                if self.boot_splash.is_active(Instant::now()) || self.game_running() {
                     return;
                 }
                 let (mut horizontal, mut vertical) = match delta {
@@ -274,25 +284,38 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
 }
 
 impl FanticonApp {
+    fn game_running(&self) -> bool {
+        self.game.as_ref().is_some_and(|game| !game.debugger.paused())
+    }
+
     fn emulate_frame(&mut self, now: Instant) {
         if self.boot_splash.is_active(now) {
             self.video.begin_frame();
             return;
         }
 
-        if let Some(game) = &mut self.game {
+        if self.game_running() {
+            let game = self.game.as_mut().expect("running game session");
             if self.video.dimensions()
                 != (fanticon::video::DISPLAY_WIDTH, fanticon::video::DISPLAY_HEIGHT)
             {
                 self.video = Video::new();
             }
-            game.machine.run_frame();
-            if let Some(audio) = &self.audio_output {
-                audio.submit(game.machine.bus.audio_frame());
+            game.debugger.run_cycles(u64::from(CPU_CYCLES_PER_FRAME));
+            if game.debugger.paused() {
+                // Debugger focus owns the keyboard now. Drop the host latch so a
+                // controller key held when the stop occurred cannot remain pressed
+                // after execution resumes.
+                game.debugger.machine.bus.set_controller(0, ControllerState::default());
             }
-            game.machine.bus.present(&mut self.video);
+            if !game.debugger.paused()
+                && let Some(audio) = &self.audio_output
+            {
+                audio.submit(game.debugger.machine.bus.audio_frame());
+            }
+            game.debugger.machine.bus.present(&mut self.video);
             self.video.begin_frame();
-            let generation = game.machine.bus.save_generation();
+            let generation = game.debugger.machine.bus.save_generation();
             if generation != game.last_save_generation {
                 game.last_save_generation = generation;
                 game.last_save_write = Some(now);
@@ -302,6 +325,15 @@ impl FanticonApp {
                 .is_some_and(|write| now.duration_since(write).as_secs_f32() >= 1.0)
             {
                 self.flush_game_save();
+            }
+            if let Some(snapshot) = self
+                .game
+                .as_ref()
+                .filter(|game| game.debugger.paused())
+                .map(|game| game.debugger.snapshot())
+                && let Some(editor) = &mut self.text_editor
+            {
+                editor.set_debug_snapshot(snapshot);
             }
             self.frame_number = self.frame_number.wrapping_add(1);
             return;
@@ -357,7 +389,50 @@ impl FanticonApp {
         match action {
             EditorAction::Exit => self.text_editor = None,
             EditorAction::Run(launch) => self.start_game(launch, true),
+            EditorAction::Debug(command) => self.apply_debug_command(command),
             EditorAction::None => {}
+        }
+    }
+
+    fn apply_debug_command(&mut self, command: DebugCommand) {
+        if matches!(command, DebugCommand::Stop) {
+            self.flush_game_save();
+            self.game = None;
+            if let Some(editor) = &mut self.text_editor {
+                editor.stop_debug_session();
+            }
+            return;
+        }
+        let Some(game) = &mut self.game else { return };
+        match command {
+            DebugCommand::Continue => game.debugger.resume(),
+            DebugCommand::StepInstruction => {
+                game.debugger.step_instruction();
+            }
+            DebugCommand::StepCycle => game.debugger.step_cycle(),
+            DebugCommand::StepOver => {
+                game.debugger.step_over(10_000_000);
+            }
+            DebugCommand::StepOut => {
+                game.debugger.step_out(10_000_000);
+            }
+            DebugCommand::SyncBreakpoints(breakpoints) => {
+                game.debugger.set_source_breakpoints(breakpoints);
+            }
+            DebugCommand::AddReadWatchpoint(address) => game.debugger.add_read_watchpoint(address),
+            DebugCommand::AddWriteWatchpoint(address) => {
+                game.debugger.add_write_watchpoint(address);
+            }
+            DebugCommand::AddRasterBreakpoint { dot, line } => {
+                game.debugger.add_raster_breakpoint(dot, line);
+            }
+            DebugCommand::ClearBreakpoints => game.debugger.clear_breakpoints(),
+            DebugCommand::Stop => unreachable!(),
+        }
+        if game.debugger.paused()
+            && let Some(editor) = &mut self.text_editor
+        {
+            editor.set_debug_snapshot(game.debugger.snapshot());
         }
     }
 
@@ -382,8 +457,11 @@ impl FanticonApp {
                 }
             }
         });
+        let mut debugger = Debugger::new(machine);
+        debugger.set_source_breakpoints(launch.breakpoints);
+        debugger.resume();
         self.game = Some(GameSession {
-            machine,
+            debugger,
             save_backing: launch.save_path.map_or(SaveBacking::None, SaveBacking::Console),
             last_save_generation: 0,
             last_save_write: None,
@@ -400,36 +478,43 @@ impl FanticonApp {
         physical_key: PhysicalKey,
     ) {
         if state == ElementState::Pressed
+            && matches!(logical_key, Key::Named(NamedKey::F6))
+            && self.text_editor.is_some()
+            && let Some(game) = &mut self.game
+        {
+            game.debugger.pause();
+            game.debugger.machine.bus.set_controller(0, ControllerState::default());
+            if let Some(editor) = &mut self.text_editor {
+                editor.set_debug_snapshot(game.debugger.snapshot());
+            }
+            return;
+        }
+        if state == ElementState::Pressed
             && matches!(logical_key, Key::Named(NamedKey::Escape))
             && self.game.as_ref().is_some_and(|game| game.launched_from_editor)
         {
             self.flush_game_save();
             self.game = None;
-            if self.text_editor.is_none() {
+            if let Some(editor) = &mut self.text_editor {
+                editor.stop_debug_session();
+            } else {
                 self.terminal.resume_after_game();
             }
             return;
         }
+        self.update_game_controller_key(state, physical_key);
+    }
+
+    fn update_game_controller_key(&mut self, state: ElementState, physical_key: PhysicalKey) {
         let Some(game) = &mut self.game else { return };
-        let mask = match physical_key {
-            PhysicalKey::Code(KeyCode::ArrowUp) => ControllerState::UP,
-            PhysicalKey::Code(KeyCode::ArrowDown) => ControllerState::DOWN,
-            PhysicalKey::Code(KeyCode::ArrowLeft) => ControllerState::LEFT,
-            PhysicalKey::Code(KeyCode::ArrowRight) => ControllerState::RIGHT,
-            PhysicalKey::Code(KeyCode::KeyZ) => ControllerState::A,
-            PhysicalKey::Code(KeyCode::KeyX) => ControllerState::B,
-            PhysicalKey::Code(KeyCode::Space) => ControllerState::SELECT,
-            PhysicalKey::Code(KeyCode::Enter) => ControllerState::START,
-            _ => return,
-        };
-        let current = game.machine.bus.controller_host_state(0);
-        let next = if state == ElementState::Pressed { current | mask } else { current & !mask };
-        game.machine.bus.set_controller(0, ControllerState(next));
+        let current = game.debugger.machine.bus.controller_host_state(0);
+        let Some(next) = updated_controller_state(current, state, physical_key) else { return };
+        game.debugger.machine.bus.set_controller(0, ControllerState(next));
     }
 
     fn flush_game_save(&mut self) {
         let Some(game) = &mut self.game else { return };
-        if !game.machine.bus.save_dirty() {
+        if !game.debugger.machine.bus.save_dirty() {
             return;
         }
         let result = match &game.save_backing {
@@ -437,19 +522,19 @@ impl FanticonApp {
             SaveBacking::Console(path) => host::write_save(
                 &self.terminal.filesystem(),
                 path,
-                game.machine.bus.cartridge_id(),
-                game.machine.bus.save_ram(),
+                game.debugger.machine.bus.cartridge_id(),
+                game.debugger.machine.bus.save_ram(),
             ),
             #[cfg(not(target_arch = "wasm32"))]
             SaveBacking::Native(path) => write_native_save(
                 path,
-                game.machine.bus.cartridge_id(),
-                game.machine.bus.save_ram(),
+                game.debugger.machine.bus.cartridge_id(),
+                game.debugger.machine.bus.save_ram(),
             ),
         };
         match result {
             Ok(()) => {
-                game.machine.bus.mark_save_clean();
+                game.debugger.machine.bus.mark_save_clean();
                 game.last_save_write = None;
             }
             Err(error) => eprintln!("could not save cartridge RAM: {error}"),
@@ -478,8 +563,10 @@ impl FanticonApp {
                 }
             }
         });
+        let mut debugger = Debugger::new(machine);
+        debugger.resume();
         self.game = Some(GameSession {
-            machine,
+            debugger,
             save_backing: launch.save_path.map_or(SaveBacking::None, SaveBacking::Native),
             last_save_generation: 0,
             last_save_write: None,
@@ -487,6 +574,25 @@ impl FanticonApp {
             _save_lock: save_lock,
         });
     }
+}
+
+fn updated_controller_state(
+    current: u8,
+    state: ElementState,
+    physical_key: PhysicalKey,
+) -> Option<u8> {
+    let mask = match physical_key {
+        PhysicalKey::Code(KeyCode::ArrowUp) => ControllerState::UP,
+        PhysicalKey::Code(KeyCode::ArrowDown) => ControllerState::DOWN,
+        PhysicalKey::Code(KeyCode::ArrowLeft) => ControllerState::LEFT,
+        PhysicalKey::Code(KeyCode::ArrowRight) => ControllerState::RIGHT,
+        PhysicalKey::Code(KeyCode::KeyZ) => ControllerState::A,
+        PhysicalKey::Code(KeyCode::KeyX) => ControllerState::B,
+        PhysicalKey::Code(KeyCode::Space) => ControllerState::SELECT,
+        PhysicalKey::Code(KeyCode::Enter) => ControllerState::START,
+        _ => return None,
+    };
+    Some(if state == ElementState::Pressed { current | mask } else { current & !mask })
 }
 
 fn window_to_source_position(
@@ -661,6 +767,31 @@ mod tests {
         assert!(should_process_keyboard_input(ElementState::Pressed, true));
         assert!(!should_process_keyboard_input(ElementState::Released, false));
         assert!(!should_process_keyboard_input(ElementState::Released, true));
+    }
+
+    #[test]
+    fn controller_key_release_clears_only_its_held_button() {
+        let held = ControllerState::UP | ControllerState::A;
+        assert_eq!(
+            updated_controller_state(
+                held,
+                ElementState::Released,
+                PhysicalKey::Code(KeyCode::KeyZ),
+            ),
+            Some(ControllerState::UP)
+        );
+        assert_eq!(
+            updated_controller_state(
+                ControllerState::UP,
+                ElementState::Pressed,
+                PhysicalKey::Code(KeyCode::Space),
+            ),
+            Some(ControllerState::UP | ControllerState::SELECT)
+        );
+        assert_eq!(
+            updated_controller_state(held, ElementState::Released, PhysicalKey::Code(KeyCode::F9),),
+            None
+        );
     }
 
     #[test]

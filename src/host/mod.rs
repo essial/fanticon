@@ -18,4 +18,4 @@ pub use builder::{GameLaunch, write_save};
 pub use frame_pacer::FramePacer;
 pub use renderer::{FrameStatus, Renderer};
 pub use terminal::{AppMode, Terminal, TerminalAction};
-pub use text_editor::{EditorAction, TextEditor};
+pub use text_editor::{DebugCommand, EditorAction, TextEditor};

@@ -30,6 +30,18 @@ pub enum BusAccessKind {
     Write,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApuDebugState {
+    pub pulse_control: [u8; 2],
+    pub pulse_timer: [u16; 2],
+    pub triangle_control: u8,
+    pub triangle_timer: u16,
+    pub noise_control: u8,
+    pub noise_period: u8,
+    pub master: u8,
+    pub sample: u16,
+}
+
 impl ControllerState {
     pub const UP: u8 = 1 << 0;
     pub const DOWN: u8 = 1 << 1;
@@ -365,6 +377,33 @@ impl FanticonBus {
 
     pub const fn frame_counter(&self) -> u16 {
         self.frame_counter
+    }
+    pub const fn bank_kind(&self) -> u8 {
+        self.bank_kind
+    }
+    pub const fn bank_number(&self) -> u8 {
+        self.bank_number
+    }
+    pub const fn irq_pending(&self) -> u8 {
+        self.irq_pending
+    }
+    pub const fn irq_enable(&self) -> u8 {
+        self.irq_enable
+    }
+    pub const fn audio_master(&self) -> u8 {
+        self.apu.master
+    }
+    pub fn apu_debug_state(&self) -> ApuDebugState {
+        ApuDebugState {
+            pulse_control: [self.apu.pulse[0].control, self.apu.pulse[1].control],
+            pulse_timer: [self.apu.pulse[0].timer, self.apu.pulse[1].timer],
+            triangle_control: self.apu.triangle.control,
+            triangle_timer: self.apu.triangle.timer,
+            noise_control: self.apu.noise.control,
+            noise_period: self.apu.noise.period,
+            master: self.apu.master,
+            sample: self.apu.sample,
+        }
     }
     pub const fn current_audio_sample(&self) -> u16 {
         self.apu.sample

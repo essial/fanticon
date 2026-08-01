@@ -45,7 +45,7 @@ These details do not alter VM-visible behavior and can be tuned during host work
 - Host audio buffer size and underrun recovery
 - Gamepad database and user-remapping interface
 - Recent-cartridge UI and save-lock warning presentation
-- Debugger window layout and keyboard shortcuts
+- Deterministic input recording and replay format (deferred beyond v0.1)
 
 ## Implementation test coverage
 

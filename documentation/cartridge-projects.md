@@ -122,3 +122,43 @@ The development debugger provides:
 - complete VM pause without state advancement.
 
 Deterministic input recording and replay files are deferred beyond v0.1.
+
+### Editor debugger controls
+
+Build & Run starts an editor-owned debug session. The VM normally runs at full
+speed and returns to the editor automatically when a breakpoint, watchpoint,
+raster breakpoint, or CPU jam is encountered. The VM remains completely frozen
+while the editor is visible; rendering the debugger does not advance CPU,
+video, timer, input, or audio state.
+
+| Key | Debug action |
+| --- | --- |
+| `F5` | Build & Run when stopped; continue when paused |
+| `F6` | Pause a running editor-owned game |
+| `Shift+F5` | Stop the debug session |
+| `F9` | Toggle a source breakpoint on the current line |
+| `F10` | Step over `JSR`, or step one instruction otherwise |
+| `F11` | Step one 6502 instruction |
+| `Shift+F11` | Run until the current subroutine returns |
+| `Ctrl/Cmd+F11` | Step one CPU/bus cycle |
+
+The two-character source gutter shows `@` for a breakpoint and an arrow for the
+currently paused source line. Breakpoints placed on labels or other
+non-emitting lines resolve to the next emitted line in that source file.
+
+The **Debug** menu also creates 16-bit memory-read and memory-write watchpoints,
+and raster breakpoints entered as `LINE,DOT`. Debugger raster stops occur at CPU
+cycle boundaries, which are every two video dots in machine 1.0.
+
+The paused panel reports CPU registers and flags, stack bytes, memory around the
+program counter, current mapped bank, IRQ state, raster position, every APU
+channel's control/timer state, current audio output, stop reason, and the eight
+most recently entered instructions.
+
+### Source-map behavior
+
+The assembler records an address and byte length for every emitting source
+line, including lines originating in `PUT` files and macro expansions. Cartridge
+entries additionally record `FIXED` or the exact `BANK` number. These maps stay
+with the active editor build and are not stored inside the `.FCN`, so launching
+an existing cartridge directly remains independent of development metadata.

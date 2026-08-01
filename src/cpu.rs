@@ -447,6 +447,177 @@ enum Action {
     Kil,
 }
 
+/// Disassemble one NMOS 6502 instruction, including supported undocumented opcodes.
+pub fn disassemble_instruction(pc: u16, bytes: [u8; 3]) -> String {
+    let action = decode(bytes[0]);
+    let (mnemonic, mode) = match action {
+        Action::Read(operation, mode) => (read_name(operation), Some(disassembly_mode(mode))),
+        Action::Write(operation, mode) => (write_name(operation), Some(disassembly_mode(mode))),
+        Action::Rmw(operation, mode) => (rmw_name(operation), Some(disassembly_mode(mode))),
+        Action::Accumulator(operation) => (rmw_name(operation), Some(DisassemblyMode::Accumulator)),
+        Action::Implied(operation) => (implied_name(operation), None),
+        Action::Branch(_, _) => (branch_name(bytes[0]), Some(DisassemblyMode::Relative)),
+        Action::Nop(mode) => ("NOP", Some(disassembly_mode(mode))),
+        Action::Brk => ("BRK", None),
+        Action::Jsr => ("JSR", Some(DisassemblyMode::Absolute)),
+        Action::Rti => ("RTI", None),
+        Action::Rts => ("RTS", None),
+        Action::JmpAbs => ("JMP", Some(DisassemblyMode::Absolute)),
+        Action::JmpInd => ("JMP", Some(DisassemblyMode::Indirect)),
+        Action::Php => ("PHP", None),
+        Action::Plp => ("PLP", None),
+        Action::Pha => ("PHA", None),
+        Action::Pla => ("PLA", None),
+        Action::Kil => ("KIL", None),
+    };
+    mode.map_or_else(
+        || mnemonic.to_owned(),
+        |mode| format!("{mnemonic} {}", format_operand(mode, pc, bytes)),
+    )
+}
+
+#[derive(Clone, Copy)]
+enum DisassemblyMode {
+    Accumulator,
+    Immediate,
+    ZeroPage,
+    ZeroPageX,
+    ZeroPageY,
+    Absolute,
+    AbsoluteX,
+    AbsoluteY,
+    Indirect,
+    IndirectX,
+    IndirectY,
+    Relative,
+}
+
+const fn disassembly_mode(mode: Mode) -> DisassemblyMode {
+    match mode {
+        Mode::Imm => DisassemblyMode::Immediate,
+        Mode::Zp => DisassemblyMode::ZeroPage,
+        Mode::ZpX => DisassemblyMode::ZeroPageX,
+        Mode::ZpY => DisassemblyMode::ZeroPageY,
+        Mode::Abs => DisassemblyMode::Absolute,
+        Mode::AbsX => DisassemblyMode::AbsoluteX,
+        Mode::AbsY => DisassemblyMode::AbsoluteY,
+        Mode::IndX => DisassemblyMode::IndirectX,
+        Mode::IndY => DisassemblyMode::IndirectY,
+    }
+}
+
+fn format_operand(mode: DisassemblyMode, pc: u16, bytes: [u8; 3]) -> String {
+    let absolute = u16::from_le_bytes([bytes[1], bytes[2]]);
+    match mode {
+        DisassemblyMode::Accumulator => "A".to_owned(),
+        DisassemblyMode::Immediate => format!("#${:02X}", bytes[1]),
+        DisassemblyMode::ZeroPage => format!("${:02X}", bytes[1]),
+        DisassemblyMode::ZeroPageX => format!("${:02X},X", bytes[1]),
+        DisassemblyMode::ZeroPageY => format!("${:02X},Y", bytes[1]),
+        DisassemblyMode::Absolute => format!("${absolute:04X}"),
+        DisassemblyMode::AbsoluteX => format!("${absolute:04X},X"),
+        DisassemblyMode::AbsoluteY => format!("${absolute:04X},Y"),
+        DisassemblyMode::Indirect => format!("(${absolute:04X})"),
+        DisassemblyMode::IndirectX => format!("(${:02X},X)", bytes[1]),
+        DisassemblyMode::IndirectY => format!("(${:02X}),Y", bytes[1]),
+        DisassemblyMode::Relative => {
+            let target = pc.wrapping_add(2).wrapping_add_signed(i16::from(bytes[1] as i8));
+            format!("${target:04X}")
+        }
+    }
+}
+
+const fn read_name(operation: ReadOp) -> &'static str {
+    match operation {
+        ReadOp::Ora => "ORA",
+        ReadOp::And => "AND",
+        ReadOp::Eor => "EOR",
+        ReadOp::Adc => "ADC",
+        ReadOp::Lda => "LDA",
+        ReadOp::Cmp => "CMP",
+        ReadOp::Sbc => "SBC",
+        ReadOp::Ldx => "LDX",
+        ReadOp::Ldy => "LDY",
+        ReadOp::Cpx => "CPX",
+        ReadOp::Cpy => "CPY",
+        ReadOp::Bit => "BIT",
+        ReadOp::Lax => "LAX",
+        ReadOp::Anc => "ANC",
+        ReadOp::Alr => "ALR",
+        ReadOp::Arr => "ARR",
+        ReadOp::Xaa => "XAA",
+        ReadOp::Axs => "AXS",
+        ReadOp::Las => "LAS",
+    }
+}
+
+const fn write_name(operation: WriteOp) -> &'static str {
+    match operation {
+        WriteOp::A => "STA",
+        WriteOp::X => "STX",
+        WriteOp::Y => "STY",
+        WriteOp::Sax => "SAX",
+        WriteOp::Ahx => "AHX",
+        WriteOp::Tas => "TAS",
+        WriteOp::Shy => "SHY",
+        WriteOp::Shx => "SHX",
+    }
+}
+
+const fn rmw_name(operation: RmwOp) -> &'static str {
+    match operation {
+        RmwOp::Asl => "ASL",
+        RmwOp::Rol => "ROL",
+        RmwOp::Lsr => "LSR",
+        RmwOp::Ror => "ROR",
+        RmwOp::Dec => "DEC",
+        RmwOp::Inc => "INC",
+        RmwOp::Slo => "SLO",
+        RmwOp::Rla => "RLA",
+        RmwOp::Sre => "SRE",
+        RmwOp::Rra => "RRA",
+        RmwOp::Dcp => "DCP",
+        RmwOp::Isc => "ISC",
+    }
+}
+
+const fn implied_name(operation: ImpliedOp) -> &'static str {
+    match operation {
+        ImpliedOp::Nop => "NOP",
+        ImpliedOp::Clc => "CLC",
+        ImpliedOp::Sec => "SEC",
+        ImpliedOp::Cli => "CLI",
+        ImpliedOp::Sei => "SEI",
+        ImpliedOp::Clv => "CLV",
+        ImpliedOp::Cld => "CLD",
+        ImpliedOp::Sed => "SED",
+        ImpliedOp::Dey => "DEY",
+        ImpliedOp::Iny => "INY",
+        ImpliedOp::Dex => "DEX",
+        ImpliedOp::Inx => "INX",
+        ImpliedOp::Txa => "TXA",
+        ImpliedOp::Tya => "TYA",
+        ImpliedOp::Txs => "TXS",
+        ImpliedOp::Tax => "TAX",
+        ImpliedOp::Tay => "TAY",
+        ImpliedOp::Tsx => "TSX",
+    }
+}
+
+const fn branch_name(opcode: u8) -> &'static str {
+    match opcode {
+        0x10 => "BPL",
+        0x30 => "BMI",
+        0x50 => "BVC",
+        0x70 => "BVS",
+        0x90 => "BCC",
+        0xb0 => "BCS",
+        0xd0 => "BNE",
+        0xf0 => "BEQ",
+        _ => "BRA",
+    }
+}
+
 impl Default for Cpu {
     fn default() -> Self {
         Self {
@@ -477,6 +648,11 @@ impl Default for Cpu {
 }
 
 impl Cpu {
+    /// True when the next cycle will fetch a new opcode.
+    pub const fn instruction_boundary(&self) -> bool {
+        matches!(self.engine, Engine::Fetch)
+    }
+
     #[inline(always)]
     fn read<B: Bus>(&mut self, bus: &mut B, address: u16) -> u8 {
         self.cycles = self.cycles.wrapping_add(1);
@@ -2479,5 +2655,18 @@ impl Cpu {
             }
             _ => unreachable!(),
         }
+    }
+}
+
+#[cfg(test)]
+mod disassembly_tests {
+    use super::disassemble_instruction;
+
+    #[test]
+    fn disassembler_formats_official_undocumented_and_relative_instructions() {
+        assert_eq!(disassemble_instruction(0xc100, [0xa9, 0x42, 0]), "LDA #$42");
+        assert_eq!(disassemble_instruction(0xc100, [0x0f, 0x34, 0x12]), "SLO $1234");
+        assert_eq!(disassemble_instruction(0xc100, [0xd0, 0xfc, 0]), "BNE $C0FE");
+        assert_eq!(disassemble_instruction(0xc100, [0x6c, 0x00, 0x80]), "JMP ($8000)");
     }
 }

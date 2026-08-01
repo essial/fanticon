@@ -10,7 +10,7 @@ pub mod project;
 pub mod system;
 pub mod video;
 
-pub use cpu::{Bus, ClockResult, Cpu, Pins, Status};
+pub use cpu::{Bus, ClockResult, Cpu, Pins, Status, disassemble_instruction};
 
 /// A flat, allocation-free 64 KiB bus suitable for a fantasy-console prototype.
 /// Replace this with a mapped bus when video, audio, and input devices are added.

@@ -1,13 +1,13 @@
-use fanticon::{assembler::Diagnostic, video::Video};
+use fanticon::{assembler::Diagnostic, project::MANIFEST_NAME, video::Video};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 use super::{
     EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH,
-    builder::build_source,
+    builder::{GameLaunch, build_and_load_project, build_project, build_source},
     character_rom::{
         BOX_BOTTOM_LEFT, BOX_BOTTOM_RIGHT, BOX_HORIZONTAL, BOX_TOP_LEFT, BOX_TOP_RIGHT,
         BOX_VERTICAL, CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, SYMBOL_ARROW_RIGHT, SYMBOL_BUSY,
-        SYMBOL_CHECK, SYMBOL_CROSS,
+        SYMBOL_CHECK, SYMBOL_CROSS, configure_text_gradient, gradient_color,
     },
     filesystem::SharedFilesystem,
     ui_colors::SharedUiColors,
@@ -76,10 +76,11 @@ enum Overlay {
     Message { title: String, lines: Vec<String> },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EditorAction {
     None,
     Exit,
+    Run(GameLaunch),
 }
 
 pub struct TextEditor {
@@ -98,6 +99,8 @@ pub struct TextEditor {
     diagnostics: Vec<Diagnostic>,
     diagnostic_index: Option<usize>,
     build_message: Option<String>,
+    build_and_run: bool,
+    pending_launch: Option<GameLaunch>,
 }
 
 impl TextEditor {
@@ -122,6 +125,8 @@ impl TextEditor {
             diagnostics: Vec::new(),
             diagnostic_index: None,
             build_message: None,
+            build_and_run: false,
+            pending_launch: None,
         };
         if let Some(filename) = filename
             && let Err(error) = editor.load(&filename)
@@ -179,7 +184,7 @@ impl TextEditor {
                     EditorAction::None
                 }
                 "b" => {
-                    self.start_build();
+                    self.start_build(false);
                     EditorAction::None
                 }
                 _ => EditorAction::None,
@@ -201,7 +206,7 @@ impl TextEditor {
             Key::Named(NamedKey::F2) => self.save_or_prompt(),
             Key::Named(NamedKey::F3) => self.open_dialog(DialogKind::Open),
             Key::Named(NamedKey::F4) => self.move_diagnostic(!modifiers.shift_key()),
-            Key::Named(NamedKey::F5) => self.start_build(),
+            Key::Named(NamedKey::F5) => self.start_build(modifiers.shift_key()),
             Key::Named(NamedKey::ArrowLeft) => self.move_cursor(modifiers.shift_key(), |editor| {
                 if editor.cursor.column > 0 {
                     editor.cursor.column -= 1;
@@ -244,7 +249,7 @@ impl TextEditor {
         EditorAction::None
     }
 
-    pub fn update(&mut self) {
+    pub fn update(&mut self) -> EditorAction {
         let run_build = match &mut self.overlay {
             Overlay::Building { frames_remaining: 0 } => true,
             Overlay::Building { frames_remaining } => {
@@ -257,6 +262,7 @@ impl TextEditor {
             self.overlay = Overlay::None;
             self.perform_build();
         }
+        self.pending_launch.take().map_or(EditorAction::None, EditorAction::Run)
     }
 
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
@@ -354,7 +360,7 @@ impl TextEditor {
             match key {
                 Key::Named(NamedKey::F4) => self.move_diagnostic(!modifiers.shift_key()),
                 Key::Named(NamedKey::Enter | NamedKey::Escape) => self.overlay = Overlay::None,
-                Key::Named(NamedKey::F5) => self.start_build(),
+                Key::Named(NamedKey::F5) => self.start_build(modifiers.shift_key()),
                 _ => {}
             }
             return EditorAction::None;
@@ -440,9 +446,10 @@ impl TextEditor {
             (MenuKind::Edit, 2) => self.copy_selection(),
             (MenuKind::Edit, 3) => self.paste(),
             (MenuKind::Edit, 4) => self.select_all(),
-            (MenuKind::Build, 0) => self.start_build(),
-            (MenuKind::Build, 1) => self.move_diagnostic(true),
-            (MenuKind::Build, 2) => self.move_diagnostic(false),
+            (MenuKind::Build, 0) => self.start_build(false),
+            (MenuKind::Build, 1) => self.start_build(true),
+            (MenuKind::Build, 2) => self.move_diagnostic(true),
+            (MenuKind::Build, 3) => self.move_diagnostic(false),
             _ => {}
         }
         EditorAction::None
@@ -574,11 +581,77 @@ impl TextEditor {
         }
     }
 
-    fn start_build(&mut self) {
+    fn start_build(&mut self, run_after: bool) {
+        self.build_and_run = run_after;
         self.overlay = Overlay::Building { frames_remaining: BUILD_PROGRESS_FRAMES };
     }
 
     fn perform_build(&mut self) {
+        if self.build_and_run {
+            if let Some(filename) = &self.filename {
+                let source = self.lines.join("\n");
+                let save_result = self.filesystem.borrow_mut().write_text(filename, &source);
+                if let Err(error) = save_result {
+                    self.show_build_message("BUILD ERROR", &[error]);
+                    return;
+                }
+                self.dirty = false;
+            }
+            match build_and_load_project(&self.filesystem) {
+                Ok(launch) => {
+                    let title = launch.cartridge.title.clone();
+                    self.show_build_message("BUILD SUCCESSFUL", &[format!("RUNNING: {title}")]);
+                    self.pending_launch = Some(launch);
+                }
+                Err(diagnostics) => {
+                    self.diagnostics = diagnostics;
+                    self.diagnostic_index = (!self.diagnostics.is_empty()).then_some(0);
+                    self.goto_current_diagnostic();
+                    self.show_current_diagnostic_dialog();
+                }
+            }
+            return;
+        }
+
+        // File presence selects cartridge mode. Parse errors belong to the
+        // project build and must never fall through to raw `.BIN` assembly.
+        if self.filesystem.borrow().read_binary(MANIFEST_NAME).is_ok() {
+            if let Some(filename) = &self.filename {
+                let source = self.lines.join("\n");
+                let save_result = self.filesystem.borrow_mut().write_text(filename, &source);
+                if let Err(error) = save_result {
+                    self.show_build_message("BUILD ERROR", &[error]);
+                    return;
+                }
+                self.dirty = false;
+            }
+            match build_project(&self.filesystem) {
+                Ok(success) => {
+                    self.diagnostics.clear();
+                    self.diagnostic_index = None;
+                    self.build_message =
+                        Some(format!("BUILT {} {} BYTES", success.output, success.size));
+                    self.show_build_message(
+                        "BUILD SUCCESSFUL",
+                        &[
+                            format!("OUTPUT: {}", success.output),
+                            format!("TITLE: {}", success.title),
+                            format!("ROM BANKS: {}", success.banks),
+                            format!("SIZE: {} BYTES", success.size),
+                        ],
+                    );
+                }
+                Err(diagnostics) => {
+                    self.diagnostics = diagnostics;
+                    self.diagnostic_index = (!self.diagnostics.is_empty()).then_some(0);
+                    self.build_message = None;
+                    self.goto_current_diagnostic();
+                    self.show_current_diagnostic_dialog();
+                }
+            }
+            return;
+        }
+
         let Some(filename) = self.filename.clone() else {
             self.diagnostics.clear();
             self.diagnostic_index = None;
@@ -982,7 +1055,7 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
     match menu {
         MenuKind::File => &["NEW", "OPEN...", "SAVE", "SAVE AS...", "EXIT"],
         MenuKind::Edit => &["UNDO", "CUT", "COPY", "PASTE", "SELECT ALL"],
-        MenuKind::Build => &["ASSEMBLE", "NEXT ERROR", "PREV ERROR"],
+        MenuKind::Build => &["ASSEMBLE", "BUILD & RUN", "NEXT ERROR", "PREV ERROR"],
     }
 }
 
@@ -994,7 +1067,7 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
         MenuKind::Edit => {
             &["UNDO      U", "CUT       T", "COPY      C", "PASTE     P", "SELECT ALL A"]
         }
-        MenuKind::Build => &["ASSEMBLE  B", "NEXT ERR  N", "PREV ERR  P"],
+        MenuKind::Build => &["ASSEMBLE  B", "BUILD+RUN R", "NEXT ERR  N", "PREV ERR  P"],
     }
 }
 
@@ -1003,7 +1076,7 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
     let hotkeys = match menu {
         MenuKind::File => ["n", "o", "s", "a", "x"],
         MenuKind::Edit => ["u", "t", "c", "p", "a"],
-        MenuKind::Build => ["b", "n", "p", "", ""],
+        MenuKind::Build => ["b", "r", "n", "p", ""],
     };
     hotkeys.iter().position(|hotkey| *hotkey == key)
 }
@@ -1120,6 +1193,14 @@ fn render_cells(
     style: CellStyle,
 ) {
     let CellStyle { foreground, background } = style;
+    let gradient = configure_text_gradient(
+        video,
+        foregrounds
+            .iter()
+            .copied()
+            .chain(backgrounds.iter().copied())
+            .chain([foreground, background]),
+    );
     let pixels = video.pixels_mut();
     pixels.fill(background);
     for cell_y in 0..ROWS {
@@ -1143,7 +1224,8 @@ fn render_cells(
                     if bits & (0x80 >> glyph_x) != 0 {
                         let x = cell_x * GLYPH_WIDTH + glyph_x;
                         let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                        pixels[y * EDITOR_DISPLAY_WIDTH + x] = cell_foreground;
+                        pixels[y * EDITOR_DISPLAY_WIDTH + x] =
+                            gradient_color(&gradient, cell_foreground, glyph_y);
                     }
                 }
             }
@@ -1281,6 +1363,17 @@ fn assembly_syntax_colors(line: &str, default: u8) -> Vec<u8> {
             }
             index = (index + 1).min(bytes.len());
             colors[start..index].fill(ASM_STRING_COLOR);
+        } else if bytes[index].is_ascii_alphabetic() || matches!(bytes[index], b'_' | b'.' | b']') {
+            // Symbols may contain digits. Consume the complete identifier
+            // before looking for numeric literals so `P1CTL` remains one
+            // label/symbol token instead of highlighting `1C` as hexadecimal.
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric()
+                    || matches!(bytes[index], b'_' | b'.' | b']'))
+            {
+                index += 1;
+            }
         } else if bytes[index].is_ascii_digit() || matches!(bytes[index], b'$' | b'%' | b'#') {
             let start = index;
             index += 1;
@@ -1573,6 +1666,17 @@ mod tests {
     }
 
     #[test]
+    fn asm_highlighting_does_not_treat_digits_inside_symbols_as_numbers() {
+        let label = assembly_syntax_colors("P1CTL    EQU   $C010", ASM_TEXT_COLOR);
+        assert!(label[..5].iter().all(|color| *color == ASM_LABEL_COLOR));
+        assert!(label[15..20].iter().all(|color| *color == ASM_NUMBER_COLOR));
+
+        let operand = assembly_syntax_colors("         LDA   P1CTL", ASM_TEXT_COLOR);
+        assert!(operand[15..20].iter().all(|color| *color == ASM_TEXT_COLOR));
+        assert!(!operand.contains(&ASM_NUMBER_COLOR));
+    }
+
+    #[test]
     fn semicolons_inside_assembly_strings_are_not_comments() {
         assert_eq!(
             format_assembly_line(" msg asc \"hello;world\" ; real comment"),
@@ -1637,7 +1741,7 @@ mod tests {
         editor.lines = vec!["         ORG   $8000".to_owned(), "         LDA   #$42".to_owned()];
         editor.dirty = true;
 
-        editor.start_build();
+        editor.start_build(false);
         assert!(matches!(editor.overlay, Overlay::Building { .. }));
         finish_pending_build(&mut editor);
 
@@ -1655,13 +1759,70 @@ mod tests {
     }
 
     #[test]
+    fn build_uses_cartridge_assembler_when_project_manifest_exists() {
+        let filesystem = shared_filesystem();
+        filesystem
+            .borrow_mut()
+            .write_text(
+                "fanticon.cfg",
+                "TITLE=EDITOR TEST\nID=0123456789ABCDEF\nMAIN=MAIN.ASM\n\
+                 OUTPUT=TEST.FCN\nSAVE_BANKS=0\nMACHINE=1.0\n",
+            )
+            .unwrap();
+        filesystem
+            .borrow_mut()
+            .write_text(
+                "main.asm",
+                " FIXED\n ORG $C100\nRESET JMP RESET\nNMI RTI\nIRQ RTI\n\
+                 ORG $FFFA\n DA NMI,RESET,IRQ",
+            )
+            .unwrap();
+        let mut editor =
+            TextEditor::new(filesystem.clone(), shared_ui_colors(), Some("main.asm".to_owned()));
+
+        editor.start_build(false);
+        finish_pending_build(&mut editor);
+
+        let bytes = filesystem.borrow().read_binary("test.fcn").unwrap();
+        assert!(fanticon::cartridge::Cartridge::from_bytes(&bytes).is_ok());
+        assert!(editor.diagnostics.is_empty());
+        assert!(matches!(
+            editor.overlay,
+            Overlay::Message { ref title, .. } if title == "BUILD SUCCESSFUL"
+        ));
+    }
+
+    #[test]
+    fn malformed_manifest_still_selects_cartridge_build() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_binary("fanticon.cfg", &[0xff]).unwrap();
+        filesystem.borrow_mut().write_text("main.asm", " FIXED").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+
+        editor.start_build(false);
+        finish_pending_build(&mut editor);
+
+        assert!(editor.diagnostics.iter().any(|diagnostic| {
+            diagnostic.source.eq_ignore_ascii_case("fanticon.cfg")
+                && diagnostic.message == "TEXT FILE IS NOT UTF-8"
+        }));
+        assert!(
+            !editor
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("unknown operation 'FIXED'"))
+        );
+    }
+
+    #[test]
     fn build_errors_select_the_source_location_and_edits_clear_them() {
         let filesystem = shared_filesystem();
         filesystem.borrow_mut().write_text("bad.asm", " ORG $8000\n LDA #").unwrap();
         let mut editor =
             TextEditor::new(filesystem, shared_ui_colors(), Some("bad.asm".to_owned()));
 
-        editor.start_build();
+        editor.start_build(false);
         finish_pending_build(&mut editor);
 
         assert!(!editor.diagnostics.is_empty());

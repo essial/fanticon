@@ -15,6 +15,38 @@ pub struct AssembledProgram {
     pub origin: u16,
     pub bytes: Vec<u8>,
     pub symbols: BTreeMap<String, u16>,
+    pub segments: Vec<AssembledSegment>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssembledSegment {
+    pub origin: u16,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SymbolSection {
+    Fixed,
+    Bank(u8),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CartridgeSymbol {
+    pub address: u16,
+    pub section: SymbolSection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssembledCartridge {
+    pub fixed_rom: [u8; 0x4000],
+    pub rom_banks: Vec<[u8; 0x4000]>,
+    pub symbols: BTreeMap<String, CartridgeSymbol>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CartridgeSection {
+    Fixed,
+    Bank(u8),
 }
 
 #[derive(Clone)]
@@ -98,6 +130,325 @@ where
     }
     emit_program(&plan, symbols, &mut diagnostics)
         .and_then(|program| if diagnostics.is_empty() { Ok(program) } else { Err(diagnostics) })
+}
+
+/// Assemble explicit `BANK` and `FIXED` sections into mapper-0 ROM images.
+pub fn assemble_cartridge_with_loader<F>(
+    source_name: &str,
+    source: &str,
+    mut loader: F,
+) -> Result<AssembledCartridge, Vec<Diagnostic>>
+where
+    F: FnMut(&str) -> Result<String, String>,
+{
+    struct Block {
+        section: CartridgeSection,
+        statements: Vec<Statement>,
+        labels: Vec<String>,
+    }
+
+    let mut diagnostics = Vec::new();
+    let root = source_lines(source_name, source);
+    let included = expand_includes(root, &mut loader, &mut diagnostics, 0);
+    let expanded = expand_macros(included, &mut diagnostics);
+    let statements = expanded.iter().map(parse_statement).collect::<Vec<_>>();
+    let mut common = Vec::new();
+    let mut blocks = Vec::<Block>::new();
+    let mut current = None;
+    for statement in statements {
+        match statement.operation.as_deref() {
+            Some("FIXED") => {
+                if !statement.operand.trim().is_empty() {
+                    statement_error(&mut diagnostics, &statement, "FIXED takes no operand");
+                }
+                blocks.push(Block {
+                    section: CartridgeSection::Fixed,
+                    statements: Vec::new(),
+                    labels: Vec::new(),
+                });
+                current = Some(blocks.len() - 1);
+            }
+            Some("BANK") => {
+                let bank = match evaluate(&statement.operand, &BTreeMap::new(), 0) {
+                    Ok(Some(value)) if (0..=255).contains(&value) => value as u8,
+                    _ => {
+                        statement_error(
+                            &mut diagnostics,
+                            &statement,
+                            "BANK requires a resolved value from 0 through 255",
+                        );
+                        0
+                    }
+                };
+                blocks.push(Block {
+                    section: CartridgeSection::Bank(bank),
+                    statements: Vec::new(),
+                    labels: Vec::new(),
+                });
+                current = Some(blocks.len() - 1);
+            }
+            _ => {
+                if let Some(index) = current {
+                    blocks[index].statements.push(statement);
+                } else if statement.operation.is_none()
+                    || matches!(statement.operation.as_deref(), Some("EQU" | "EQ"))
+                {
+                    common.push(statement);
+                } else {
+                    statement_error(
+                        &mut diagnostics,
+                        &statement,
+                        "select BANK or FIXED before emitting cartridge code",
+                    );
+                }
+            }
+        }
+    }
+    if blocks.is_empty() {
+        diagnostics.push(Diagnostic {
+            source: source_name.to_owned(),
+            line: 1,
+            column: 1,
+            message: "cartridge source has no BANK or FIXED section".to_owned(),
+        });
+    }
+
+    let mut owners = BTreeMap::<String, (usize, CartridgeSection)>::new();
+    for (block_index, block) in blocks.iter_mut().enumerate() {
+        for statement in &block.statements {
+            if let Some(label) = &statement.label
+                && !matches!(statement.operation.as_deref(), Some("EQU" | "EQ"))
+            {
+                if owners.insert(label.clone(), (block_index, block.section)).is_some() {
+                    statement_error(
+                        &mut diagnostics,
+                        statement,
+                        format!("duplicate symbol {label}"),
+                    );
+                }
+                block.labels.push(label.clone());
+            }
+        }
+    }
+
+    for block in &mut blocks {
+        for statement in &mut block.statements {
+            statement.operand = replace_bankof(
+                &statement.operand,
+                &owners,
+                &statement.source,
+                statement.line,
+                &mut diagnostics,
+            );
+        }
+    }
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
+    }
+
+    // Resolve block addresses to a fixed point. External symbols begin at zero,
+    // which can initially select a zero-page opcode; repeating the planning pass
+    // lets the resulting instruction-size change propagate to later labels.
+    let mut resolved = owners
+        .iter()
+        .map(|(name, (_, section))| (name.clone(), (0, *section)))
+        .collect::<BTreeMap<_, _>>();
+    let mut converged = false;
+    for _ in 0..16 {
+        let mut next = resolved.clone();
+        let mut pass_diagnostics = Vec::new();
+        for (index, block) in blocks.iter().enumerate() {
+            let seed = resolved
+                .iter()
+                .filter(|(name, _)| owners.get(*name).map(|entry| entry.0) != Some(index))
+                .map(|(name, (value, _))| (name.clone(), i32::from(*value)))
+                .collect();
+            let mut section_statements = common.clone();
+            section_statements.extend(block.statements.clone());
+            let (_, symbols) =
+                plan_program_seeded(&section_statements, &mut pass_diagnostics, seed);
+            for label in &block.labels {
+                if let Some(value) = symbols.get(label).and_then(|value| u16::try_from(*value).ok())
+                {
+                    next.insert(label.clone(), (value, block.section));
+                }
+            }
+        }
+        if !pass_diagnostics.is_empty() {
+            return Err(pass_diagnostics);
+        }
+        if next == resolved {
+            converged = true;
+            break;
+        }
+        resolved = next;
+    }
+    if !converged {
+        return Err(vec![Diagnostic {
+            source: source_name.to_owned(),
+            line: 1,
+            column: 1,
+            message: "bank-aware symbol addresses did not converge".to_owned(),
+        }]);
+    }
+
+    let mut fixed = [0xff; 0x4000];
+    let mut fixed_written = [false; 0x4000];
+    let highest_bank = blocks
+        .iter()
+        .filter_map(|block| match block.section {
+            CartridgeSection::Bank(bank) => Some(bank),
+            CartridgeSection::Fixed => None,
+        })
+        .max();
+    let mut banks = vec![[0xff; 0x4000]; highest_bank.map_or(0, |bank| usize::from(bank) + 1)];
+    let mut bank_written = vec![[false; 0x4000]; banks.len()];
+    let mut public_symbols = BTreeMap::new();
+
+    for (index, block) in blocks.iter().enumerate() {
+        let seed = resolved
+            .iter()
+            .filter(|(name, _)| owners.get(*name).map(|entry| entry.0) != Some(index))
+            .map(|(name, (value, _))| (name.clone(), i32::from(*value)))
+            .collect();
+        let mut section_statements = common.clone();
+        section_statements.extend(block.statements.clone());
+        let (plan, symbols) = plan_program_seeded(&section_statements, &mut diagnostics, seed);
+        let program = match emit_program(&plan, symbols, &mut diagnostics) {
+            Ok(program) => program,
+            Err(_) => continue,
+        };
+        for label in &block.labels {
+            if let Some((address, section)) = resolved.get(label) {
+                public_symbols.insert(
+                    label.clone(),
+                    CartridgeSymbol {
+                        address: *address,
+                        section: match section {
+                            CartridgeSection::Fixed => SymbolSection::Fixed,
+                            CartridgeSection::Bank(bank) => SymbolSection::Bank(*bank),
+                        },
+                    },
+                );
+            }
+        }
+        for segment in program.segments {
+            let (image, written, start, end) = match block.section {
+                CartridgeSection::Fixed => {
+                    (&mut fixed[..], &mut fixed_written[..], 0xc000u32, 0x10000u32)
+                }
+                CartridgeSection::Bank(bank) => (
+                    &mut banks[bank as usize][..],
+                    &mut bank_written[bank as usize][..],
+                    0x8000u32,
+                    0xc000u32,
+                ),
+            };
+            let segment_start = u32::from(segment.origin);
+            let segment_end = segment_start + segment.bytes.len() as u32;
+            if segment_start < start || segment_end > end {
+                diagnostics.push(Diagnostic {
+                    source: source_name.to_owned(),
+                    line: 1,
+                    column: 1,
+                    message: format!(
+                        "ROM output ${segment_start:04X}-${:04X} crosses its section window",
+                        segment_end.saturating_sub(1)
+                    ),
+                });
+                continue;
+            }
+            if matches!(block.section, CartridgeSection::Fixed) && segment_start < 0xc100 {
+                diagnostics.push(Diagnostic {
+                    source: source_name.to_owned(),
+                    line: 1,
+                    column: 1,
+                    message: "fixed output may not write the hidden $C000-$C0FF I/O page"
+                        .to_owned(),
+                });
+                continue;
+            }
+            let offset = (segment_start - start) as usize;
+            if written[offset..offset + segment.bytes.len()].iter().any(|value| *value) {
+                diagnostics.push(Diagnostic {
+                    source: source_name.to_owned(),
+                    line: 1,
+                    column: 1,
+                    message: "ROM sections overlap previously emitted output".to_owned(),
+                });
+                continue;
+            }
+            image[offset..offset + segment.bytes.len()].copy_from_slice(&segment.bytes);
+            written[offset..offset + segment.bytes.len()].fill(true);
+        }
+    }
+    if !fixed_written[0x3ffa..0x4000].iter().all(|value| *value) {
+        diagnostics.push(Diagnostic {
+            source: source_name.to_owned(),
+            line: 1,
+            column: 1,
+            message: "fixed ROM must explicitly provide NMI, RESET, and IRQ vectors at $FFFA-$FFFF"
+                .to_owned(),
+        });
+    }
+    let reset = u16::from_le_bytes([fixed[0x3ffc], fixed[0x3ffd]]);
+    if !(reset <= 0x7fff || reset >= 0xc100) {
+        diagnostics.push(Diagnostic {
+            source: source_name.to_owned(),
+            line: 1,
+            column: 1,
+            message: "RESET vector must point to main RAM or fixed ROM".to_owned(),
+        });
+    }
+    if diagnostics.is_empty() {
+        Ok(AssembledCartridge { fixed_rom: fixed, rom_banks: banks, symbols: public_symbols })
+    } else {
+        Err(diagnostics)
+    }
+}
+
+fn replace_bankof(
+    operand: &str,
+    owners: &BTreeMap<String, (usize, CartridgeSection)>,
+    source: &str,
+    line: usize,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> String {
+    let mut result = operand.to_owned();
+    let mut search = 0;
+    loop {
+        let upper = result.to_ascii_uppercase();
+        let Some(relative) = upper[search..].find("BANKOF(") else { break };
+        let start = search + relative;
+        let name_start = start + 7;
+        let Some(close_relative) = upper[name_start..].find(')') else {
+            diagnostics.push(Diagnostic {
+                source: source.to_owned(),
+                line,
+                column: 1,
+                message: "BANKOF is missing a closing parenthesis".to_owned(),
+            });
+            break;
+        };
+        let close = name_start + close_relative;
+        let name = upper[name_start..close].trim();
+        let replacement = match owners.get(name) {
+            Some((_, CartridgeSection::Bank(bank))) => Some(bank.to_string()),
+            Some((_, CartridgeSection::Fixed)) | None => None,
+        };
+        let Some(replacement) = replacement else {
+            diagnostics.push(Diagnostic {
+                source: source.to_owned(),
+                line,
+                column: 1,
+                message: format!("BANKOF requires a switchable-bank label: {name}"),
+            });
+            break;
+        };
+        result.replace_range(start..=close, &replacement);
+        search = start + replacement.len();
+    }
+    result
 }
 
 fn source_lines(name: &str, source: &str) -> Vec<SourceLine> {
@@ -319,8 +670,15 @@ fn plan_program(
     statements: &[Statement],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Vec<PlannedLine>, BTreeMap<String, i32>) {
+    plan_program_seeded(statements, diagnostics, BTreeMap::new())
+}
+
+fn plan_program_seeded(
+    statements: &[Statement],
+    diagnostics: &mut Vec<Diagnostic>,
+    mut symbols: BTreeMap<String, i32>,
+) -> (Vec<PlannedLine>, BTreeMap<String, i32>) {
     let mut plan = Vec::new();
-    let mut symbols = BTreeMap::new();
     let mut address = 0u16;
     for statement in statements {
         if let Some(label) = &statement.label
@@ -463,8 +821,18 @@ fn emit_program(
     let origin = plan.iter().find(|line| line.size > 0).map_or(0, |line| line.address);
     let mut cursor = origin;
     let mut bytes = Vec::new();
+    let mut segments = Vec::<AssembledSegment>::new();
+    let mut segment = None::<AssembledSegment>;
     for line in plan {
-        if matches!(line.kind, PlanKind::Origin | PlanKind::Empty) {
+        if matches!(line.kind, PlanKind::Origin) {
+            if let Some(previous) = segment.take()
+                && !previous.bytes.is_empty()
+            {
+                segments.push(previous);
+            }
+            continue;
+        }
+        if matches!(line.kind, PlanKind::Empty) {
             continue;
         }
         if line.address < cursor {
@@ -473,15 +841,24 @@ fn emit_program(
         }
         bytes.resize(bytes.len() + usize::from(line.address - cursor), 0);
         cursor = line.address;
-        let before = bytes.len();
-        emit_line(line, &symbols, &mut bytes, diagnostics);
-        cursor = cursor.wrapping_add((bytes.len() - before) as u16);
+        let mut line_bytes = Vec::with_capacity(line.size);
+        emit_line(line, &symbols, &mut line_bytes, diagnostics);
+        bytes.extend_from_slice(&line_bytes);
+        let active = segment
+            .get_or_insert_with(|| AssembledSegment { origin: line.address, bytes: Vec::new() });
+        active.bytes.extend_from_slice(&line_bytes);
+        cursor = cursor.wrapping_add(line_bytes.len() as u16);
+    }
+    if let Some(previous) = segment
+        && !previous.bytes.is_empty()
+    {
+        segments.push(previous);
     }
     let public_symbols = symbols
         .into_iter()
         .filter_map(|(name, value)| u16::try_from(value).ok().map(|value| (name, value)))
         .collect();
-    Ok(AssembledProgram { origin, bytes, symbols: public_symbols })
+    Ok(AssembledProgram { origin, bytes, symbols: public_symbols, segments })
 }
 
 fn emit_line(
@@ -1096,6 +1473,8 @@ fn is_known_operation(operation: &str) -> bool {
                 | "PUT"
                 | "USE"
                 | "INCLUDE"
+                | "BANK"
+                | "FIXED"
                 | "MAC"
                 | "EOM"
                 | "PMC"
@@ -1391,5 +1770,42 @@ HERE     EQU   *
         let diagnostics = assemble(source).unwrap_err();
         assert!(diagnostics.iter().any(|error| error.line == 2 && error.message.contains("8-bit")));
         assert!(diagnostics.iter().any(|error| error.line == 3 && error.message.contains("range")));
+    }
+
+    #[test]
+    fn cartridge_sections_pack_banks_and_resolve_bank_aware_symbols() {
+        let source = r#"
+         BANK  2
+         ORG   $8000
+LEVEL    DFB   $42
+         FIXED
+         ORG   $C100
+RESET    LDA   #BANKOF(LEVEL)
+         LDX   LEVEL
+LOOP     JMP   LOOP
+NMI      RTI
+IRQ      RTI
+         ORG   $FFFA
+         DA    NMI,RESET,IRQ
+"#;
+        let program =
+            assemble_cartridge_with_loader("cart.asm", source, |_| unreachable!()).unwrap();
+        assert_eq!(program.rom_banks.len(), 3);
+        assert_eq!(program.rom_banks[0], [0xff; 0x4000]);
+        assert_eq!(program.rom_banks[2][0], 0x42);
+        assert_eq!(&program.fixed_rom[0x100..0x105], &[0xa9, 2, 0xae, 0x00, 0x80]);
+        assert_eq!(program.symbols["LEVEL"].section, SymbolSection::Bank(2));
+        assert_eq!(program.symbols["RESET"].address, 0xc100);
+        assert_eq!(program.symbols["NMI"].address, 0xc108);
+        assert_eq!(&program.fixed_rom[0x3ffa..], &[0x08, 0xc1, 0x00, 0xc1, 0x09, 0xc1]);
+    }
+
+    #[test]
+    fn cartridge_sections_reject_hidden_io_overlap_and_missing_vectors() {
+        let source = " FIXED\n ORG $C000\n DFB 1";
+        let diagnostics =
+            assemble_cartridge_with_loader("bad.asm", source, |_| unreachable!()).unwrap_err();
+        assert!(diagnostics.iter().any(|error| error.message.contains("hidden")));
+        assert!(diagnostics.iter().any(|error| error.message.contains("vectors")));
     }
 }

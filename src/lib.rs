@@ -2,8 +2,12 @@
 
 pub mod assembler;
 pub mod audio;
+pub mod cartridge;
 mod cpu;
+pub mod debugger;
 pub mod machine;
+pub mod project;
+pub mod system;
 pub mod video;
 
 pub use cpu::{Bus, ClockResult, Cpu, Pins, Status};

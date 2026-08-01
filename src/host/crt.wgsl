@@ -154,14 +154,6 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     color += (bloom_horizontal * 0.026 + bloom_vertical * 0.018 + bloom_diagonal * 0.006)
         * bloom_strength;
 
-    // Native editor glyphs use the 8x8 character ROM. Apply this after bloom
-    // so the halo cannot wash the gradient back out: the top keeps its final
-    // reconstructed color while the bottom of each cell is 20% darker.
-    if text_mode {
-        let glyph_row = fract(floor(source_position.y) / 8.0) * (8.0 / 7.0);
-        color *= 1.0 - glyph_row * 0.20;
-    }
-
     let snow = hash_noise(floor(screen_position) + vec2<f32>(frame * 17.0, frame * 23.0));
     color += vec3<f32>((snow - 0.5) * 0.003);
     return vec4<f32>(color, 1.0);

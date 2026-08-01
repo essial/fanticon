@@ -12,8 +12,9 @@ solid-black letterbox or pillarbox bars around it.
 cargo run --release
 ```
 
-After boot, the host displays its native 80×50 Editor command console. It does not
-run a cartridge yet. The console uses the same indexed-color and CRT presentation
+After boot, the host displays its native 80×50 Editor command console. `RUN`
+builds and launches the current cartridge project, while `RUN GAME.FCN` launches
+an existing image. The console uses the same indexed-color and CRT presentation
 path as a game, but not the VM's 320×200 framebuffer or raster hardware.
 
 Before the diagnostic screen, the app presents the centered Fanticon logo for
@@ -36,9 +37,9 @@ running multiple VM frames in a burst. After a long debugger stop, suspended
 browser tab, or system sleep, the schedule rebases to current time. This prevents
 a catch-up spiral while keeping ordinary frames phase-stable.
 
-The current tick advances and renders the native editor console. In Game mode,
-CPU cycles, timers, audio, and cartridge execution will be added to
-`FanticonApp::emulate_frame` as those systems are connected.
+The current tick advances either the native editor or exactly 52,400 mapped
+machine cycles in Game mode. Those cycles drive the CPU bus, raster, timers,
+controllers, APU, and cartridge together before presenting the completed frame.
 
 ## Rendering path
 

@@ -1,7 +1,7 @@
 # Fanticon System Details Checklist
 
-The v0.1 programmer-visible hardware contract is now frozen. Implementation may
-be incomplete, but cartridges must not observe behavior outside these documents.
+The v0.1 programmer-visible hardware contract is frozen and implemented by the
+mapped machine, project compiler, cartridge loader, and app Game mode.
 
 ## Locked hardware contracts
 
@@ -47,9 +47,11 @@ These details do not alter VM-visible behavior and can be tuned during host work
 - Recent-cartridge UI and save-lock warning presentation
 - Debugger window layout and keyboard shortcuts
 
-## Required implementation tests
+## Implementation test coverage
 
-Each mapped device still needs end-to-end tests for exact-cycle register access,
-reset, simultaneous events, invalid values, and long-run determinism. Cartridge
-and save parsers need malformed-input and crash-safe persistence tests. The
-packager needs golden `.FCN` files and diagnostics for every invalid layout.
+The test suite covers mapped banking, reset execution, video fetches, timer and
+controller edges, same-cycle IRQ ordering, APU primitives and resampling,
+cartridge/save CRC validation, changed-size save recreation, project packaging,
+section diagnostics, debugger stops, and the complete external 6502 opcode
+suite. Additional regression cases should accompany every future hardware or
+format revision.

@@ -1,3 +1,4 @@
+mod audio_output;
 mod boot_splash;
 mod builder;
 mod character_rom;
@@ -11,7 +12,9 @@ mod ui_colors;
 pub const EDITOR_DISPLAY_WIDTH: usize = 640;
 pub const EDITOR_DISPLAY_HEIGHT: usize = 400;
 
+pub use audio_output::AudioOutput;
 pub use boot_splash::{BootSplash, draw_boot_logo};
+pub use builder::{GameLaunch, write_save};
 pub use frame_pacer::FramePacer;
 pub use renderer::{FrameStatus, Renderer};
 pub use terminal::{AppMode, Terminal, TerminalAction};

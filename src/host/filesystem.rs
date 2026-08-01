@@ -264,6 +264,64 @@ impl ConsoleFilesystem {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn write_binary_atomic(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        let requested = self.normalize_non_root(path)?;
+        match &mut self.backend {
+            #[cfg(not(target_arch = "wasm32"))]
+            Backend::Native { root } => {
+                let parent = canonical_directory(root, &requested[..requested.len() - 1])?;
+                let name = requested.last().expect("non-root file path");
+                let destination =
+                    case_insensitive_child(&parent, name)?.unwrap_or_else(|| parent.join(name));
+                let temporary = parent.join(format!(".{name}.tmp"));
+                {
+                    use std::io::Write;
+                    let mut file = std::fs::File::create(&temporary)
+                        .map_err(|error| io_error("SAVE", error))?;
+                    file.write_all(bytes).map_err(|error| io_error("SAVE", error))?;
+                    file.sync_all().map_err(|error| io_error("SAVE", error))?;
+                }
+                std::fs::rename(&temporary, destination).map_err(|error| io_error("SAVE", error))
+            }
+            #[cfg(any(target_arch = "wasm32", test))]
+            Backend::Memory { directories, files } => {
+                let parent = requested[..requested.len() - 1].to_vec();
+                if !directories.contains(&parent) {
+                    return Err("PARENT DIRECTORY NOT FOUND".to_owned());
+                }
+                files.insert(requested, bytes.to_vec());
+                Ok(())
+            }
+            #[cfg(all(not(target_arch = "wasm32"), not(test)))]
+            Backend::Unavailable(error) => Err(error.clone()),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn acquire_save_lock(&self, path: &str) -> Result<Option<std::fs::File>, String> {
+        use fs2::FileExt;
+        let requested = self.normalize_non_root(path)?;
+        let Backend::Native { root } = &self.backend else {
+            return Ok(None);
+        };
+        let parent = canonical_directory(root, &requested[..requested.len() - 1])?;
+        let name = requested.last().expect("non-root save path");
+        let lock_path = parent.join(format!(".{name}.lock"));
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)
+            .map_err(|error| io_error("SAVE LOCK", error))?;
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(file)),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(io_error("SAVE LOCK", error)),
+        }
+    }
+
     fn normalize(&self, path: &str) -> Result<Vec<String>, String> {
         let path = path.trim();
         if path.is_empty() {

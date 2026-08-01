@@ -1,7 +1,12 @@
+use fanticon::project::{ProjectManifest, generate_cartridge_id};
 use fanticon::video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, Video};
 
-use super::builder::build_file;
-use super::character_rom::{CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH};
+use super::builder::{
+    GameLaunch, build_and_load_project, build_file, build_project, load_cartridge,
+};
+use super::character_rom::{
+    CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, configure_text_gradient, gradient_color,
+};
 use super::filesystem::{DirectoryEntry, SharedFilesystem, shared_filesystem};
 use super::ui_colors::{SharedUiColors, UiColors, parse_palette_index, shared_ui_colors};
 use super::{EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH};
@@ -10,6 +15,7 @@ const DUMP_OFFSET_COLOR: u8 = 251;
 const DUMP_BYTE_COLOR: u8 = 252;
 const DUMP_ASCII_COLOR: u8 = 253;
 const DUMP_ZERO_COLOR: u8 = 254;
+const DEFAULT_PROJECT_SOURCE: &str = "         FIXED\n         ORG   $C100\nRESET    SEI\nLOOP     JMP   LOOP\nNMI      RTI\nIRQ      RTI\n         ORG   $FFFA\n         DA    NMI,RESET,IRQ\n";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AppMode {
@@ -44,6 +50,7 @@ pub enum TerminalAction {
     None,
     SwitchMode(AppMode),
     Edit(Option<String>),
+    Run(GameLaunch),
 }
 
 pub struct Terminal {
@@ -131,11 +138,24 @@ impl Terminal {
         self.mode.display_dimensions()
     }
 
+    /// Resume the command line after an Editor-origin game exits. `RUN` does
+    /// not print its next prompt when it launches, so returning must do so.
+    pub fn resume_after_game(&mut self) {
+        self.prompt();
+    }
+
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
         let (display_width, display_height) = self.mode.display_dimensions();
         debug_assert_eq!(video.dimensions(), (display_width, display_height));
         let colors = self.colors.get();
         configure_dump_palette(video);
+        let gradient = configure_text_gradient(
+            video,
+            self.cell_foregrounds
+                .iter()
+                .map(|color| color.unwrap_or(colors.foreground))
+                .chain([colors.foreground, colors.background]),
+        );
         let pixels = video.pixels_mut();
         pixels.fill(colors.background);
 
@@ -148,9 +168,10 @@ impl Terminal {
                         if bits & (0x80 >> glyph_x) != 0 {
                             let x = cell_x * GLYPH_WIDTH + glyph_x;
                             let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                            pixels[y * display_width + x] = self.cell_foregrounds
-                                [cell_y * self.columns + cell_x]
+                            let foreground = self.cell_foregrounds[cell_y * self.columns + cell_x]
                                 .unwrap_or(colors.foreground);
+                            pixels[y * display_width + x] =
+                                gradient_color(&gradient, foreground, glyph_y);
                         }
                     }
                 }
@@ -173,9 +194,9 @@ impl Terminal {
         match name.as_str() {
             "" => TerminalAction::None,
             "HELP" => {
-                self.write("HELP CLS MODE EDITOR GAME EDIT\n");
+                self.write("HELP CLS MODE EDITOR GAME EDIT NEW\n");
                 self.write("ECHO VERSION COLOR CD MKDIR\n");
-                self.write("RMDIR DIR LS ASM BUILD DUMP\n");
+                self.write("RMDIR DIR LS ASM BUILD RUN DUMP\n");
                 TerminalAction::None
             }
             "CLS" | "CLEAR" => {
@@ -204,10 +225,13 @@ impl Terminal {
                 TerminalAction::None
             }
             "EDIT" => TerminalAction::Edit((!arguments.is_empty()).then(|| arguments.to_owned())),
-            "ASM" | "BUILD" => {
-                self.build(arguments);
+            "NEW" => {
+                self.new_project(arguments);
                 TerminalAction::None
             }
+            "ASM" => self.build_raw(arguments),
+            "BUILD" => self.build(arguments),
+            "RUN" => self.run(arguments),
             "DUMP" => {
                 self.dump(arguments);
                 TerminalAction::None
@@ -310,11 +334,11 @@ impl Terminal {
         }
     }
 
-    fn build(&mut self, arguments: &str) {
+    fn build_raw(&mut self, arguments: &str) -> TerminalAction {
         let fields = arguments.split_whitespace().collect::<Vec<_>>();
         if fields.is_empty() || fields.len() > 2 {
-            self.write_error("USAGE: BUILD SOURCE [OUTPUT]");
-            return;
+            self.write_error("USAGE: ASM SOURCE [OUTPUT]");
+            return TerminalAction::None;
         }
         match build_file(&self.filesystem, fields[0], fields.get(1).copied()) {
             Ok(success) => {
@@ -332,6 +356,87 @@ impl Terminal {
                     ));
                 }
             }
+        }
+        TerminalAction::None
+    }
+
+    fn build(&mut self, arguments: &str) -> TerminalAction {
+        if !arguments.is_empty() {
+            return self.build_raw(arguments);
+        }
+        match build_project(&self.filesystem) {
+            Ok(success) => {
+                self.write(&format!("BUILT {}\n", success.output));
+                self.write(&format!(
+                    "{}  {} BANK(S)  {} BYTES\n",
+                    success.title, success.banks, success.size
+                ));
+            }
+            Err(diagnostics) => self.write_diagnostics(diagnostics),
+        }
+        TerminalAction::None
+    }
+
+    fn run(&mut self, arguments: &str) -> TerminalAction {
+        let result = if arguments.is_empty() {
+            build_and_load_project(&self.filesystem)
+        } else if arguments.split_whitespace().count() == 1 {
+            load_cartridge(&self.filesystem, arguments)
+        } else {
+            self.write_error("USAGE: RUN [CARTRIDGE.FCN]");
+            return TerminalAction::None;
+        };
+        match result {
+            Ok(launch) => TerminalAction::Run(launch),
+            Err(diagnostics) => {
+                self.write_diagnostics(diagnostics);
+                TerminalAction::None
+            }
+        }
+    }
+
+    fn write_diagnostics(&mut self, diagnostics: Vec<fanticon::assembler::Diagnostic>) {
+        self.write(&format!("{} ERROR(S)\n", diagnostics.len()));
+        for diagnostic in diagnostics {
+            self.write(&format!(
+                "{}:{}:{} {}\n",
+                diagnostic.source, diagnostic.line, diagnostic.column, diagnostic.message
+            ));
+        }
+    }
+
+    fn new_project(&mut self, name: &str) {
+        if name.is_empty() || name.split_whitespace().count() != 1 {
+            self.write_error("USAGE: NEW PROJECT");
+            return;
+        }
+        let id = match generate_cartridge_id() {
+            Ok(id) => id,
+            Err(error) => {
+                self.write_error(&error);
+                return;
+            }
+        };
+        let output_stem = name.split('.').next().unwrap_or(name);
+        let output = format!("{}.fcn", &output_stem[..output_stem.len().min(8)]);
+        let title = name.to_ascii_uppercase();
+        let manifest = match ProjectManifest::template(&title, "main.asm", &output, 0, id) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                self.write_error(&error);
+                return;
+            }
+        };
+        let result = (|| {
+            self.filesystem.borrow_mut().create_directory(name)?;
+            self.filesystem.borrow_mut().change_directory(name)?;
+            self.filesystem.borrow_mut().write_text("fanticon.cfg", &manifest)?;
+            self.filesystem.borrow_mut().write_text("main.asm", DEFAULT_PROJECT_SOURCE)?;
+            Ok::<(), String>(())
+        })();
+        match result {
+            Ok(()) => self.write(&format!("CREATED /{}\n", name.to_ascii_lowercase())),
+            Err(error) => self.write_error(&error),
         }
     }
 
@@ -561,6 +666,22 @@ mod tests {
         assert_eq!(terminal.mode, AppMode::Editor);
         assert_eq!((terminal.columns, terminal.rows), (80, 50));
         assert_eq!(type_command(&mut terminal, "mode"), TerminalAction::None);
+    }
+
+    #[test]
+    fn returning_from_game_prints_a_fresh_prompt() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        terminal.input_character('R');
+        terminal.input_character('U');
+        terminal.input_character('N');
+        terminal.newline();
+        let cursor_before = (terminal.cursor_x, terminal.cursor_y);
+        terminal.resume_after_game();
+        assert_eq!(terminal.cursor_y, cursor_before.1);
+        assert!(terminal.cursor_x > cursor_before.0);
+        let row = &terminal.cells
+            [terminal.cursor_y * terminal.columns..(terminal.cursor_y + 1) * terminal.columns];
+        assert!(row.starts_with(b"/> "));
     }
 
     #[test]

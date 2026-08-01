@@ -1,7 +1,8 @@
 # Fanticon
 
-Fanticon is a high-performance fantasy-console project. This repository currently
-contains its cycle-accurate NMOS MOS 6502 CPU foundation.
+Fanticon is a high-performance fantasy console with a cycle-accurate NMOS 6502,
+mapped late-1980s-style video/audio/input hardware, native development tools, and
+versioned bank-switched cartridges.
 
 ## Why Rust
 
@@ -9,8 +10,7 @@ The CPU implementation is allocation-free and has no runtime dependency on the
 app host. Build the library with `--no-default-features` to omit all windowing and
 GPU dependencies. Rust compiles to native Windows, Linux, and macOS targets and
 to WebAssembly from the same source. Every `Bus::read` or `Bus::write` is one
-physical CPU cycle, allowing future video, audio, timers, and input hardware to
-remain synchronized.
+physical CPU cycle, keeping video, audio, timers, and input hardware synchronized.
 
 The core implements all 256 NMOS opcodes, including undocumented instructions and
 their dummy reads/writes. `Cpu::step` executes one instruction and returns its
@@ -56,6 +56,17 @@ guard. The native Editor mode command console then appears by default.
 ```sh
 cargo run --release
 ```
+
+Inside Fanticon, `NEW PROJECT`, `BUILD`, and `RUN` create, package, and launch a
+cartridge project. An existing image can be launched with `RUN GAME.FCN`, or
+directly from the host:
+
+```sh
+cargo run --release -- /path/to/GAME.FCN
+```
+
+Directly launched games ignore Escape. Games launched by Editor `RUN` return to
+the Editor with Escape after flushing battery-backed RAM.
 
 Start explicitly in Game mode instead:
 
@@ -140,7 +151,7 @@ rustup target add wasm32-unknown-unknown
 cargo build --release --target wasm32-unknown-unknown
 ```
 
-The `cdylib` output supports a future WebAssembly-facing API while `rlib` is the
+The `cdylib` output is the WebAssembly-facing library while `rlib` is the
 zero-overhead native integration path.
 
 CI builds and tests the library on Windows, Linux, and macOS, and separately

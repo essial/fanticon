@@ -1,9 +1,8 @@
 # Fanticon 6502 Macro Assembler
 
-This document describes current raw `.BIN` assembly. The frozen cartridge-build
-extensions—`FANTICON.CFG`, `BANK`, `FIXED`, and `BANKOF`—are specified in the
-[Fanticon Cartridge Projects](cartridge-projects.md) guide and remain to be
-implemented.
+Fanticon supports both raw `.BIN` assembly and project cartridge builds. The
+`FANTICON.CFG`, `BANK`, `FIXED`, and `BANKOF` extensions are described in the
+[Fanticon Cartridge Projects](cartridge-projects.md) guide.
 
 Fanticon includes a native two-pass assembler for writing programs for its NMOS
 6502 VM. It accepts Merlin-inspired source, expands includes and macros, resolves
@@ -12,10 +11,9 @@ labels, and writes a raw `.BIN` file. The binary contains only emitted bytes: th
 
 ## Building
 
-At the Fanticon command prompt, build a source file with either command:
+At the Fanticon command prompt, assemble a raw source file with `ASM`:
 
 ```text
-BUILD GAME.ASM
 ASM GAME.ASM
 ```
 
@@ -23,7 +21,7 @@ The default output replaces the source extension with `.BIN`. Supply a second
 8.3 path to choose it explicitly:
 
 ```text
-BUILD GAME.ASM CART.BIN
+ASM GAME.ASM CART.BIN
 ```
 
 In the editor, open or save an `.ASM` or `.INC` file and use **Build > Assemble**,
@@ -41,6 +39,11 @@ diagnostics. The command prompt prints every diagnostic as:
 ```text
 source:line:column message
 ```
+
+With a `FANTICON.CFG` in the current directory, `BUILD` packages the complete
+project as a validated `.FCN`; `RUN` builds and launches it. **Build > Build &
+Run** or Shift+F5 performs the same operation from the editor. `RUN GAME.FCN`
+validates and launches an existing image.
 
 ## Source layout
 

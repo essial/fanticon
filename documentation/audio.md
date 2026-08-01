@@ -156,11 +156,14 @@ integer rational equations and produces unsigned Q0.16 output, so results are
 bit-identical on native and WebAssembly hosts. This preserves NES-like nonlinear
 balance without requiring floating-point VM state.
 
-The presentation layer removes DC, applies a gentle reconstruction low-pass,
-and resamples the cycle-timestamped signal to the host rate. It then presents
-the mono hardware mix with light stereo width and a short, subdued reverb. The
-dry signal remains centered and dominant; the effect must not turn pulse or
-noise attacks into obviously displaced echoes.
+The presentation layer applies a source-rate-aware 20 Hz DC blocker followed by
+a two-pole 14 kHz reconstruction filter before it downsamples the cycle-timestamped
+signal to the host rate. This suppresses aliases and softens instantaneous digital
+level edges without changing emulated register timing. It then presents the mono
+hardware mix with stereo width and a short, subdued reverb. Differently delayed
+taps feed the left and right sides, with a small cross-subtraction that decorrelates
+sustained chip tones. The centered dry signal remains dominant; the effect must
+not turn pulse or noise attacks into obviously displaced echoes.
 
 Stereo and reverb are host presentation, not additional VM channels. They cannot
 feed back into APU state, consume CPU cycles, change VM timing, or appear in a
@@ -187,6 +190,32 @@ sequencer, sample channel, audio IRQ, or game-controlled stereo panning. A game
 normally updates volume and timer registers from VBlank or an interval-timer IRQ.
 This keeps the familiar four-voice sound while avoiding the NES APU's more
 incidental control complexity.
+
+## Editor NSF compatibility
+
+The editor music radio runs NSF code in an isolated NMOS 6502 environment at the
+declared NTSC or PAL rate. It supports NSF1 load/init/play addresses, the default
+start track, playback speed fields, 4 KiB program banking, internal RAM mirrors,
+and the two pulse, triangle, and noise register groups.
+
+The player feeds those four voices through the same waveform tables, LFSR,
+integer nonlinear mixer, host resampler, stereo width, and reverb used by a
+Fanticon cartridge. Its source clock remains NES-rate so NSF timer values retain
+their intended pitch.
+
+Fanticon's radio does not add a fifth DMC/sample voice or cartridge expansion
+audio. NSF files declaring FDS, MMC5, VRC6, VRC7, Namco 163, Sunsoft 5B, or other
+expansion audio are rejected. Writes to the base NES DMC registers are ignored;
+the four ordinary voices continue playing. The isolated NSF frontend implements
+the NES pulse/noise envelopes, pulse/noise/triangle length counters, triangle
+linear counter, and NTSC/PAL frame clocks, then feeds their resulting four voice
+levels into Fanticon's shared waveform and mixer logic. NSF channel gates use a
+1 ms post-mix step correction when a driver starts or expires a nonzero-volume
+note. The correction begins at the preceding high-resolution mixed sample and
+decays to the new level, so it does not quantize or repeatedly round an active
+voice's four-bit volume. Oscillator waveform edges pass unchanged. Pulse sweep
+units and frame IRQs remain unsupported. These NSF-only controls do not add the
+NES control units to Fanticon's simpler in-game sound register model.
 
 ## Reference basis
 

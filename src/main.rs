@@ -12,7 +12,7 @@ use fanticon::{
 };
 use host::{
     AppMode, AudioOutput, BootSplash, DebugCommand, EditorAction, FramePacer, FrameStatus,
-    Renderer, Terminal, TerminalAction, TextEditor, draw_boot_logo,
+    MusicCommand, MusicRadio, Renderer, Terminal, TerminalAction, TextEditor, draw_boot_logo,
 };
 use web_time::Instant;
 use winit::{
@@ -41,6 +41,7 @@ struct FanticonApp {
     modifiers: ModifiersState,
     game: Option<GameSession>,
     audio_output: Option<AudioOutput>,
+    music: MusicRadio,
     mouse_position: Option<PhysicalPosition<f64>>,
 }
 
@@ -88,6 +89,7 @@ impl FanticonApp {
             audio_output: AudioOutput::new()
                 .map_err(|error| eprintln!("Fanticon audio disabled: {error}"))
                 .ok(),
+            music: MusicRadio::new(),
             mouse_position: None,
         }
     }
@@ -348,8 +350,15 @@ impl FanticonApp {
             self.video = Video::new_with_size(dimensions.0, dimensions.1);
         }
 
+        if let Some(frame) = self.music.render_frame()
+            && let Some(audio) = &self.audio_output
+        {
+            audio.submit_at_rate(frame.samples, frame.source_rate);
+        }
+
         let cursor_visible = (self.frame_number / 30).is_multiple_of(2);
         if let Some(editor) = &mut self.text_editor {
+            editor.set_music_status(self.music.status());
             let action = editor.update();
             if let EditorAction::Run(launch) = action {
                 self.start_game(launch, true);
@@ -374,13 +383,16 @@ impl FanticonApp {
         match action {
             TerminalAction::SwitchMode(mode) => self.terminal.switch_mode(mode),
             TerminalAction::Edit(filename) => {
-                self.text_editor = Some(TextEditor::new(
-                    self.terminal.filesystem(),
-                    self.terminal.colors(),
-                    filename,
-                ));
+                let mut editor =
+                    TextEditor::new(self.terminal.filesystem(), self.terminal.colors(), filename);
+                editor.set_music_status(self.music.status());
+                self.text_editor = Some(editor);
             }
             TerminalAction::Run(launch) => self.start_game(launch, true),
+            TerminalAction::Music(command) => {
+                let result = self.apply_music_command(command);
+                self.terminal.finish_music_command(result);
+            }
             TerminalAction::None => {}
         }
     }
@@ -390,8 +402,29 @@ impl FanticonApp {
             EditorAction::Exit => self.text_editor = None,
             EditorAction::Run(launch) => self.start_game(launch, true),
             EditorAction::Debug(command) => self.apply_debug_command(command),
+            EditorAction::Music(command) => {
+                let _ = self.apply_music_command(command);
+            }
             EditorAction::None => {}
         }
+    }
+
+    fn apply_music_command(&mut self, command: MusicCommand) -> Result<String, String> {
+        if matches!(
+            command,
+            MusicCommand::Load { .. }
+                | MusicCommand::Stop
+                | MusicCommand::Next
+                | MusicCommand::Previous
+        ) && let Some(audio) = &self.audio_output
+        {
+            audio.clear();
+        }
+        let result = self.music.apply(command);
+        if let Some(editor) = &mut self.text_editor {
+            editor.set_music_status(self.music.status());
+        }
+        result
     }
 
     fn apply_debug_command(&mut self, command: DebugCommand) {
@@ -437,6 +470,9 @@ impl FanticonApp {
     }
 
     fn start_game(&mut self, launch: host::GameLaunch, launched_from_editor: bool) {
+        if let Some(audio) = &self.audio_output {
+            audio.clear();
+        }
         #[cfg(target_arch = "wasm32")]
         let machine = FanticonMachine::new(launch.cartridge, Some(launch.save_ram));
         #[cfg(not(target_arch = "wasm32"))]

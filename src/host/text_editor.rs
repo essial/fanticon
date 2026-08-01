@@ -10,6 +10,7 @@ use fanticon::{
 };
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
+use super::nsf_player::{MusicCommand, MusicStatus};
 use super::{
     EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH,
     builder::{GameLaunch, build_and_load_project, build_project, build_source},
@@ -48,6 +49,8 @@ const ASM_ERROR_COLOR: u8 = 247;
 const UI_WHITE_COLOR: u8 = 248;
 const UI_ERROR_BACKGROUND: u8 = 249;
 const UI_SUCCESS_BACKGROUND: u8 = 250;
+const UI_DEBUG_CURRENT_BACKGROUND: u8 = 251;
+const UI_BREAKPOINT_BACKGROUND: u8 = 252;
 const BUILD_PROGRESS_FRAMES: u8 = 8;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -103,6 +106,7 @@ enum MenuKind {
     Edit,
     Build,
     Debug,
+    Music,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,6 +199,7 @@ pub enum EditorAction {
     Exit,
     Run(GameLaunch),
     Debug(DebugCommand),
+    Music(MusicCommand),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -251,6 +256,9 @@ pub struct TextEditor {
     debug_snapshot: Option<DebugSnapshot>,
     debug_active: bool,
     debug_location: Option<(String, usize)>,
+    music_status: Option<MusicStatus>,
+    music_marquee_frame: u8,
+    music_marquee_offset: usize,
 }
 
 impl TextEditor {
@@ -298,6 +306,9 @@ impl TextEditor {
             debug_snapshot: None,
             debug_active: false,
             debug_location: None,
+            music_status: None,
+            music_marquee_frame: 0,
+            music_marquee_offset: 0,
         };
         if let Some(filename) = filename
             && let Err(error) = editor.load(&filename)
@@ -415,6 +426,26 @@ impl TextEditor {
             self.start_build(true);
             return EditorAction::None;
         }
+        if matches!(key, Key::Named(NamedKey::F7)) {
+            let Some(status) = &self.music_status else { return EditorAction::None };
+            if modifiers.shift_key() {
+                return EditorAction::Music(MusicCommand::Stop);
+            }
+            return EditorAction::Music(if status.paused {
+                MusicCommand::Play
+            } else {
+                MusicCommand::Pause
+            });
+        }
+        if matches!(key, Key::Named(NamedKey::F8)) && self.music_status.is_some() {
+            return EditorAction::Music(if modifiers.control_key() || modifiers.super_key() {
+                MusicCommand::ToggleLoop
+            } else if modifiers.shift_key() {
+                MusicCommand::Previous
+            } else {
+                MusicCommand::Next
+            });
+        }
         if matches!(key, Key::Named(NamedKey::F9)) {
             return self.toggle_source_breakpoint();
         }
@@ -452,6 +483,7 @@ impl TextEditor {
                 PhysicalKey::Code(KeyCode::KeyE) => self.open_menu(MenuKind::Edit),
                 PhysicalKey::Code(KeyCode::KeyB) => self.open_menu(MenuKind::Build),
                 PhysicalKey::Code(KeyCode::KeyD) => self.open_menu(MenuKind::Debug),
+                PhysicalKey::Code(KeyCode::KeyM) => self.open_menu(MenuKind::Music),
                 _ => {}
             }
             return EditorAction::None;
@@ -512,6 +544,13 @@ impl TextEditor {
     }
 
     pub fn update(&mut self) -> EditorAction {
+        if self.music_status.is_some() {
+            self.music_marquee_frame += 1;
+            if self.music_marquee_frame >= 20 {
+                self.music_marquee_frame = 0;
+                self.music_marquee_offset = self.music_marquee_offset.wrapping_add(1);
+            }
+        }
         let run_build = match &mut self.overlay {
             Overlay::Building { frames_remaining: 0 } => true,
             Overlay::Building { frames_remaining } => {
@@ -563,6 +602,19 @@ impl TextEditor {
             self.ensure_cursor_visible();
         }
         self.overlay = Overlay::None;
+    }
+
+    pub fn set_music_status(&mut self, status: Option<MusicStatus>) {
+        let changed = self
+            .music_status
+            .as_ref()
+            .map(|current| (&current.filename, &current.title, current.track))
+            != status.as_ref().map(|current| (&current.filename, &current.title, current.track));
+        if changed {
+            self.music_marquee_frame = 0;
+            self.music_marquee_offset = 0;
+        }
+        self.music_status = status;
     }
 
     pub fn stop_debug_session(&mut self) {
@@ -1603,7 +1655,13 @@ impl TextEditor {
         let mut foregrounds = [foreground; COLUMNS * ROWS];
         let mut backgrounds = [background; COLUMNS * ROWS];
 
-        put_text(&mut cells, 0, 0, " FILE  EDIT  BUILD  DEBUG");
+        put_text(&mut cells, 0, 0, " FILE  EDIT  BUILD  DEBUG  MUSIC");
+        if let Some(status) = &self.music_status {
+            let text = status.display_marquee(self.music_marquee_offset);
+            let start = COLUMNS.saturating_sub(text.len());
+            put_text_width(&mut cells, start, 0, &text, COLUMNS - start);
+            backgrounds[start..COLUMNS].fill(UI_SUCCESS_BACKGROUND);
+        }
         inverse[..COLUMNS].fill(true);
         foregrounds[..COLUMNS].fill(UI_WHITE_COLOR);
 
@@ -1629,19 +1687,35 @@ impl TextEditor {
                 inverse[index] = self.position_selected(position);
             }
             let row = screen_y + EDITOR_FIRST_ROW;
-            if self.line_has_breakpoint(line_index) {
-                put_cell(&mut cells, EDITOR_START, row, b'@');
-                foregrounds[row * COLUMNS + EDITOR_START] = UI_WHITE_COLOR;
-            }
-            if self.debug_location.as_ref().is_some_and(|(source, line)| {
+            let breakpoint = self.line_has_breakpoint(line_index);
+            let executing = self.debug_location.as_ref().is_some_and(|(source, line)| {
                 *line == line_index
                     && self
                         .filename
                         .as_deref()
                         .is_some_and(|filename| filename.eq_ignore_ascii_case(source))
-            }) {
+            });
+            if breakpoint {
+                put_cell(&mut cells, EDITOR_START, row, b'@');
+                foregrounds[row * COLUMNS + EDITOR_START] = UI_WHITE_COLOR;
+            }
+            if executing {
                 put_cell(&mut cells, EDITOR_START + 1, row, SYMBOL_ARROW_RIGHT);
                 foregrounds[row * COLUMNS + EDITOR_START + 1] = UI_WHITE_COLOR;
+            }
+            if executing || breakpoint {
+                let start = row * COLUMNS + EDITOR_START;
+                let end = row * COLUMNS + COLUMNS;
+                foregrounds[start..end].fill(UI_WHITE_COLOR);
+                backgrounds[start..end].fill(if executing {
+                    UI_DEBUG_CURRENT_BACKGROUND
+                } else {
+                    UI_BREAKPOINT_BACKGROUND
+                });
+                inverse[start..end].fill(false);
+                if executing && breakpoint {
+                    backgrounds[start] = UI_BREAKPOINT_BACKGROUND;
+                }
             }
         }
 
@@ -2002,6 +2076,25 @@ impl TextEditor {
                 self.source_breakpoints.clear();
                 return EditorAction::Debug(DebugCommand::ClearBreakpoints);
             }
+            (MenuKind::Music, 0) if self.music_status.is_some() => {
+                return EditorAction::Music(if self.music_status.as_ref().unwrap().paused {
+                    MusicCommand::Play
+                } else {
+                    MusicCommand::Pause
+                });
+            }
+            (MenuKind::Music, 1) if self.music_status.is_some() => {
+                return EditorAction::Music(MusicCommand::Previous);
+            }
+            (MenuKind::Music, 2) if self.music_status.is_some() => {
+                return EditorAction::Music(MusicCommand::Next);
+            }
+            (MenuKind::Music, 3) if self.music_status.is_some() => {
+                return EditorAction::Music(MusicCommand::ToggleLoop);
+            }
+            (MenuKind::Music, 5) if self.music_status.is_some() => {
+                return EditorAction::Music(MusicCommand::Stop);
+            }
             _ => {}
         }
         EditorAction::None
@@ -2023,6 +2116,7 @@ impl TextEditor {
                     MenuKind::Edit => 6,
                     MenuKind::Build => 12,
                     MenuKind::Debug => 19,
+                    MenuKind::Music => 27,
                 };
                 let width = menu_width(*menu);
                 let y = 1;
@@ -3014,6 +3108,7 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "",
             "CLEAR BREAKS",
         ],
+        MenuKind::Music => &["PLAY/PAUSE", "PREVIOUS", "NEXT", "LOOP", "", "STOP"],
     }
 }
 
@@ -3023,11 +3118,16 @@ const fn menu_origin(menu: MenuKind) -> usize {
         MenuKind::Edit => 6,
         MenuKind::Build => 12,
         MenuKind::Debug => 19,
+        MenuKind::Music => 27,
     }
 }
 
 const fn menu_width(menu: MenuKind) -> usize {
-    if matches!(menu, MenuKind::Debug) { 27 } else { 16 }
+    match menu {
+        MenuKind::Debug => 27,
+        MenuKind::Music => 26,
+        _ => 16,
+    }
 }
 
 const fn menu_bar_hit(column: usize) -> Option<MenuKind> {
@@ -3036,6 +3136,7 @@ const fn menu_bar_hit(column: usize) -> Option<MenuKind> {
         6..=11 => Some(MenuKind::Edit),
         12..=18 => Some(MenuKind::Build),
         19..=25 => Some(MenuKind::Debug),
+        27..=33 => Some(MenuKind::Music),
         _ => None,
     }
 }
@@ -3087,6 +3188,14 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "",
             "CLEAR BREAKS          C",
         ],
+        MenuKind::Music => &[
+            "PLAY/PAUSE          F7",
+            "PREVIOUS      SHIFT+F8",
+            "NEXT                F8",
+            "LOOP       CTRL/CMD+F8",
+            "",
+            "STOP          SHIFT+F7",
+        ],
     }
 }
 
@@ -3111,6 +3220,7 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
         MenuKind::Debug => {
             &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c")]
         }
+        MenuKind::Music => &[(0, "p"), (1, "r"), (2, "n"), (3, "l"), (5, "s")],
     };
     hotkeys.iter().find_map(|(index, hotkey)| (*hotkey == key).then_some(*index))
 }
@@ -3134,8 +3244,9 @@ const fn adjacent_menu(menu: MenuKind, forward: bool) -> MenuKind {
     match (menu, forward) {
         (MenuKind::File, true) | (MenuKind::Build, false) => MenuKind::Edit,
         (MenuKind::Edit, true) | (MenuKind::Debug, false) => MenuKind::Build,
-        (MenuKind::Build, true) | (MenuKind::File, false) => MenuKind::Debug,
-        (MenuKind::Debug, true) | (MenuKind::Edit, false) => MenuKind::File,
+        (MenuKind::Build, true) | (MenuKind::Music, false) => MenuKind::Debug,
+        (MenuKind::Debug, true) | (MenuKind::File, false) => MenuKind::Music,
+        (MenuKind::Music, true) | (MenuKind::Edit, false) => MenuKind::File,
     }
 }
 
@@ -3274,10 +3385,20 @@ fn render_cells(
                 (foregrounds[index], backgrounds[index])
             };
             if cell_background != background {
-                for y in cell_y * GLYPH_HEIGHT..(cell_y + 1) * GLYPH_HEIGHT {
+                let shaded_background = matches!(
+                    cell_background,
+                    UI_DEBUG_CURRENT_BACKGROUND | UI_BREAKPOINT_BACKGROUND
+                );
+                for glyph_y in 0..GLYPH_HEIGHT {
+                    let y = cell_y * GLYPH_HEIGHT + glyph_y;
+                    let color = if shaded_background {
+                        gradient_color(&gradient, cell_background, glyph_y)
+                    } else {
+                        cell_background
+                    };
                     pixels[y * EDITOR_DISPLAY_WIDTH + cell_x * GLYPH_WIDTH
                         ..y * EDITOR_DISPLAY_WIDTH + (cell_x + 1) * GLYPH_WIDTH]
-                        .fill(cell_background);
+                        .fill(color);
                 }
             }
             let glyph = CHARACTER_ROM[(cells[index] as usize).min(CHARACTER_ROM.len() - 1)];
@@ -3466,6 +3587,10 @@ fn configure_ui_palette(video: &mut Video) {
     video.set_palette(UI_WHITE_COLOR, [255, 255, 255, 255]);
     video.set_palette(UI_ERROR_BACKGROUND, [192, 32, 40, 255]);
     video.set_palette(UI_SUCCESS_BACKGROUND, [32, 80, 192, 255]);
+    // Darkened Catppuccin blue/red keep white debugger text readable. These
+    // two backgrounds receive the same four-step vertical shading as glyphs.
+    video.set_palette(UI_DEBUG_CURRENT_BACKGROUND, [48, 70, 108, 255]);
+    video.set_palette(UI_BREAKPOINT_BACKGROUND, [112, 52, 67, 255]);
 }
 
 fn configure_assembly_palette(video: &mut Video) {
@@ -3862,6 +3987,73 @@ mod tests {
     }
 
     #[test]
+    fn editor_music_radio_shows_status_and_emits_transport_commands() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.set_music_status(Some(MusicStatus {
+            filename: "music.nsf".to_owned(),
+            title: "TEST ALBUM".to_owned(),
+            artist: "COMPOSER".to_owned(),
+            track: 2,
+            tracks: 8,
+            paused: false,
+            looping: true,
+        }));
+        assert_eq!(
+            editor.handle_key(
+                &Key::Named(NamedKey::F7),
+                PhysicalKey::Code(KeyCode::F7),
+                ModifiersState::empty(),
+            ),
+            EditorAction::Music(MusicCommand::Pause)
+        );
+        assert_eq!(
+            editor.handle_key(
+                &Key::Named(NamedKey::F8),
+                PhysicalKey::Code(KeyCode::F8),
+                ModifiersState::empty(),
+            ),
+            EditorAction::Music(MusicCommand::Next)
+        );
+        assert_eq!(
+            editor.handle_key(
+                &Key::Named(NamedKey::F8),
+                PhysicalKey::Code(KeyCode::F8),
+                ModifiersState::SHIFT,
+            ),
+            EditorAction::Music(MusicCommand::Previous)
+        );
+        assert_eq!(
+            editor.handle_key(
+                &Key::Named(NamedKey::F8),
+                PhysicalKey::Code(KeyCode::F8),
+                ModifiersState::SUPER,
+            ),
+            EditorAction::Music(MusicCommand::ToggleLoop)
+        );
+
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut video, false);
+        let labels = menu_labels(MenuKind::Music).iter().filter(|label| !label.is_empty());
+        assert!(labels.clone().all(|label| label.len() == menu_width(MenuKind::Music) - 4));
+        assert_eq!(menu_origin(MenuKind::Music), 27);
+        assert_eq!(menu_bar_hit(26), None);
+        assert_eq!(menu_bar_hit(27), Some(MenuKind::Music));
+
+        let music_text =
+            editor.music_status.as_ref().unwrap().display_marquee(editor.music_marquee_offset);
+        let music_start = COLUMNS - music_text.len();
+        let first_cell = (0..GLYPH_HEIGHT)
+            .flat_map(|y| {
+                let start = y * EDITOR_DISPLAY_WIDTH + music_start * GLYPH_WIDTH;
+                &video.pixels()[start..start + GLYPH_WIDTH]
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(first_cell.contains(&UI_SUCCESS_BACKGROUND));
+        assert!(first_cell.contains(&UI_WHITE_COLOR));
+    }
+
+    #[test]
     fn project_browser_expands_directories_and_opens_text_files() {
         let filesystem = shared_filesystem();
         filesystem.borrow_mut().write_text("main.asm", " NOP").unwrap();
@@ -4130,6 +4322,54 @@ mod tests {
             false,
         );
         assert!(!editor.line_has_breakpoint(0));
+    }
+
+    #[test]
+    fn debugger_rows_use_catppuccin_blue_and_red_with_white_text() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("main.asm", " NOP\n RTS").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+        editor.source_breakpoints.insert(("main.asm".to_owned(), 0));
+        editor.debug_location = Some(("main.asm".to_owned(), 1));
+
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut video, false);
+        let cell_colors = |column: usize, row: usize| {
+            (0..GLYPH_HEIGHT)
+                .flat_map(|glyph_y| {
+                    let start = (row * GLYPH_HEIGHT + glyph_y) * EDITOR_DISPLAY_WIDTH
+                        + column * GLYPH_WIDTH;
+                    &video.pixels()[start..start + GLYPH_WIDTH]
+                })
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        let breakpoint = cell_colors(EDITOR_START, EDITOR_FIRST_ROW);
+        let executing = cell_colors(EDITOR_START + 1, EDITOR_FIRST_ROW + 1);
+
+        assert!(breakpoint.contains(&UI_BREAKPOINT_BACKGROUND));
+        assert!(breakpoint.contains(&UI_WHITE_COLOR));
+        assert!(executing.contains(&UI_DEBUG_CURRENT_BACKGROUND));
+        assert!(executing.contains(&UI_WHITE_COLOR));
+        assert_eq!(video.palette()[UI_DEBUG_CURRENT_BACKGROUND as usize], [48, 70, 108, 255]);
+        assert_eq!(video.palette()[UI_BREAKPOINT_BACKGROUND as usize], [112, 52, 67, 255]);
+
+        let background_gradient = |row: usize| {
+            let x = (COLUMNS - 1) * GLYPH_WIDTH;
+            (0..GLYPH_HEIGHT)
+                .map(|glyph_y| {
+                    let index = (row * GLYPH_HEIGHT + glyph_y) * EDITOR_DISPLAY_WIDTH + x;
+                    video.palette()[video.pixels()[index] as usize]
+                })
+                .collect::<Vec<_>>()
+        };
+        let red_gradient = background_gradient(EDITOR_FIRST_ROW);
+        let blue_gradient = background_gradient(EDITOR_FIRST_ROW + 1);
+        assert_eq!(red_gradient[0], [112, 52, 67, 255]);
+        assert_eq!(blue_gradient[0], [48, 70, 108, 255]);
+        assert!(red_gradient[7][0] < red_gradient[0][0]);
+        assert!(blue_gradient[7][2] < blue_gradient[0][2]);
     }
 
     #[test]

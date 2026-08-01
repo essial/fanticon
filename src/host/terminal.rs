@@ -8,6 +8,7 @@ use super::character_rom::{
     CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, configure_text_gradient, gradient_color,
 };
 use super::filesystem::{DirectoryEntry, SharedFilesystem, shared_filesystem};
+use super::nsf_player::MusicCommand;
 use super::ui_colors::{SharedUiColors, UiColors, parse_palette_index, shared_ui_colors};
 use super::{EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH};
 
@@ -51,6 +52,7 @@ pub enum TerminalAction {
     SwitchMode(AppMode),
     Edit(Option<String>),
     Run(GameLaunch),
+    Music(MusicCommand),
 }
 
 pub struct Terminal {
@@ -144,6 +146,17 @@ impl Terminal {
         self.prompt();
     }
 
+    pub fn finish_music_command(&mut self, result: Result<String, String>) {
+        match result {
+            Ok(message) => {
+                self.write(&message);
+                self.newline();
+            }
+            Err(error) => self.write_error(&error),
+        }
+        self.prompt();
+    }
+
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
         let (display_width, display_height) = self.mode.display_dimensions();
         debug_assert_eq!(video.dimensions(), (display_width, display_height));
@@ -197,6 +210,8 @@ impl Terminal {
                 self.write("HELP CLS MODE EDITOR GAME EDIT NEW\n");
                 self.write("ECHO VERSION COLOR CD MKDIR\n");
                 self.write("RMDIR DIR LS ASM BUILD RUN DUMP\n");
+                self.write("PLAYNSF NSFPLAY NSFPAUSE NSFSTOP\n");
+                self.write("NSFNEXT NSFPREV NSFLOOP NSFINFO\n");
                 TerminalAction::None
             }
             "CLS" | "CLEAR" => {
@@ -232,6 +247,14 @@ impl Terminal {
             "ASM" => self.build_raw(arguments),
             "BUILD" => self.build(arguments),
             "RUN" => self.run(arguments),
+            "PLAYNSF" => self.play_nsf(arguments),
+            "NSFPLAY" => TerminalAction::Music(MusicCommand::Play),
+            "NSFPAUSE" => TerminalAction::Music(MusicCommand::Pause),
+            "NSFSTOP" => TerminalAction::Music(MusicCommand::Stop),
+            "NSFNEXT" => TerminalAction::Music(MusicCommand::Next),
+            "NSFPREV" => TerminalAction::Music(MusicCommand::Previous),
+            "NSFLOOP" => TerminalAction::Music(MusicCommand::ToggleLoop),
+            "NSFINFO" => TerminalAction::Music(MusicCommand::Status),
             "DUMP" => {
                 self.dump(arguments);
                 TerminalAction::None
@@ -390,6 +413,40 @@ impl Terminal {
             Ok(launch) => TerminalAction::Run(launch),
             Err(diagnostics) => {
                 self.write_diagnostics(diagnostics);
+                TerminalAction::None
+            }
+        }
+    }
+
+    fn play_nsf(&mut self, arguments: &str) -> TerminalAction {
+        let fields = arguments.split_whitespace().collect::<Vec<_>>();
+        if fields.is_empty() || fields.len() > 2 {
+            self.write_error("USAGE: PLAYNSF FILE.NSF [TRACK]");
+            return TerminalAction::None;
+        }
+        if !fields[0].to_ascii_lowercase().ends_with(".nsf") {
+            self.write_error("PLAYNSF REQUIRES AN NSF FILE");
+            return TerminalAction::None;
+        }
+        let track = match fields.get(1) {
+            Some(value) => match value.parse::<u8>() {
+                Ok(track) if track != 0 => track,
+                _ => {
+                    self.write_error("TRACK MUST BE 1-255");
+                    return TerminalAction::None;
+                }
+            },
+            None => 0,
+        };
+        let read = self.filesystem.borrow().read_binary(fields[0]);
+        match read {
+            Ok(bytes) => TerminalAction::Music(MusicCommand::Load {
+                filename: fields[0].to_ascii_lowercase(),
+                bytes,
+                track,
+            }),
+            Err(error) => {
+                self.write_error(&error);
                 TerminalAction::None
             }
         }
@@ -650,6 +707,47 @@ mod tests {
         assert_eq!(
             type_command(&mut terminal, "edit notes.txt"),
             TerminalAction::Edit(Some("notes.txt".to_owned()))
+        );
+    }
+
+    #[test]
+    fn playnsf_loads_a_track_and_radio_commands_are_forwarded() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        let mut bytes = vec![0; 0x81];
+        bytes[..5].copy_from_slice(b"NESM\x1A");
+        bytes[5] = 1;
+        bytes[6] = 3;
+        bytes[7] = 1;
+        bytes[8..14].copy_from_slice(&[0x00, 0x80, 0x00, 0x80, 0x00, 0x80]);
+        bytes[0x80] = 0x60;
+        terminal.filesystem.borrow_mut().write_binary("radio.nsf", &bytes).unwrap();
+
+        assert!(matches!(
+            type_command(&mut terminal, "playnsf radio.nsf 2"),
+            TerminalAction::Music(MusicCommand::Load { filename, track: 2, .. })
+                if filename == "radio.nsf"
+        ));
+        terminal.finish_music_command(Ok("PLAYING RADIO.NSF".to_owned()));
+        assert!(screen_text(&terminal).contains("PLAYING RADIO.NSF"));
+        assert_eq!(
+            type_command(&mut terminal, "nsfpause"),
+            TerminalAction::Music(MusicCommand::Pause)
+        );
+        assert_eq!(
+            type_command(&mut terminal, "nsfnext"),
+            TerminalAction::Music(MusicCommand::Next)
+        );
+        assert_eq!(
+            type_command(&mut terminal, "nsfprev"),
+            TerminalAction::Music(MusicCommand::Previous)
+        );
+        assert_eq!(
+            type_command(&mut terminal, "nsfloop"),
+            TerminalAction::Music(MusicCommand::ToggleLoop)
+        );
+        assert_eq!(
+            type_command(&mut terminal, "nsfstop"),
+            TerminalAction::Music(MusicCommand::Stop)
         );
     }
 

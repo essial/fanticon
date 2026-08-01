@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    f32::consts::PI,
     sync::{Arc, Mutex},
 };
 
@@ -53,8 +54,18 @@ impl AudioOutput {
     }
 
     pub fn submit(&self, cycle_samples: &[u16]) {
+        self.submit_at_rate(cycle_samples, CPU_CLOCK_HZ);
+    }
+
+    pub fn submit_at_rate(&self, cycle_samples: &[u16], source_rate: u32) {
         if let Ok(mut presenter) = self.presenter.lock() {
-            presenter.submit(cycle_samples);
+            presenter.submit(cycle_samples, source_rate);
+        }
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut presenter) = self.presenter.lock() {
+            presenter.clear();
         }
     }
 }
@@ -62,10 +73,14 @@ impl AudioOutput {
 struct AudioPresenter {
     output_rate: u32,
     channels: usize,
+    source_rate: u32,
     resample_phase: u32,
     previous_input: f32,
     high_pass: f32,
     low_pass: f32,
+    low_pass_2: f32,
+    high_pass_coefficient: f32,
+    reconstruction_alpha: f32,
     reverb: Vec<f32>,
     reverb_index: usize,
     left_delay: usize,
@@ -80,10 +95,14 @@ impl AudioPresenter {
         Self {
             output_rate,
             channels: usize::from(channels),
+            source_rate: CPU_CLOCK_HZ,
             resample_phase: 0,
             previous_input: 0.0,
             high_pass: 0.0,
             low_pass: 0.0,
+            low_pass_2: 0.0,
+            high_pass_coefficient: high_pass_coefficient(CPU_CLOCK_HZ),
+            reconstruction_alpha: reconstruction_alpha(CPU_CLOCK_HZ),
             reverb: vec![0.0; reverb_len],
             reverb_index: 0,
             left_delay: (output_rate as f32 * 0.013) as usize,
@@ -93,32 +112,57 @@ impl AudioPresenter {
         }
     }
 
-    fn submit(&mut self, cycle_samples: &[u16]) {
+    fn submit(&mut self, cycle_samples: &[u16], source_rate: u32) {
+        if self.source_rate != source_rate {
+            self.source_rate = source_rate;
+            self.resample_phase = 0;
+            self.high_pass_coefficient = high_pass_coefficient(source_rate);
+            self.reconstruction_alpha = reconstruction_alpha(source_rate);
+        }
         for &sample in cycle_samples {
             let input = f32::from(sample) / f32::from(u16::MAX);
-            self.high_pass = input - self.previous_input + 0.996 * self.high_pass;
+            self.high_pass =
+                self.high_pass_coefficient * (self.high_pass + input - self.previous_input);
             self.previous_input = input;
-            self.low_pass += (self.high_pass - self.low_pass) * 0.18;
+            // Reconstruct the held chip level before decimation. Two gentle poles
+            // suppress CPU-rate edges and aliases without dulling audible notes.
+            self.low_pass += (self.high_pass - self.low_pass) * self.reconstruction_alpha;
+            self.low_pass_2 += (self.low_pass - self.low_pass_2) * self.reconstruction_alpha;
             self.resample_phase += self.output_rate;
-            if self.resample_phase < CPU_CLOCK_HZ {
+            if self.resample_phase < self.source_rate {
                 continue;
             }
-            self.resample_phase -= CPU_CLOCK_HZ;
-            let dry = (self.low_pass * 1.8).clamp(-1.0, 1.0);
+            self.resample_phase -= self.source_rate;
+            let dry = (self.low_pass_2 * 1.8).clamp(-1.0, 1.0);
             let length = self.reverb.len();
             let left = self.reverb
                 [(self.reverb_index + length - self.left_delay.min(length - 1)) % length];
             let right = self.reverb
                 [(self.reverb_index + length - self.right_delay.min(length - 1)) % length];
-            self.reverb[self.reverb_index] = dry + (left + right) * 0.12;
+            self.reverb[self.reverb_index] = dry + (left + right) * 0.11;
             self.reverb_index = (self.reverb_index + 1) % length;
             if self.queue.len() < self.queue_limit {
+                // Keep attacks centered, then add differently delayed taps to each
+                // side. The small opposite-side subtraction widens steady chip
+                // tones without moving a voice to one speaker.
+                let center = dry * 0.86;
                 self.queue.push_back((
-                    (dry + left * 0.08).clamp(-1.0, 1.0),
-                    (dry + right * 0.08).clamp(-1.0, 1.0),
+                    (center + left * 0.22 - right * 0.04).clamp(-1.0, 1.0),
+                    (center + right * 0.22 - left * 0.04).clamp(-1.0, 1.0),
                 ));
             }
         }
+    }
+
+    fn clear(&mut self) {
+        self.queue.clear();
+        self.previous_input = 0.0;
+        self.high_pass = 0.0;
+        self.low_pass = 0.0;
+        self.low_pass_2 = 0.0;
+        self.reverb.fill(0.0);
+        self.reverb_index = 0;
+        self.resample_phase = 0;
     }
 
     #[cfg(test)]
@@ -140,6 +184,14 @@ impl AudioPresenter {
     fn next_frame(&mut self) -> (f32, f32) {
         self.queue.pop_front().unwrap_or((0.0, 0.0))
     }
+}
+
+fn high_pass_coefficient(source_rate: u32) -> f32 {
+    (-2.0 * PI * 20.0 / source_rate.max(1) as f32).exp()
+}
+
+fn reconstruction_alpha(source_rate: u32) -> f32 {
+    1.0 - (-2.0 * PI * 14_000.0 / source_rate.max(1) as f32).exp()
 }
 
 fn fill_f32(output: &mut [f32], state: &Arc<Mutex<AudioPresenter>>) {
@@ -198,11 +250,52 @@ mod tests {
     #[test]
     fn presenter_resamples_one_vm_frame_to_one_host_frame_interval() {
         let mut presenter = AudioPresenter::new(48_000, 2);
-        presenter.submit(&vec![u16::MAX / 2; 52_400]);
+        presenter.submit(&vec![u16::MAX / 2; 52_400], CPU_CLOCK_HZ);
         assert!((799..=801).contains(&presenter.queue.len()));
         let mut output = vec![0.0; 1_600];
         presenter.fill(&mut output);
         assert_eq!(presenter.queue.len(), 0);
         assert!(output.iter().all(|sample| sample.is_finite()));
     }
+
+    #[test]
+    fn presenter_accepts_nes_rate_music_through_the_same_effect_chain() {
+        let mut presenter = AudioPresenter::new(48_000, 2);
+        presenter.submit(&vec![u16::MAX / 2; NTSC_TEST_FRAME], 1_789_773);
+        assert!((799..=801).contains(&presenter.queue.len()));
+        presenter.clear();
+        assert!(presenter.queue.is_empty());
+    }
+
+    #[test]
+    fn post_processor_decorrelates_stereo_and_keeps_a_short_tail() {
+        let mut presenter = AudioPresenter::new(48_000, 2);
+        let mut impulse = vec![0; 52_400];
+        impulse[..2_000].fill(u16::MAX);
+        presenter.submit(&impulse, CPU_CLOCK_HZ);
+        let mut output = vec![0.0; 1_600];
+        presenter.fill(&mut output);
+        assert!(output.chunks_exact(2).any(|frame| (frame[0] - frame[1]).abs() > 0.0001));
+        assert!(output[1_200..].iter().any(|sample| sample.abs() > 0.0001));
+    }
+
+    #[test]
+    fn reconstruction_filter_rejects_cpu_rate_alias_energy() {
+        let mut presenter = AudioPresenter::new(48_000, 2);
+        presenter.submit(&vec![u16::MAX / 2; 1_789_773 / 4], 1_789_773);
+        presenter.queue.clear();
+        presenter.reverb.fill(0.0);
+        let source = (0..NTSC_TEST_FRAME)
+            .map(|index| if index & 1 == 0 { 0 } else { u16::MAX })
+            .collect::<Vec<_>>();
+        presenter.submit(&source, 1_789_773);
+        let mut output = vec![0.0; 1_600];
+        presenter.fill(&mut output);
+        let late_peak = output[800..].iter().copied().map(f32::abs).fold(0.0, f32::max);
+        assert!(late_peak < 0.02, "aliased CPU-rate energy was {late_peak}");
+        assert!(presenter.high_pass_coefficient > 0.999);
+        assert!(presenter.reconstruction_alpha < 0.1);
+    }
+
+    const NTSC_TEST_FRAME: usize = 1_789_773 / 60;
 }

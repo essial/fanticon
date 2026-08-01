@@ -1,4 +1,4 @@
-use fanticon::video::{FRAMEBUFFER_LEN, Video};
+use fanticon::video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, FRAMEBUFFER_LEN, Video};
 use web_time::{Duration, Instant};
 
 const BOOT_DURATION: Duration = Duration::from_secs(5);
@@ -38,7 +38,19 @@ impl BootSplash {
 }
 
 pub fn draw_boot_logo(video: &mut Video) {
-    video.pixels_mut().copy_from_slice(BOOT_LOGO);
+    debug_assert_eq!(video.dimensions(), (DISPLAY_WIDTH, DISPLAY_HEIGHT));
+    let logo_width = DISPLAY_WIDTH / 2;
+    let logo_height = DISPLAY_HEIGHT / 2;
+    let left = (DISPLAY_WIDTH - logo_width) / 2;
+    let top = (DISPLAY_HEIGHT - logo_height) / 2;
+    let pixels = video.pixels_mut();
+    pixels.fill(0);
+    for y in 0..logo_height {
+        for x in 0..logo_width {
+            pixels[(top + y) * DISPLAY_WIDTH + left + x] =
+                BOOT_LOGO[(y * 2) * DISPLAY_WIDTH + x * 2];
+        }
+    }
 }
 
 #[cfg(test)]
@@ -71,9 +83,23 @@ mod tests {
     }
 
     #[test]
-    fn logo_exactly_fills_native_framebuffer() {
+    fn logo_is_half_size_and_centered_in_native_framebuffer() {
         let mut video = Video::new();
         draw_boot_logo(&mut video);
-        assert_eq!(video.pixels(), BOOT_LOGO);
+        let left = DISPLAY_WIDTH / 4;
+        let top = DISPLAY_HEIGHT / 4;
+        let right = left + DISPLAY_WIDTH / 2;
+        let bottom = top + DISPLAY_HEIGHT / 2;
+        for y in 0..DISPLAY_HEIGHT {
+            for x in 0..DISPLAY_WIDTH {
+                let pixel = video.pixels()[y * DISPLAY_WIDTH + x];
+                if (left..right).contains(&x) && (top..bottom).contains(&y) {
+                    assert_eq!(pixel, BOOT_LOGO[((y - top) * 2) * DISPLAY_WIDTH + (x - left) * 2]);
+                } else {
+                    assert_eq!(pixel, 0);
+                }
+            }
+        }
+        assert!(video.pixels().iter().any(|pixel| *pixel != 0));
     }
 }

@@ -184,6 +184,50 @@ source location, tint affected lines Catppuccin red, and remain navigable until
 the document changes. The complete syntax, directive, macro, and output reference
 is in [Fanticon 6502 Macro Assembler](assembler.md).
 
+## NSF music radio
+
+Editor mode owns an NSF music player that remains active while moving between
+the command prompt and code editor. It is deliberately outside the cartridge VM:
+launching a game suspends radio generation, and returning to Editor mode resumes
+it. NSF audio and game audio use the same nonlinear four-voice mixer, cycle-stream
+resampler, stereo presentation, and reverb path.
+
+From the command prompt:
+
+```text
+PLAYNSF FILE.NSF [TRACK]
+NSFPLAY
+NSFPAUSE
+NSFSTOP
+NSFNEXT
+NSFPREV
+NSFLOOP
+NSFINFO
+```
+
+Tracks are numbered from one. Omitting `TRACK` selects the file's declared start
+track. `NSFLOOP` switches between one pass and two detected loop passes. After
+the selected number of loops, playback advances to the next track; the final
+track wraps only when looping is enabled.
+
+The editor's top bar shows the current track, total tracks, play/pause state,
+and one/two-pass loop state. A compact six-character title window advances one
+character every 20 editor frames, continuously rotating long titles. The Music
+menu and these shortcuts control it:
+
+| Key | Action |
+| --- | --- |
+| `F7` | Play or pause |
+| `Shift+F7` | Stop |
+| `F8` | Next track |
+| `Shift+F8` | Previous track |
+| `Ctrl/Cmd+F8` | Toggle one/two-loop playback |
+
+Classic NSF1 has no standardized duration or loop marker. Fanticon detects a
+loop when complete mutable driver state repeats at `PLAY` boundaries. A
+ten-minute safety limit advances drivers containing a monotonic counter that
+prevents exact repetition.
+
 ## Extending the prompt
 
 Command parsing lives in `Terminal::execute`. Commands that only print text can

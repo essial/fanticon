@@ -43,7 +43,7 @@ These details do not alter VM-visible behavior and can be tuned during host work
 
 - Exact stereo-width, reverb, reconstruction-filter, and resampler coefficients
 - Host audio buffer size and underrun recovery
-- Gamepad database and user-remapping interface
+- User-remapping interface for the bundled cross-platform gamepad database
 - Recent-cartridge UI and save-lock warning presentation
 - Deterministic input recording and replay format (deferred beyond v0.1)
 
@@ -55,3 +55,9 @@ cartridge/save CRC validation, changed-size save recreation, project packaging,
 section diagnostics, debugger stops, and the complete external 6502 opcode
 suite. Additional regression cases should accompany every future hardware or
 format revision.
+
+The `vm_conformance` integration test assembles all six checked-in demo
+cartridges, executes each for eight complete frames, and freezes a combined
+golden hash of CPU registers, main RAM, indexed video, palette state, and the
+cycle-rate audio stream. `cargo bench --no-default-features --bench vm` runs the
+same workloads as release-mode whole-machine performance benchmarks.

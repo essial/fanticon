@@ -1587,6 +1587,28 @@ fn is_mnemonic(mnemonic: &str) -> bool {
             | "TXA"
             | "TXS"
             | "TYA"
+            | "KIL"
+            | "JAM"
+            | "SLO"
+            | "RLA"
+            | "SRE"
+            | "RRA"
+            | "SAX"
+            | "LAX"
+            | "DCP"
+            | "ISC"
+            | "ISB"
+            | "ANC"
+            | "ALR"
+            | "ARR"
+            | "XAA"
+            | "AXS"
+            | "SBX"
+            | "AHX"
+            | "SHY"
+            | "SHX"
+            | "TAS"
+            | "LAS"
     )
 }
 
@@ -1679,7 +1701,7 @@ fn opcode(mnemonic: &str, mode: Mode) -> Option<u8> {
         "LDX" => &[(Imm, 0xa2), (Zp, 0xa6), (ZpY, 0xb6), (Abs, 0xae), (AbsY, 0xbe)],
         "LDY" => &[(Imm, 0xa0), (Zp, 0xa4), (ZpX, 0xb4), (Abs, 0xac), (AbsX, 0xbc)],
         "LSR" => &[(Acc, 0x4a), (Zp, 0x46), (ZpX, 0x56), (Abs, 0x4e), (AbsX, 0x5e)],
-        "NOP" => &[(Imp, 0xea)],
+        "NOP" => &[(Imp, 0xea), (Imm, 0x80), (Zp, 0x04), (ZpX, 0x14), (Abs, 0x0c), (AbsX, 0x1c)],
         "ORA" => &[
             (Imm, 0x09),
             (Zp, 0x05),
@@ -1728,6 +1750,81 @@ fn opcode(mnemonic: &str, mode: Mode) -> Option<u8> {
         "TXA" => &[(Imp, 0x8a)],
         "TXS" => &[(Imp, 0x9a)],
         "TYA" => &[(Imp, 0x98)],
+        "KIL" | "JAM" => &[(Imp, 0x02)],
+        "SLO" => &[
+            (IndX, 0x03),
+            (Zp, 0x07),
+            (Abs, 0x0f),
+            (IndY, 0x13),
+            (ZpX, 0x17),
+            (AbsY, 0x1b),
+            (AbsX, 0x1f),
+        ],
+        "RLA" => &[
+            (IndX, 0x23),
+            (Zp, 0x27),
+            (Abs, 0x2f),
+            (IndY, 0x33),
+            (ZpX, 0x37),
+            (AbsY, 0x3b),
+            (AbsX, 0x3f),
+        ],
+        "SRE" => &[
+            (IndX, 0x43),
+            (Zp, 0x47),
+            (Abs, 0x4f),
+            (IndY, 0x53),
+            (ZpX, 0x57),
+            (AbsY, 0x5b),
+            (AbsX, 0x5f),
+        ],
+        "RRA" => &[
+            (IndX, 0x63),
+            (Zp, 0x67),
+            (Abs, 0x6f),
+            (IndY, 0x73),
+            (ZpX, 0x77),
+            (AbsY, 0x7b),
+            (AbsX, 0x7f),
+        ],
+        "SAX" => &[(IndX, 0x83), (Zp, 0x87), (Abs, 0x8f), (ZpY, 0x97)],
+        "LAX" => &[
+            (Imm, 0xab),
+            (IndX, 0xa3),
+            (Zp, 0xa7),
+            (Abs, 0xaf),
+            (IndY, 0xb3),
+            (ZpY, 0xb7),
+            (AbsY, 0xbf),
+        ],
+        "DCP" => &[
+            (IndX, 0xc3),
+            (Zp, 0xc7),
+            (Abs, 0xcf),
+            (IndY, 0xd3),
+            (ZpX, 0xd7),
+            (AbsY, 0xdb),
+            (AbsX, 0xdf),
+        ],
+        "ISC" | "ISB" => &[
+            (IndX, 0xe3),
+            (Zp, 0xe7),
+            (Abs, 0xef),
+            (IndY, 0xf3),
+            (ZpX, 0xf7),
+            (AbsY, 0xfb),
+            (AbsX, 0xff),
+        ],
+        "ANC" => &[(Imm, 0x0b)],
+        "ALR" => &[(Imm, 0x4b)],
+        "ARR" => &[(Imm, 0x6b)],
+        "XAA" => &[(Imm, 0x8b)],
+        "AXS" | "SBX" => &[(Imm, 0xcb)],
+        "AHX" => &[(IndY, 0x93), (AbsY, 0x9f)],
+        "SHY" => &[(AbsX, 0x9c)],
+        "SHX" => &[(AbsY, 0x9e)],
+        "TAS" => &[(AbsY, 0x9b)],
+        "LAS" => &[(AbsY, 0xbb)],
         _ => return None,
     };
     entries.iter().find_map(|(entry_mode, opcode)| (*entry_mode == mode).then_some(*opcode))
@@ -1844,6 +1941,124 @@ HERE     EQU   *
         })
         .unwrap();
         assert_eq!(program.bytes, [0xa5, 0x42]);
+    }
+
+    #[test]
+    fn undocumented_opcodes_cover_every_supported_addressing_mode() {
+        use Mode::{
+            Absolute as Abs, AbsoluteX as AbsX, AbsoluteY as AbsY, Immediate as Imm,
+            Implied as Imp, IndirectX as IndX, IndirectY as IndY, ZeroPage as Zp, ZeroPageX as ZpX,
+            ZeroPageY as ZpY,
+        };
+
+        let cases = [
+            ("KIL", Imp, 0x02),
+            ("JAM", Imp, 0x02),
+            ("SLO", IndX, 0x03),
+            ("SLO", Zp, 0x07),
+            ("SLO", Abs, 0x0f),
+            ("SLO", IndY, 0x13),
+            ("SLO", ZpX, 0x17),
+            ("SLO", AbsY, 0x1b),
+            ("SLO", AbsX, 0x1f),
+            ("RLA", IndX, 0x23),
+            ("RLA", Zp, 0x27),
+            ("RLA", Abs, 0x2f),
+            ("RLA", IndY, 0x33),
+            ("RLA", ZpX, 0x37),
+            ("RLA", AbsY, 0x3b),
+            ("RLA", AbsX, 0x3f),
+            ("SRE", IndX, 0x43),
+            ("SRE", Zp, 0x47),
+            ("SRE", Abs, 0x4f),
+            ("SRE", IndY, 0x53),
+            ("SRE", ZpX, 0x57),
+            ("SRE", AbsY, 0x5b),
+            ("SRE", AbsX, 0x5f),
+            ("RRA", IndX, 0x63),
+            ("RRA", Zp, 0x67),
+            ("RRA", Abs, 0x6f),
+            ("RRA", IndY, 0x73),
+            ("RRA", ZpX, 0x77),
+            ("RRA", AbsY, 0x7b),
+            ("RRA", AbsX, 0x7f),
+            ("SAX", IndX, 0x83),
+            ("SAX", Zp, 0x87),
+            ("SAX", Abs, 0x8f),
+            ("SAX", ZpY, 0x97),
+            ("LAX", Imm, 0xab),
+            ("LAX", IndX, 0xa3),
+            ("LAX", Zp, 0xa7),
+            ("LAX", Abs, 0xaf),
+            ("LAX", IndY, 0xb3),
+            ("LAX", ZpY, 0xb7),
+            ("LAX", AbsY, 0xbf),
+            ("DCP", IndX, 0xc3),
+            ("DCP", Zp, 0xc7),
+            ("DCP", Abs, 0xcf),
+            ("DCP", IndY, 0xd3),
+            ("DCP", ZpX, 0xd7),
+            ("DCP", AbsY, 0xdb),
+            ("DCP", AbsX, 0xdf),
+            ("ISC", IndX, 0xe3),
+            ("ISC", Zp, 0xe7),
+            ("ISC", Abs, 0xef),
+            ("ISC", IndY, 0xf3),
+            ("ISC", ZpX, 0xf7),
+            ("ISC", AbsY, 0xfb),
+            ("ISC", AbsX, 0xff),
+            ("ISB", Zp, 0xe7),
+            ("ANC", Imm, 0x0b),
+            ("ALR", Imm, 0x4b),
+            ("ARR", Imm, 0x6b),
+            ("XAA", Imm, 0x8b),
+            ("AXS", Imm, 0xcb),
+            ("SBX", Imm, 0xcb),
+            ("AHX", IndY, 0x93),
+            ("AHX", AbsY, 0x9f),
+            ("SHY", AbsX, 0x9c),
+            ("SHX", AbsY, 0x9e),
+            ("TAS", AbsY, 0x9b),
+            ("LAS", AbsY, 0xbb),
+            ("NOP", Imp, 0xea),
+            ("NOP", Imm, 0x80),
+            ("NOP", Zp, 0x04),
+            ("NOP", ZpX, 0x14),
+            ("NOP", Abs, 0x0c),
+            ("NOP", AbsX, 0x1c),
+        ];
+
+        for (mnemonic, mode, expected) in cases {
+            assert!(is_mnemonic(mnemonic), "{mnemonic} is missing from the parser vocabulary");
+            assert_eq!(opcode(mnemonic, mode), Some(expected), "{mnemonic} {mode:?}");
+        }
+    }
+
+    #[test]
+    fn assembles_undocumented_mnemonics_aliases_and_canonical_nops() {
+        let source = r#"
+         NOP
+         NOP   #$12
+         NOP   $12
+         NOP   $12,X
+         NOP   $1234
+         NOP   $1234,X
+         KIL
+         JAM
+         ANC   #$12
+         ISB   $12
+         SBX   #$12
+         LAX   #$12
+         AHX   ($12),Y
+"#;
+        let program = assemble(source).unwrap();
+        assert_eq!(
+            program.bytes,
+            [
+                0xea, 0x80, 0x12, 0x04, 0x12, 0x14, 0x12, 0x0c, 0x34, 0x12, 0x1c, 0x34, 0x12, 0x02,
+                0x02, 0x0b, 0x12, 0xe7, 0x12, 0xcb, 0x12, 0xab, 0x12, 0x93, 0x12,
+            ]
+        );
     }
 
     #[test]

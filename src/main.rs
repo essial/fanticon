@@ -12,7 +12,8 @@ use fanticon::{
 };
 use host::{
     AppMode, AudioOutput, BootSplash, DebugCommand, EditorAction, FramePacer, FrameStatus,
-    MusicCommand, MusicRadio, Renderer, Terminal, TerminalAction, TextEditor, draw_boot_logo,
+    GamepadInput, MusicCommand, MusicRadio, Renderer, Terminal, TerminalAction, TextEditor,
+    draw_boot_logo,
 };
 use web_time::Instant;
 use winit::{
@@ -43,6 +44,9 @@ struct FanticonApp {
     audio_output: Option<AudioOutput>,
     music: MusicRadio,
     mouse_position: Option<PhysicalPosition<f64>>,
+    gamepads: GamepadInput,
+    keyboard_controller: u8,
+    input_focused: bool,
 }
 
 struct GameSession {
@@ -91,6 +95,9 @@ impl FanticonApp {
                 .ok(),
             music: MusicRadio::new(),
             mouse_position: None,
+            gamepads: GamepadInput::new(),
+            keyboard_controller: 0,
+            input_focused: true,
         }
     }
 }
@@ -190,6 +197,12 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
+            WindowEvent::Focused(focused) => {
+                self.input_focused = focused;
+                if !focused {
+                    self.clear_game_inputs();
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_position = Some(position);
                 if !self.boot_splash.is_active(Instant::now())
@@ -297,6 +310,7 @@ impl FanticonApp {
         }
 
         if self.game_running() {
+            self.poll_gamepads();
             let game = self.game.as_mut().expect("running game session");
             if self.video.dimensions()
                 != (fanticon::video::DISPLAY_WIDTH, fanticon::video::DISPLAY_HEIGHT)
@@ -309,6 +323,9 @@ impl FanticonApp {
                 // controller key held when the stop occurred cannot remain pressed
                 // after execution resumes.
                 game.debugger.machine.bus.set_controller(0, ControllerState::default());
+                game.debugger.machine.bus.set_controller(1, ControllerState::default());
+                self.keyboard_controller = 0;
+                self.gamepads.suppress_held_inputs();
             }
             if !game.debugger.paused()
                 && let Some(audio) = &self.audio_output
@@ -470,6 +487,8 @@ impl FanticonApp {
     }
 
     fn start_game(&mut self, launch: host::GameLaunch, launched_from_editor: bool) {
+        self.keyboard_controller = 0;
+        self.gamepads.suppress_held_inputs();
         if let Some(audio) = &self.audio_output {
             audio.clear();
         }
@@ -520,6 +539,9 @@ impl FanticonApp {
         {
             game.debugger.pause();
             game.debugger.machine.bus.set_controller(0, ControllerState::default());
+            game.debugger.machine.bus.set_controller(1, ControllerState::default());
+            self.keyboard_controller = 0;
+            self.gamepads.suppress_held_inputs();
             if let Some(editor) = &mut self.text_editor {
                 editor.set_debug_snapshot(game.debugger.snapshot());
             }
@@ -542,10 +564,31 @@ impl FanticonApp {
     }
 
     fn update_game_controller_key(&mut self, state: ElementState, physical_key: PhysicalKey) {
+        let Some(next) = updated_controller_state(self.keyboard_controller, state, physical_key)
+        else {
+            return;
+        };
+        self.keyboard_controller = next;
+        self.poll_gamepads();
+    }
+
+    fn poll_gamepads(&mut self) {
+        let gamepad = if self.input_focused { self.gamepads.poll() } else { [0; 2] };
         let Some(game) = &mut self.game else { return };
-        let current = game.debugger.machine.bus.controller_host_state(0);
-        let Some(next) = updated_controller_state(current, state, physical_key) else { return };
-        game.debugger.machine.bus.set_controller(0, ControllerState(next));
+        game.debugger
+            .machine
+            .bus
+            .set_controller(0, ControllerState(self.keyboard_controller | gamepad[0]));
+        game.debugger.machine.bus.set_controller(1, ControllerState(gamepad[1]));
+    }
+
+    fn clear_game_inputs(&mut self) {
+        self.keyboard_controller = 0;
+        self.gamepads.suppress_held_inputs();
+        if let Some(game) = &mut self.game {
+            game.debugger.machine.bus.set_controller(0, ControllerState::default());
+            game.debugger.machine.bus.set_controller(1, ControllerState::default());
+        }
     }
 
     fn flush_game_save(&mut self) {
@@ -580,6 +623,8 @@ impl FanticonApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn start_direct_game(&mut self, launch: DirectGameLaunch) {
         use fs2::FileExt;
+        self.keyboard_controller = 0;
+        self.gamepads.suppress_held_inputs();
         let mut machine = FanticonMachine::new(launch.cartridge, Some(launch.save_ram));
         let save_lock = launch.save_path.as_ref().and_then(|path| {
             let lock_path = path.with_extension("SAV.lock");

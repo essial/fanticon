@@ -6,13 +6,14 @@ use fanticon::{
     disassemble_instruction,
     machine::{VIDEO_DOTS_PER_CPU_CYCLE, bank_kind},
     project::MANIFEST_NAME,
-    video::{DOTS_PER_SCANLINE, SCANLINES_PER_FRAME, Video},
+    video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, DOTS_PER_SCANLINE, SCANLINES_PER_FRAME, Video},
 };
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 use super::nsf_player::{MusicCommand, MusicStatus};
 use super::{
     EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH,
+    boot_splash::BOOT_LOGO,
     builder::{GameLaunch, build_and_load_project, build_project, build_source},
     character_rom::{
         BOX_BOTTOM_LEFT, BOX_BOTTOM_RIGHT, BOX_HORIZONTAL, BOX_TOP_LEFT, BOX_TOP_RIGHT,
@@ -52,6 +53,35 @@ const UI_SUCCESS_BACKGROUND: u8 = 250;
 const UI_DEBUG_CURRENT_BACKGROUND: u8 = 251;
 const UI_BREAKPOINT_BACKGROUND: u8 = 252;
 const BUILD_PROGRESS_FRAMES: u8 = 8;
+const ABOUT_WIDTH: usize = 42;
+const ABOUT_HEIGHT: usize = 24;
+const ABOUT_LOGO_WIDTH: usize = 192;
+const ABOUT_LOGO_HEIGHT: usize = 120;
+const ABOUT_PALETTE_START: u8 = 224;
+const ABOUT_PALETTE: [[u8; 4]; 16] = [
+    [0, 0, 0, 255],
+    [0, 28, 44, 255],
+    [0, 68, 100, 255],
+    [0, 118, 158, 255],
+    [0, 190, 220, 255],
+    [35, 238, 255, 255],
+    [25, 20, 75, 255],
+    [48, 38, 140, 255],
+    [76, 58, 215, 255],
+    [112, 88, 255, 255],
+    [85, 16, 90, 255],
+    [150, 34, 145, 255],
+    [220, 68, 192, 255],
+    [255, 118, 225, 255],
+    [180, 192, 255, 255],
+    [255, 255, 255, 255],
+];
+const ABOUT_RASTER_WAVE: [i8; 32] = [
+    0, 1, 2, 3, 4, 4, 5, 5, 5, 5, 4, 4, 3, 2, 1, 0, 0, -1, -2, -3, -4, -4, -5, -5, -5, -5, -4, -4,
+    -3, -2, -1, 0,
+];
+const ABOUT_WAVE_EASE: [u16; 17] =
+    [0, 3, 11, 24, 40, 59, 81, 104, 128, 152, 175, 197, 216, 232, 245, 253, 256];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct Position {
@@ -117,6 +147,7 @@ enum MenuKind {
     Build,
     Debug,
     Music,
+    Help,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -200,6 +231,9 @@ enum Overlay {
         kind: DebugPromptKind,
         input: String,
         error: Option<String>,
+    },
+    About {
+        frame: u16,
     },
 }
 
@@ -496,6 +530,7 @@ impl TextEditor {
                 PhysicalKey::Code(KeyCode::KeyB) => self.open_menu(MenuKind::Build),
                 PhysicalKey::Code(KeyCode::KeyD) => self.open_menu(MenuKind::Debug),
                 PhysicalKey::Code(KeyCode::KeyM) => self.open_menu(MenuKind::Music),
+                PhysicalKey::Code(KeyCode::KeyH) => self.open_menu(MenuKind::Help),
                 _ => {}
             }
             return EditorAction::None;
@@ -567,6 +602,10 @@ impl TextEditor {
             Overlay::Building { frames_remaining: 0 } => true,
             Overlay::Building { frames_remaining } => {
                 *frames_remaining -= 1;
+                false
+            }
+            Overlay::About { frame } => {
+                *frame = frame.wrapping_add(1);
                 false
             }
             _ => false,
@@ -1176,6 +1215,10 @@ impl TextEditor {
                 self.overlay = Overlay::None;
                 return EditorAction::None;
             }
+            Overlay::About { .. } => {
+                self.overlay = Overlay::None;
+                return EditorAction::None;
+            }
             Overlay::CloseTab { .. } => return EditorAction::None,
             Overlay::SearchPrompt { .. } => return EditorAction::None,
             Overlay::DebugPrompt { .. } => return EditorAction::None,
@@ -1667,8 +1710,9 @@ impl TextEditor {
         let mut inverse = [false; COLUMNS * ROWS];
         let mut foregrounds = [foreground; COLUMNS * ROWS];
         let mut backgrounds = [background; COLUMNS * ROWS];
+        let mut background_gradients = [false; COLUMNS * ROWS];
 
-        put_text(&mut cells, 0, 0, " FILE  EDIT  BUILD  DEBUG  MUSIC");
+        put_text(&mut cells, 0, 0, " FILE  EDIT  BUILD  DEBUG  MUSIC  HELP");
         if let Some(status) = &self.music_status {
             let text = status.display_marquee(self.music_marquee_offset);
             let start = COLUMNS.saturating_sub(text.len());
@@ -1677,6 +1721,7 @@ impl TextEditor {
         }
         inverse[..COLUMNS].fill(true);
         foregrounds[..COLUMNS].fill(UI_WHITE_COLOR);
+        background_gradients[..COLUMNS].fill(true);
 
         for screen_y in 0..TEXT_ROWS {
             let line_index = self.scroll_line + screen_y;
@@ -1725,6 +1770,7 @@ impl TextEditor {
                 } else {
                     UI_BREAKPOINT_BACKGROUND
                 });
+                background_gradients[start..end].fill(true);
                 inverse[start..end].fill(false);
                 if executing && breakpoint {
                     backgrounds[start] = UI_BREAKPOINT_BACKGROUND;
@@ -1781,8 +1827,13 @@ impl TextEditor {
             &foregrounds,
             &backgrounds,
             &inverse,
+            &background_gradients,
             CellStyle { foreground, background },
         );
+
+        if let Overlay::About { frame } = &self.overlay {
+            draw_about_logo(video, *frame);
+        }
 
         if cursor_visible
             && !self.project_focused
@@ -1954,6 +2005,12 @@ impl TextEditor {
             }
             return EditorAction::None;
         }
+        if matches!(self.overlay, Overlay::About { .. }) {
+            if matches!(key, Key::Named(NamedKey::Enter | NamedKey::Escape)) {
+                self.overlay = Overlay::None;
+            }
+            return EditorAction::None;
+        }
         if matches!(self.overlay, Overlay::Building { .. }) {
             if matches!(key, Key::Named(NamedKey::Escape)) {
                 self.overlay = Overlay::None;
@@ -2021,7 +2078,8 @@ impl TextEditor {
             | Overlay::CloseTab { .. }
             | Overlay::SearchPrompt { .. }
             | Overlay::SearchResults { .. }
-            | Overlay::DebugPrompt { .. } => {}
+            | Overlay::DebugPrompt { .. }
+            | Overlay::About { .. } => {}
         }
         EditorAction::None
     }
@@ -2108,6 +2166,7 @@ impl TextEditor {
             (MenuKind::Music, 5) if self.music_status.is_some() => {
                 return EditorAction::Music(MusicCommand::Stop);
             }
+            (MenuKind::Help, 0) => self.overlay = Overlay::About { frame: 0 },
             _ => {}
         }
         EditorAction::None
@@ -2124,13 +2183,7 @@ impl TextEditor {
         match &self.overlay {
             Overlay::None => {}
             Overlay::Menu { menu, selected } => {
-                let x = match menu {
-                    MenuKind::File => 0,
-                    MenuKind::Edit => 6,
-                    MenuKind::Build => 12,
-                    MenuKind::Debug => 19,
-                    MenuKind::Music => 27,
-                };
+                let x = menu_origin(*menu);
                 let width = menu_width(*menu);
                 let y = 1;
                 draw_window(
@@ -2364,6 +2417,28 @@ impl TextEditor {
                     SEARCH_RESULTS_Y + SEARCH_RESULTS_HEIGHT - 2,
                     "ENTER/CLICK=OPEN  ESC=CLOSE",
                 );
+            }
+            Overlay::About { .. } => {
+                let x = (COLUMNS - ABOUT_WIDTH) / 2;
+                let y = (ROWS - ABOUT_HEIGHT) / 2;
+                draw_window(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    inverse,
+                    CellRect { x, y, width: ABOUT_WIDTH, height: ABOUT_HEIGHT },
+                    style,
+                );
+                put_text_width(cells, x + 3, y, "ABOUT FANTICON", ABOUT_WIDTH - 6);
+                put_text_width(cells, x + 16, y + 18, "FANTICON", 10);
+                put_text_width(
+                    cells,
+                    x + 14,
+                    y + 19,
+                    concat!("VERSION ", env!("CARGO_PKG_VERSION")),
+                    16,
+                );
+                put_text_width(cells, x + 10, y + 21, "ENTER/ESC/CLICK=CLOSE", 22);
             }
         }
     }
@@ -3138,6 +3213,7 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "CLEAR BREAKS",
         ],
         MenuKind::Music => &["PLAY/PAUSE", "PREVIOUS", "NEXT", "LOOP", "", "STOP"],
+        MenuKind::Help => &["ABOUT"],
     }
 }
 
@@ -3148,6 +3224,7 @@ const fn menu_origin(menu: MenuKind) -> usize {
         MenuKind::Build => 12,
         MenuKind::Debug => 19,
         MenuKind::Music => 27,
+        MenuKind::Help => 34,
     }
 }
 
@@ -3166,6 +3243,7 @@ const fn menu_bar_hit(column: usize) -> Option<MenuKind> {
         12..=18 => Some(MenuKind::Build),
         19..=25 => Some(MenuKind::Debug),
         27..=33 => Some(MenuKind::Music),
+        34..=39 => Some(MenuKind::Help),
         _ => None,
     }
 }
@@ -3225,6 +3303,7 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "",
             "STOP          SHIFT+F7",
         ],
+        MenuKind::Help => &["ABOUT      A"],
     }
 }
 
@@ -3250,6 +3329,7 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
             &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c")]
         }
         MenuKind::Music => &[(0, "p"), (1, "r"), (2, "n"), (3, "l"), (5, "s")],
+        MenuKind::Help => &[(0, "a")],
     };
     hotkeys.iter().find_map(|(index, hotkey)| (*hotkey == key).then_some(*index))
 }
@@ -3274,8 +3354,9 @@ const fn adjacent_menu(menu: MenuKind, forward: bool) -> MenuKind {
         (MenuKind::File, true) | (MenuKind::Build, false) => MenuKind::Edit,
         (MenuKind::Edit, true) | (MenuKind::Debug, false) => MenuKind::Build,
         (MenuKind::Build, true) | (MenuKind::Music, false) => MenuKind::Debug,
-        (MenuKind::Debug, true) | (MenuKind::File, false) => MenuKind::Music,
-        (MenuKind::Music, true) | (MenuKind::Edit, false) => MenuKind::File,
+        (MenuKind::Debug, true) | (MenuKind::Help, false) => MenuKind::Music,
+        (MenuKind::Music, true) | (MenuKind::File, false) => MenuKind::Help,
+        (MenuKind::Help, true) | (MenuKind::Edit, false) => MenuKind::File,
     }
 }
 
@@ -3392,6 +3473,7 @@ fn render_cells(
     foregrounds: &[u8],
     backgrounds: &[u8],
     inverse: &[bool],
+    background_gradients: &[bool],
     style: CellStyle,
 ) {
     let CellStyle { foreground, background } = style;
@@ -3414,10 +3496,7 @@ fn render_cells(
                 (foregrounds[index], backgrounds[index])
             };
             if cell_background != background {
-                let shaded_background = matches!(
-                    cell_background,
-                    UI_DEBUG_CURRENT_BACKGROUND | UI_BREAKPOINT_BACKGROUND
-                );
+                let shaded_background = background_gradients[index];
                 for glyph_y in 0..GLYPH_HEIGHT {
                     let y = cell_y * GLYPH_HEIGHT + glyph_y;
                     let color = if shaded_background {
@@ -3443,6 +3522,102 @@ fn render_cells(
             }
         }
     }
+}
+
+fn draw_about_logo(video: &mut Video, frame: u16) {
+    for (offset, rgba) in ABOUT_PALETTE.iter().copied().enumerate() {
+        video.set_palette(ABOUT_PALETTE_START + offset as u8, rgba);
+    }
+    let color_map: [u8; 256] = core::array::from_fn(|color| {
+        let rgb = rgb332(color as u8);
+        let mut nearest = 0usize;
+        let mut nearest_distance = u32::MAX;
+        for (index, candidate) in ABOUT_PALETTE.iter().enumerate() {
+            let red = i32::from(rgb[0]) - i32::from(candidate[0]);
+            let green = i32::from(rgb[1]) - i32::from(candidate[1]);
+            let blue = i32::from(rgb[2]) - i32::from(candidate[2]);
+            let distance = (red * red + green * green + blue * blue) as u32;
+            if distance < nearest_distance {
+                nearest = index;
+                nearest_distance = distance;
+            }
+        }
+        ABOUT_PALETTE_START + nearest as u8
+    });
+
+    let modal_y = (ROWS - ABOUT_HEIGHT) / 2;
+    let left = (EDITOR_DISPLAY_WIDTH - ABOUT_LOGO_WIDTH) / 2;
+    let top = (modal_y + 3) * GLYPH_HEIGHT;
+    let pixels = video.pixels_mut();
+    for y in 0..ABOUT_LOGO_HEIGHT {
+        for x in 0..ABOUT_LOGO_WIDTH {
+            let (horizontal, vertical) = about_wave_offsets(x, y, frame);
+            let warped_x = x as i32 - horizontal;
+            let warped_y = y as i32 - vertical;
+            if !(0..ABOUT_LOGO_WIDTH as i32).contains(&warped_x)
+                || !(0..ABOUT_LOGO_HEIGHT as i32).contains(&warped_y)
+            {
+                continue;
+            }
+            let source_x = warped_x as usize * DISPLAY_WIDTH / ABOUT_LOGO_WIDTH;
+            let source_y = warped_y as usize * DISPLAY_HEIGHT / ABOUT_LOGO_HEIGHT;
+            let source = BOOT_LOGO[source_y * DISPLAY_WIDTH + source_x];
+            let rgb = rgb332(source);
+            if u16::from(rgb[0]) + u16::from(rgb[1]) + u16::from(rgb[2]) < 32 {
+                continue;
+            }
+            pixels[(top + y) * EDITOR_DISPLAY_WIDTH + left + x] = color_map[source as usize];
+        }
+    }
+}
+
+fn about_wave_offsets(x: usize, y: usize, frame: u16) -> (i32, i32) {
+    let Some(phase) = about_wave_phase(frame) else { return (0, 0) };
+    let strength = i32::from(about_wave_strength(frame));
+    let horizontal = i32::from(ABOUT_RASTER_WAVE[(y / 3 + phase) % ABOUT_RASTER_WAVE.len()]);
+    let vertical = i32::from(ABOUT_RASTER_WAVE[(x / 6 + phase + 8) % ABOUT_RASTER_WAVE.len()]);
+    (
+        scale_signed(scale_signed(horizontal, 3, 2), strength, 256),
+        scale_signed(scale_signed(vertical, 1, 2), strength, 256),
+    )
+}
+
+fn about_wave_phase(frame: u16) -> Option<usize> {
+    let wave_time = frame % 240;
+    (120..180).contains(&wave_time).then(|| usize::from(wave_time - 120))
+}
+
+fn about_wave_strength(frame: u16) -> u16 {
+    let wave_time = frame % 240;
+    if !(120..180).contains(&wave_time) {
+        return 0;
+    }
+    let local = usize::from(wave_time - 120);
+    let step = if local < 16 {
+        local
+    } else if local >= 44 {
+        59 - local
+    } else {
+        16
+    };
+    ABOUT_WAVE_EASE[step]
+}
+
+fn scale_signed(value: i32, numerator: i32, denominator: i32) -> i32 {
+    let scaled = value * numerator;
+    if scaled >= 0 {
+        (scaled + denominator / 2) / denominator
+    } else {
+        (scaled - denominator / 2) / denominator
+    }
+}
+
+fn rgb332(color: u8) -> [u8; 3] {
+    [
+        ((u16::from(color >> 5) * 255 + 3) / 7) as u8,
+        ((u16::from((color >> 2) & 7) * 255 + 3) / 7) as u8,
+        (u16::from(color & 3) * 85) as u8,
+    ]
 }
 
 fn draw_block_cursor(video: &mut Video, cell_x: usize, cell_y: usize, character: u8) {
@@ -3617,7 +3792,7 @@ fn configure_ui_palette(video: &mut Video) {
     video.set_palette(UI_ERROR_BACKGROUND, [192, 32, 40, 255]);
     video.set_palette(UI_SUCCESS_BACKGROUND, [32, 80, 192, 255]);
     // Darkened Catppuccin blue/red keep white debugger text readable. These
-    // two backgrounds receive the same four-step vertical shading as glyphs.
+    // two backgrounds receive the same per-scanline vertical shading as glyphs.
     video.set_palette(UI_DEBUG_CURRENT_BACKGROUND, [48, 70, 108, 255]);
     video.set_palette(UI_BREAKPOINT_BACKGROUND, [112, 52, 67, 255]);
 }
@@ -3848,6 +4023,7 @@ fn is_opcode(token: &str) -> bool {
             | "TXS"
             | "TYA"
             | "KIL"
+            | "JAM"
             | "SLO"
             | "RLA"
             | "SRE"
@@ -3856,11 +4032,13 @@ fn is_opcode(token: &str) -> bool {
             | "LAX"
             | "DCP"
             | "ISC"
+            | "ISB"
             | "ANC"
             | "ALR"
             | "ARR"
             | "XAA"
             | "AXS"
+            | "SBX"
             | "AHX"
             | "SHY"
             | "SHX"
@@ -4080,6 +4258,71 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(first_cell.contains(&UI_SUCCESS_BACKGROUND));
         assert!(first_cell.contains(&UI_WHITE_COLOR));
+    }
+
+    #[test]
+    fn help_about_renders_version_animated_logo_and_gradient_menu_bar() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        assert_eq!(menu_origin(MenuKind::Help), 34);
+        assert_eq!(menu_bar_hit(34), Some(MenuKind::Help));
+        assert_eq!(menu_hotkey(MenuKind::Help, "a"), Some(0));
+        assert_eq!(about_wave_phase(119), None);
+        assert_eq!(about_wave_phase(120), Some(0));
+        assert_eq!(about_wave_phase(121), Some(1));
+        assert_eq!(about_wave_strength(119), 0);
+        assert_eq!(about_wave_strength(120), 0);
+        assert_eq!(about_wave_strength(136), 256);
+        assert_eq!(about_wave_strength(163), 256);
+        assert_eq!(about_wave_strength(179), 0);
+        assert_eq!(about_wave_strength(180), 0);
+        let fade_in = (120..=136).map(about_wave_strength).collect::<Vec<_>>();
+        let fade_out = (163..=179).map(about_wave_strength).collect::<Vec<_>>();
+        assert!(fade_in.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(fade_out.windows(2).all(|pair| pair[0] >= pair[1]));
+        let horizontal_amplitude =
+            (0..ABOUT_LOGO_HEIGHT).map(|y| about_wave_offsets(0, y, 136).0.abs()).max().unwrap();
+        let vertical_amplitude =
+            (0..ABOUT_LOGO_WIDTH).map(|x| about_wave_offsets(x, 0, 136).1.abs()).max().unwrap();
+        assert_eq!(horizontal_amplitude, 8);
+        assert_eq!(vertical_amplitude, 3);
+        editor.activate_menu(MenuKind::Help, 0);
+        assert!(matches!(editor.overlay, Overlay::About { frame: 0 }));
+
+        let mut cells = [b' '; COLUMNS * ROWS];
+        let mut foregrounds = [0; COLUMNS * ROWS];
+        let mut backgrounds = [0; COLUMNS * ROWS];
+        let mut inverse = [false; COLUMNS * ROWS];
+        editor.render_overlay(
+            &mut cells,
+            &mut foregrounds,
+            &mut backgrounds,
+            &mut inverse,
+            CellStyle { foreground: UI_WHITE_COLOR, background: 0 },
+        );
+        assert!(cells.windows(8).any(|window| window == b"FANTICON"));
+        assert!(cells.windows(5).any(|window| window == b"0.1.0"));
+
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut video, false);
+        let still = video.pixels().to_vec();
+        assert!(
+            still
+                .iter()
+                .any(|color| (ABOUT_PALETTE_START..ABOUT_PALETTE_START + 16).contains(color))
+        );
+        let top = video.palette()[still[(COLUMNS - 1) * GLYPH_WIDTH] as usize];
+        let bottom =
+            video.palette()[still[7 * EDITOR_DISPLAY_WIDTH + (COLUMNS - 1) * GLYPH_WIDTH] as usize];
+        assert_eq!(top, [255, 255, 255, 255]);
+        assert!(bottom[0] < top[0]);
+
+        for _ in 0..130 {
+            editor.update();
+        }
+        editor.render(&mut video, false);
+        assert_ne!(video.pixels(), still);
+        editor.handle_overlay_key(&Key::Named(NamedKey::Escape), ModifiersState::empty());
+        assert!(matches!(editor.overlay, Overlay::None));
     }
 
     #[test]
@@ -4378,9 +4621,15 @@ mod tests {
         let executing = cell_colors(EDITOR_START + 1, EDITOR_FIRST_ROW + 1);
 
         assert!(breakpoint.contains(&UI_BREAKPOINT_BACKGROUND));
-        assert!(breakpoint.contains(&UI_WHITE_COLOR));
         assert!(executing.contains(&UI_DEBUG_CURRENT_BACKGROUND));
-        assert!(executing.contains(&UI_WHITE_COLOR));
+        let has_white_gradient_text = |colors: &[u8]| {
+            colors.iter().any(|color| {
+                let rgba = video.palette()[*color as usize];
+                rgba[0] == rgba[1] && rgba[1] == rgba[2] && rgba[0] >= 127
+            })
+        };
+        assert!(has_white_gradient_text(&breakpoint));
+        assert!(has_white_gradient_text(&executing));
         assert_eq!(video.palette()[UI_DEBUG_CURRENT_BACKGROUND as usize], [48, 70, 108, 255]);
         assert_eq!(video.palette()[UI_BREAKPOINT_BACKGROUND as usize], [112, 52, 67, 255]);
 
@@ -4776,10 +5025,10 @@ mod tests {
             .unwrap();
         let border_pixel =
             video.pixels()[(GLYPH_HEIGHT + border.1) * EDITOR_DISPLAY_WIDTH + border.0];
-        let brightness = [255, 212, 170, 127][(border.1 / 2).min(3)];
+        let brightness = 255 * (14 - border.1 as u16) / 14;
         assert_eq!(
             video.palette()[border_pixel as usize][..3],
-            [brightness, brightness, brightness]
+            [brightness as u8, brightness as u8, brightness as u8]
         );
     }
 
@@ -4872,6 +5121,18 @@ mod tests {
         let operand = assembly_syntax_colors("         LDA   P1CTL", ASM_TEXT_COLOR);
         assert!(operand[15..20].iter().all(|color| *color == ASM_TEXT_COLOR));
         assert!(!operand.contains(&ASM_NUMBER_COLOR));
+    }
+
+    #[test]
+    fn asm_highlighting_recognizes_undocumented_aliases() {
+        for mnemonic in [
+            "KIL", "JAM", "SLO", "RLA", "SRE", "RRA", "SAX", "LAX", "DCP", "ISC", "ISB", "ANC",
+            "ALR", "ARR", "XAA", "AXS", "SBX", "AHX", "SHY", "SHX", "TAS", "LAS",
+        ] {
+            let line = format!("         {mnemonic}   #$01");
+            let colors = assembly_syntax_colors(&line, ASM_TEXT_COLOR);
+            assert!(colors[9..9 + mnemonic.len()].iter().all(|color| *color == ASM_OPCODE_COLOR));
+        }
     }
 
     #[test]

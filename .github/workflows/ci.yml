@@ -16,9 +16,10 @@ jobs:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
       - run: cargo test --release --locked
       - run: cargo build --release --locked
+      - run: cargo bench --no-default-features --bench vm --no-run --locked
 
   web:
     runs-on: ubuntu-latest
@@ -30,3 +31,5 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - run: cargo build --release --locked --target wasm32-unknown-unknown
+      - run: cargo install wasm-pack --version 0.13.1 --locked
+      - run: wasm-pack test --headless --chrome --test web_runtime

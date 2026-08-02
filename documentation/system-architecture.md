@@ -390,7 +390,9 @@ line 0, dot 0. Disconnecting a controller produces an all-released state.
 
 Controller 1 defaults to arrow keys, Z for A, X for B, Space for Select, and
 Enter for Start. Controller 2 has no default keyboard mapping and uses a second
-gamepad.
+gamepad. The first two connected gamepads retain stable controller slots through
+hot-plug events. Controller 1 combines its gamepad and keyboard states; focus
+loss, hot-unplug, and debugger stops release host input latches.
 
 ## Timers
 

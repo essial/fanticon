@@ -112,8 +112,17 @@ supported. Write operands in standard 6502 form:
 | Relative | `BNE LABEL` |
 
 The assembler rejects an addressing mode that the selected instruction does not
-implement. Undocumented opcodes are not currently emitted by this assembler,
-even though Fanticon's CPU can execute them.
+implement. It also supports Fanticon's stable NMOS 6502 undocumented mnemonics:
+`SLO`, `RLA`, `SRE`, `RRA`, `SAX`, `LAX`, `DCP`, `ISC`/`ISB`, `ANC`, `ALR`,
+`ARR`, `XAA`, `AXS`/`SBX`, `AHX`, `SHY`, `SHX`, `TAS`, `LAS`, and `KIL`/`JAM`.
+Addressed undocumented `NOP` forms are accepted as well.
+
+Some undocumented operations have several opcode bytes with identical syntax.
+The assembler emits one stable canonical byte for each form: `$02` for
+`KIL`/`JAM`, `$0B` for `ANC #`, and `$80`, `$04`, `$14`, `$0C`, or `$1C` for
+the addressed `NOP` modes. Use `DFB` or `HEX` when software needs a particular
+duplicate byte. These instructions are NMOS-specific and may behave differently
+or be reassigned on later 6502-family CPUs.
 
 ## Directives
 

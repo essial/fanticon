@@ -17,6 +17,14 @@ prompt displays the current virtual path, beginning with `/>`. Browser builds
 use an in-memory virtual root because web pages cannot directly mount the host's
 Documents directory.
 
+Fanticon's checked-in examples live in `code-assets` at the repository root.
+Every native app build mirrors each child of that directory directly into the
+console's root while preserving unrelated user content. A small hidden manifest
+allows deleted or renamed managed folders to be cleaned up without touching
+folders such as `/music` or `/test`. The included demo projects are therefore
+available under `/demos`, and all console-visible names retain the normal 8.3
+limit.
+
 ## Launching
 
 Ordinary launches enter Editor mode:
@@ -118,12 +126,18 @@ Run `EDIT` for a new document or `EDIT NOTES.TXT` to load a file from the
 current console directory. The editor uses Fanticon's own character display and
 text-mode dialogs; it does not open native operating-system controls.
 
-The menu bar contains **File**, **Edit**, and **Build** menus. Press F10 or Alt+F for File,
-Alt+E for Edit, Alt+B for Build, use the arrow keys to navigate, Enter to choose an item, and
-Escape to close a menu. While a menu is open, its displayed single-letter
+The menu bar contains **File**, **Edit**, **Build**, **Debug**, **Music**, and
+**Help** menus. Its white field uses the same smooth per-scanline vertical
+gradient as editor text. Press F10 or Alt+F for File, Alt+E for Edit, Alt+B for Build, Alt+D
+for Debug, Alt+M for Music, or Alt+H for Help. Use the arrow keys to navigate,
+Enter to choose an item, and Escape to close a menu. While a menu is open, its displayed single-letter
 hotkeys activate items immediately. File uses N/O/S/A/X for New, Open, Save,
 Save As, and Exit. Edit uses U/T/C/P/A for Undo, Cut, Copy, Paste, and Select
-All. Build uses B/N/P for Assemble, Next Error, and Previous Error.
+All. Build uses B/N/P for Assemble, Next Error, and Previous Error. **Help >
+About** opens the version dialog. Its compact Fanticon logo periodically bends
+individual raster lines horizontally while a smaller column-driven wave bends
+them vertically. Each burst eases in and out over 16 frames before returning to
+its stable form, avoiding an abrupt transition at either edge.
 
 Editing supports the arrow, Home, End, Page Up, Page Down, Backspace, Delete,
 Enter, and Tab keys. Hold Shift while moving to select text. The familiar

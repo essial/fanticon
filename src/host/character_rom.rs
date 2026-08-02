@@ -14,16 +14,16 @@ pub const SYMBOL_CROSS: u8 = 9;
 pub const SYMBOL_BUSY: u8 = 10;
 pub const CHARACTER_ROM: [[u8; GLYPH_HEIGHT]; 128] = build_character_rom();
 
-pub type TextGradient = [[u8; 4]; 256];
+pub type TextGradient = [[u8; GLYPH_HEIGHT]; 256];
 
-/// Create four palette levels for every color used by text glyphs. Keeping
-/// shading in palette-indexed glyph pixels leaves solid cell backgrounds
+/// Create one palette level per glyph scanline for every color used by text.
+/// Keeping shading in palette-indexed pixels leaves ordinary cell backgrounds
 /// untouched, including colored build dialogs.
 pub fn configure_text_gradient(
     video: &mut Video,
     colors: impl IntoIterator<Item = u8>,
 ) -> TextGradient {
-    let mut gradient = core::array::from_fn(|index| [index as u8; 4]);
+    let mut gradient = core::array::from_fn(|index| [index as u8; GLYPH_HEIGHT]);
     let mut sources = [false; 256];
     for color in colors {
         sources[color as usize] = true;
@@ -36,7 +36,9 @@ pub fn configure_text_gradient(
             continue;
         }
         let rgba = video.palette()[source];
-        for (step, numerator) in [5u16, 4, 3].into_iter().enumerate() {
+        let denominator = (GLYPH_HEIGHT * 2 - 2) as u16;
+        for (step, gradient_step) in gradient[source].iter_mut().enumerate().skip(1) {
+            let numerator = denominator - step as u16;
             while next_candidate < 256 && unavailable[next_candidate] {
                 next_candidate += 1;
             }
@@ -47,20 +49,20 @@ pub fn configure_text_gradient(
             video.set_palette(
                 shade,
                 [
-                    (u16::from(rgba[0]) * numerator / 6) as u8,
-                    (u16::from(rgba[1]) * numerator / 6) as u8,
-                    (u16::from(rgba[2]) * numerator / 6) as u8,
+                    (u16::from(rgba[0]) * numerator / denominator) as u8,
+                    (u16::from(rgba[1]) * numerator / denominator) as u8,
+                    (u16::from(rgba[2]) * numerator / denominator) as u8,
                     rgba[3],
                 ],
             );
-            gradient[source][step + 1] = shade;
+            *gradient_step = shade;
         }
     }
     gradient
 }
 
 pub fn gradient_color(gradient: &TextGradient, color: u8, glyph_y: usize) -> u8 {
-    gradient[color as usize][(glyph_y / 2).min(3)]
+    gradient[color as usize][glyph_y.min(GLYPH_HEIGHT - 1)]
 }
 
 const fn build_character_rom() -> [[u8; GLYPH_HEIGHT]; 128] {
@@ -224,18 +226,28 @@ mod tests {
     }
 
     #[test]
-    fn text_gradient_has_four_steps_from_full_to_half_brightness() {
+    fn text_gradient_has_one_smooth_step_per_scanline_from_full_to_half_brightness() {
         let mut video = Video::new_with_size(8, 8);
         video.set_palette(42, [120, 90, 60, 255]);
         video.set_palette(99, [11, 22, 33, 255]);
 
         let gradient = configure_text_gradient(&mut video, [42]);
-        let shades =
-            [0, 2, 4, 6].map(|row| video.palette()[gradient_color(&gradient, 42, row) as usize]);
+        let shades = core::array::from_fn::<_, GLYPH_HEIGHT, _>(|row| {
+            video.palette()[gradient_color(&gradient, 42, row) as usize]
+        });
 
         assert_eq!(
             shades,
-            [[120, 90, 60, 255], [100, 75, 50, 255], [80, 60, 40, 255], [60, 45, 30, 255],]
+            [
+                [120, 90, 60, 255],
+                [111, 83, 55, 255],
+                [102, 77, 51, 255],
+                [94, 70, 47, 255],
+                [85, 64, 42, 255],
+                [77, 57, 38, 255],
+                [68, 51, 34, 255],
+                [60, 45, 30, 255],
+            ]
         );
         assert_eq!(video.palette()[99], [11, 22, 33, 255]);
     }

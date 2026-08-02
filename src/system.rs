@@ -619,9 +619,7 @@ impl FanticonBus {
                 self.work_ram[bank * BANK_SIZE + offset]
             }
             bank_kind::VIDEO_RAM if bank < 3 => self.video_ram[bank * BANK_SIZE + offset],
-            bank_kind::SAVE_RAM
-                if self.save_writable && bank < usize::from(self.cartridge.save_banks) =>
-            {
+            bank_kind::SAVE_RAM if bank < usize::from(self.cartridge.save_banks) => {
                 self.save_ram[bank * BANK_SIZE + offset]
             }
             _ => 0xff,
@@ -636,7 +634,9 @@ impl FanticonBus {
                 self.work_ram[bank * BANK_SIZE + offset] = value
             }
             bank_kind::VIDEO_RAM if bank < 3 => self.video_ram[bank * BANK_SIZE + offset] = value,
-            bank_kind::SAVE_RAM if bank < usize::from(self.cartridge.save_banks) => {
+            bank_kind::SAVE_RAM
+                if self.save_writable && bank < usize::from(self.cartridge.save_banks) =>
+            {
                 self.save_ram[bank * BANK_SIZE + offset] = value;
                 self.save_dirty = true;
                 self.save_generation = self.save_generation.wrapping_add(1);
@@ -910,6 +910,20 @@ mod tests {
         assert!(bus.save_dirty());
         bus.write(register::BANK_NUMBER, 1);
         assert_eq!(bus.read(0x8000), 0xff);
+    }
+
+    #[test]
+    fn read_only_save_ram_remains_readable_and_ignores_writes() {
+        let mut bus = FanticonBus::new(test_cartridge(&[0xea], 1), Some(vec![0x5a; BANK_SIZE]));
+        bus.write(register::BANK_KIND, bank_kind::SAVE_RAM);
+        bus.write(register::BANK_NUMBER, 0);
+        bus.set_save_writable(false);
+
+        assert_eq!(bus.read(0x8000), 0x5a);
+        bus.write(0x8000, 0xa5);
+        assert_eq!(bus.read(0x8000), 0x5a);
+        assert!(!bus.save_dirty());
+        assert_eq!(bus.save_generation(), 0);
     }
 
     #[test]

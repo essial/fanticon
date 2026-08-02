@@ -57,6 +57,12 @@ guard. The native Editor mode command console then appears by default.
 cargo run --release
 ```
 
+Native app builds mirror each folder inside the repository's `code-assets`
+directory directly into `Documents/Fanticon`. This makes the checked-in examples
+available at `/demos` inside Fanticon while keeping the repository copy
+authoritative and preserving unrelated user files. Set
+`FANTICON_SKIP_CODE_ASSET_SYNC=1` to skip this developer convenience when needed.
+
 Inside Fanticon, `NEW PROJECT`, `BUILD`, and `RUN` create, package, and launch a
 cartridge project. An existing image can be launched with `RUN GAME.FCN`, or
 directly from the host:
@@ -120,6 +126,27 @@ default. Release mode is recommended for the complete 2.56-million-case suite:
 cargo test --release -- --nocapture
 cargo build --release
 ```
+
+Run the headless whole-machine performance workloads with:
+
+```sh
+cargo bench --no-default-features --bench vm
+```
+
+The report covers the audio, bitmap, raster, sprite, tile, and two-axis wave
+demo cartridges and prints frames per second, emulated cycles per second, the
+multiple of Fanticon's required 60 Hz real-time rate, and steady-state allocation
+calls per frame.
+
+Browser runtime tests use `wasm-pack` and headless Chrome:
+
+```sh
+wasm-pack test --headless --chrome --test web_runtime
+```
+
+They execute a cartridge inside WebAssembly and verify controller sampling,
+indexed video output, generated audio, and persistent `.SAV` serialization
+through browser storage.
 
 Run one opcode by filtering on its test name:
 

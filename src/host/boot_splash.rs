@@ -3,7 +3,7 @@ use web_time::{Duration, Instant};
 
 const BOOT_DURATION: Duration = Duration::from_secs(5);
 const INPUT_GUARD: Duration = Duration::from_millis(500);
-const BOOT_LOGO: &[u8; FRAMEBUFFER_LEN] =
+pub(super) const BOOT_LOGO: &[u8; FRAMEBUFFER_LEN] =
     include_bytes!("../../assets/branding/fanticon-logo.rgb332");
 
 pub struct BootSplash {

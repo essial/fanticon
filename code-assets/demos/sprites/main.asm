@@ -1,9 +1,9 @@
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; SPRITE, CLIPPING, AND CONTROLLER DEMO
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
-; Sprite records occupy VRAM offsets $2800-$28FF. In
-; bank 0 they appear at $A800. Record 0 uses:
+; Sprite records occupy VRAM offsets $3000-$30FF. In
+; bank 0 they appear at $B000. Record 0 uses:
 ;   +0 X low       +1 X bit 8 and priority
 ;   +2 Y           +3 tile       +4 attributes
 ;
@@ -11,9 +11,9 @@
 ; 2. Color zero is transparent. Other pixels use
 ; palette entries $21-$2F.
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; HARDWARE REGISTERS AND WORK RAM
-; -------------------------------------------------------
+; ---------------------------------------------------
 BANKKIND EQU   $C000
 IRQPEND  EQU   $C002
 IRQEN    EQU   $C003
@@ -24,9 +24,9 @@ XPOS     EQU   $20
 XFLAG    EQU   $21
 YPOS     EQU   $22
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; RESET AND PATTERN COPY
-; -------------------------------------------------------
+; ---------------------------------------------------
 
          FIXED
          ORG   $C100
@@ -41,26 +41,26 @@ COPY     LDA   PATTERN,X
          CPX   #32
          BNE   COPY
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; SPRITE SETUP
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; X is a nine-bit coordinate split across two bytes; Y
 ; is eight-bit. $1F0-$1FF and $F0-$FF are negative
 ; clipped positions.
          LDA   #156
          STA   XPOS
-         STA   $A800
+         STA   $B000
          LDA   #0
          STA   XFLAG
-         STA   $A801
+         STA   $B001
          LDA   #96
          STA   YPOS
-         STA   $A802
+         STA   $B002
          LDA   #1
-         STA   $A803
+         STA   $B003
          LDA   #$82
-         STA   $A804
+         STA   $B004
          LDA   #$49
          STA   BGCOLOR
          LDA   #2
@@ -70,9 +70,9 @@ COPY     LDA   PATTERN,X
          CLI
 IDLE     JMP   IDLE
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; VBLANK MOVEMENT
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; Movement occurs once per VBlank. Crossing X=$000
 ; toggles bit 8 and naturally produces $1FF (-1). The
@@ -106,20 +106,20 @@ NOUP     LDA   PAD
 NODOWN   LDA   XPOS
 ; Records are sampled at each scanline start. These
 ; writes affect the next scanline snapshot.
-         STA   $A800
+         STA   $B000
          LDA   XFLAG
-         STA   $A801
+         STA   $B001
          LDA   YPOS
-         STA   $A802
+         STA   $B002
          LDA   #1
          STA   IRQPEND
          PLA
          RTI
 NMI      RTI
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; SPRITE PATTERN DATA
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; Four packed bytes encode each row of this shape.
 PATTERN  HEX   000FF000
@@ -131,9 +131,9 @@ PATTERN  HEX   000FF000
          HEX   00FFFF00
          HEX   000FF000
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; INTERRUPT VECTORS
-; -------------------------------------------------------
+; ---------------------------------------------------
 
          ORG   $FFFA
          DA    NMI,RESET,IRQ

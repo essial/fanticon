@@ -176,7 +176,7 @@ may overlay the same 32 hardware sprites in either mode:
 | `VIDEO_MODE` | Mode |
 | ---: | --- |
 | 0 | Blank/backdrop color |
-| 1 | 40×25 map of 8×8, 4-bpp tiles |
+| 1 | 320×200 viewport into a 64×32 map of 8×8, 4-bpp tiles |
 | 2 | Packed 320×200, 4-bpp bitmap |
 
 This is intentionally one background layer, not a general scene graph. Tile mode
@@ -207,13 +207,13 @@ In tile mode, VRAM contains:
 | VRAM offset | Size | Purpose |
 | --- | ---: | --- |
 | `$0000-$1FFF` | 8 KiB | 256 packed 4-bpp tile patterns |
-| `$2000-$23E7` | 1,000 B | 40×25 tile numbers |
-| `$2400-$27E7` | 1,000 B | 40×25 tile attributes |
-| `$2800-$28FF` | 256 B | 32 eight-byte sprite records |
-| `$2900-$3FFF` | — | Reserved/scratch VRAM |
+| `$2000-$27FF` | 2,048 B | 64×32 tile numbers |
+| `$2800-$2FFF` | 2,048 B | 64×32 tile attributes |
+| `$3000-$30FF` | 256 B | 32 eight-byte sprite records |
+| `$3100-$3FFF` | — | Reserved/scratch VRAM |
 
 Each tile occupies 32 bytes. Every byte contains two horizontal pixels: the high
-nibble is the left pixel, then the low nibble. Tile-map offset is `y*40+x`.
+nibble is the left pixel, then the low nibble. Tile-map offset is `y*64+x`.
 
 Tile attributes are:
 
@@ -225,12 +225,19 @@ bit 4    horizontal flip
 bits 3-0 palette bank
 ```
 
-Scroll X and Y independently wrap across the 320×200 tile map, allowing movement
-in all four directions. Increasing X moves the viewport right and the visible
-tiles left; decreasing X moves it left. Increasing Y moves the viewport down and
-the visible tiles up; decreasing Y moves it up. They are 16-bit registers so game
-code can use ordinary world-coordinate arithmetic even though the hardware
-reduces them modulo 320 and 200.
+Scroll X and Y independently wrap across the 512×256-pixel circular tile map,
+allowing movement in all four directions. The visible viewport remains 320×200.
+Increasing X moves the viewport right and the visible tiles left; decreasing X
+moves it left. Increasing Y moves the viewport down and the visible tiles up;
+decreasing Y moves it up. The off-screen margin lets games replace rows and
+columns after they leave the viewport, supporting indefinitely streamed worlds.
+
+For an infinite world, treat the 64×32 map as a ring buffer. Keep world-space
+camera coordinates in game RAM, write `SCROLL_X/Y` from their low 16 bits, and
+map a world tile `(wx,wy)` to hardware cell `(wx & 63, wy & 31)`. When the camera
+crosses an eight-pixel tile boundary, populate the newly approaching off-screen
+row or column during VBlank. The 320×200 viewport consumes at most 41×26 cells
+when partially scrolled, leaving at least 23 hidden columns and six hidden rows.
 
 In bitmap mode, offsets `$4000-$BCFF` in VRAM banks 1-2 are 32,000 packed pixels
 in row-major order. The high nibble is the even X pixel and the low nibble is the
@@ -280,8 +287,8 @@ against their own objects rather than rendered pixels.
 | `$C010` | `VIDEO_MODE` | Blank, tile, or bitmap background |
 | `$C011` | `VIDEO_CONTROL` | Bit 0: background enable; bit 1: sprite enable |
 | `$C012` | `BACKDROP_COLOR` | Full 8-bit palette index behind disabled backgrounds |
-| `$C013-$C014` | `SCROLL_X` | Tile-map horizontal scroll |
-| `$C015-$C016` | `SCROLL_Y` | Tile-map vertical scroll |
+| `$C013-$C014` | `SCROLL_X` | Signed 16-bit tile-map horizontal scroll |
+| `$C015-$C016` | `SCROLL_Y` | Signed 16-bit tile-map vertical scroll |
 | `$C017-$C018` | `RASTER_X` | Compare dot, 0-399 |
 | `$C019-$C01A` | `RASTER_Y` | Compare line, 0-261 |
 | `$C01B` | `PALETTE_INDEX` | Palette address |
@@ -293,6 +300,10 @@ The raster source becomes pending once per visit when both compare coordinates
 match. Clearing it at that coordinate does not retrigger it. Programming a point
 ahead of the beam may trigger in the current frame; a passed point waits for the
 next frame. Reset target `(511,511)` is unreachable.
+
+Scroll values use 16-bit two's-complement representation before wrapping to the
+512x256 tilemap. Consequently `$FFFF` means -1 on either axis, which makes a
+one-pixel decrement at zero continue smoothly across the corresponding edge.
 
 `VIDEO_STATUS` bit 0 is live VBlank, bit 1 is live HBlank, and bit 2 is sprite
 overflow latched for the frame. Other bits read zero and reads clear nothing.

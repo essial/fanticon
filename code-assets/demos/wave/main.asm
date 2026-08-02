@@ -1,19 +1,19 @@
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; RASTER WAVE DEMO
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; This demo changes SCROLL_X once per scanline along a
 ; 128-step sine curve. SCROLL_Y follows the curve once
-; per frame, one quarter cycle ahead of X. Both axes move
-; smoothly without discontinuities between raster lines.
+; per frame, one quarter cycle ahead of X. Both axes
+; move smoothly without discontinuities between lines.
 ;
-; The comparator fires at dot 220. IRQ entry plus handler
-; work delays the scroll write until HBlank, so the new
-; value is ready before the next line begins.
+; The comparator fires at dot 220. IRQ entry and work
+; delay the scroll write until HBlank, so the new value
+; is ready before the next line begins.
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; HARDWARE REGISTERS AND WORK RAM
-; -------------------------------------------------------
+; ---------------------------------------------------
 BANKKIND EQU   $C000
 IRQPEND  EQU   $C002
 IRQEN    EQU   $C003
@@ -33,9 +33,9 @@ PALDATA  EQU   $C01C
 PHASE    EQU   $20
 SCANLINE EQU   $21
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; RESET AND TILE PATTERN SETUP
-; -------------------------------------------------------
+; ---------------------------------------------------
 
          FIXED
          ORG   $C100
@@ -44,8 +44,9 @@ RESET    SEI
          LDX   #$FF
          TXS
 
-; Map VRAM bank 0 at $8000-$BFFF. Tile pattern 1 begins
-; at $8020 because every four-bit 8x8 tile uses 32 bytes.
+; Map VRAM bank 0 at $8000-$BFFF. Tile pattern 1
+; begins at $8020. Every four-bit 8x8 tile uses
+; 32 bytes.
          LDA   #2
          STA   BANKKIND
          LDX   #0
@@ -55,30 +56,34 @@ COPYTILE LDA   PATTERN,X
          CPX   #32
          BNE   COPYTILE
 
-; Fill all 1,000 tile cells with pattern 1. Palette bank
-; zero is used throughout, so pixel values 1, 2, and 3
-; select the RGB entries configured below.
+; Fill all 2,048 tile cells with pattern 1. Palette
+; bank zero is used throughout, so pixel values 1, 2,
+; and 3 select the RGB entries configured below.
          LDX   #0
 FILLMAP  LDA   #1
          STA   $A000,X
          STA   $A100,X
          STA   $A200,X
-         CPX   #$E8
-         BCS   NOMAP4
          STA   $A300,X
-NOMAP4   LDA   #0
          STA   $A400,X
          STA   $A500,X
          STA   $A600,X
-         CPX   #$E8
-         BCS   NOATTR4
          STA   $A700,X
-NOATTR4  INX
+         LDA   #0
+         STA   $A800,X
+         STA   $A900,X
+         STA   $AA00,X
+         STA   $AB00,X
+         STA   $AC00,X
+         STA   $AD00,X
+         STA   $AE00,X
+         STA   $AF00,X
+         INX
          BNE   FILLMAP
 
-; Tile pixels select palette indexes. Map indexes 1-3 to
-; pure RGB332 red, green, and blue. PALDATA automatically
-; advances PALINDEX after every write.
+; Tile pixels select palette indexes. Map indexes 1-3
+; to pure RGB332 red, green, and blue. PALDATA advances
+; PALINDEX after every write.
          LDA   #1
          STA   PALINDEX
          LDA   #$E0
@@ -88,11 +93,11 @@ NOATTR4  INX
          LDA   #$03
          STA   PALDATA
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; VIDEO AND FIRST RASTER EVENT
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
-; Mode 1 selects the tilemap and VCTRL bit 0 enables it.
+; Mode 1 selects tilemap and VCTRL bit 0 enables it.
 ; The first comparator waits at line 261 so the first
 ; visible frame begins with line zero prepared.
          LDA   #1
@@ -117,11 +122,11 @@ NOATTR4  INX
          CLI
 IDLE     JMP   IDLE
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; RASTER INTERRUPT
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
-; SCANLINE records the line whose comparator just fired.
+; SCANLINE records the comparator line that just fired.
 ; $FF means line 261, the final VBlank line. SETWAVE
 ; always prepares the following visible line.
 IRQ      PHA
@@ -155,9 +160,9 @@ WAITFRAME
          STA   RASTYHI
          JMP   IRQDONE
 
-; Advance both axes once per frame. Y has a quarter-cycle
-; phase offset. It stays constant for the frame; changing
-; it per line would fold the image.
+; Advance both axes once per frame. Y has a quarter
+; cycle offset. It stays constant for the frame;
+; changing it per line would fold the image.
 NEWFRAME INC   PHASE
          LDX   #0
          STX   SCANLINE
@@ -174,7 +179,7 @@ NEWFRAME INC   PHASE
          STA   RASTYHI
 
 ; Raster IRQ is bit 1. IRQPEND is write-one-to-clear.
-; Other IRQ sources stay pending if a game enables them.
+; Other IRQ sources stay pending when enabled.
 IRQDONE  LDA   #2
          STA   IRQPEND
          PLA
@@ -182,11 +187,11 @@ IRQDONE  LDA   #2
          PLA
          RTI
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; WAVE LOOKUP
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
-; X is the next scanline. PHASE moves the 128-entry curve
+; X is the next line. PHASE moves the 128-entry curve
 ; each frame. Adjacent entries differ by at most two
 ; pixels, avoiding the old coarse steps.
 SETWAVE  TXA
@@ -229,8 +234,8 @@ PATTERN  HEX   11122333
 
 NMI      RTI
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; INTERRUPT VECTORS
-; -------------------------------------------------------
+; ---------------------------------------------------
          ORG   $FFFA
          DA    NMI,RESET,IRQ

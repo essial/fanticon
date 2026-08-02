@@ -26,6 +26,11 @@ pub const BANK_SIZE: usize = 16 * 1024;
 pub const MAIN_RAM_SIZE: usize = 32 * 1024;
 pub const VIDEO_RAM_BANKS: usize = 3;
 pub const VIDEO_RAM_SIZE: usize = VIDEO_RAM_BANKS * BANK_SIZE;
+pub const TILEMAP_WIDTH: usize = 64;
+pub const TILEMAP_HEIGHT: usize = 32;
+pub const TILEMAP_CELLS: usize = TILEMAP_WIDTH * TILEMAP_HEIGHT;
+pub const TILEMAP_PIXEL_WIDTH: usize = TILEMAP_WIDTH * 8;
+pub const TILEMAP_PIXEL_HEIGHT: usize = TILEMAP_HEIGHT * 8;
 pub const WORK_RAM_BANKS: usize = 4;
 pub const MAX_CARTRIDGE_BANKS: usize = 256;
 pub const MAX_SAVE_RAM_BANKS: usize = 4;
@@ -135,6 +140,7 @@ mod tests {
         assert_eq!(video_mode::TILE, 1);
         assert_eq!(VIDEO_RAM_BANKS, 3);
         assert_eq!(VIDEO_RAM_SIZE, 48 * 1024);
+        assert_eq!((TILEMAP_PIXEL_WIDTH, TILEMAP_PIXEL_HEIGHT), (512, 256));
         assert_eq!(
             video_status::VBLANK | video_status::HBLANK | video_status::SPRITE_OVERFLOW,
             0x07

@@ -1,6 +1,6 @@
 TILE SCROLLER
 
-Builds a 40x25 tilemap in VRAM and uses
+Builds a 64x32 tilemap in VRAM and uses
 a VBlank IRQ to read controller 1.
 
 Arrow keys scroll in every direction.

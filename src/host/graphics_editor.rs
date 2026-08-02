@@ -1,11 +1,14 @@
-use fanticon::video::Video;
+use fanticon::{
+    machine::{TILEMAP_CELLS, TILEMAP_HEIGHT, TILEMAP_WIDTH},
+    video::Video,
+};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use super::EDITOR_DISPLAY_WIDTH;
 use super::character_rom::{CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH};
 
 pub const TILE_BYTES: usize = 256 * 32;
-pub const MAP_CELLS: usize = 40 * 25;
+pub const MAP_CELLS: usize = TILEMAP_CELLS;
 pub const PALETTE_BYTES: usize = 256;
 pub const BITMAP_BYTES: usize = 320 * 200 / 2;
 pub const DEFAULT_PALETTE_FILE: &str = "GAME.PAL";
@@ -17,6 +20,8 @@ const UI_GRAY: u8 = 0x92;
 const PANE_LEFT: usize = 21 * GLYPH_WIDTH;
 const PANE_TOP: usize = 3 * GLYPH_HEIGHT;
 const OUTER_TOP: usize = 2 * GLYPH_HEIGHT + 4;
+const MAP_VIEW_WIDTH: usize = 40;
+const MAP_VIEW_HEIGHT: usize = 25;
 const DB16: [u8; 16] = [
     0x00, 0x45, 0x25, 0x49, 0x89, 0x2c, 0xc9, 0x6d, 0x4e, 0xcd, 0x92, 0x75, 0xd6, 0x76, 0xd9, 0xdf,
 ];
@@ -91,6 +96,8 @@ pub struct GraphicsEditor {
     map_priority: bool,
     map_h_flip: bool,
     map_v_flip: bool,
+    map_view_x: usize,
+    map_view_y: usize,
     drawing: bool,
     stroke_changed: bool,
     bitmap_asset: bool,
@@ -114,6 +121,8 @@ impl Default for GraphicsEditor {
             map_priority: false,
             map_h_flip: false,
             map_v_flip: false,
+            map_view_x: 0,
+            map_view_y: 0,
             drawing: false,
             stroke_changed: false,
             bitmap_asset: false,
@@ -136,11 +145,13 @@ impl GraphicsEditor {
 
     pub fn parse(source: &str) -> Result<Self, String> {
         let palette_document = source.lines().any(|line| line.trim() == ";@FANTICON-PAL 1");
-        let graphics_document = source
-            .lines()
-            .any(|line| matches!(line.trim(), ";@FANTICON-GFX 1" | ";@FANTICON-GFX 2"));
-        if !palette_document && !graphics_document {
-            return Err("FILE IS MISSING ;@FANTICON-GFX 1/2 OR ;@FANTICON-PAL 1".to_owned());
+        let graphics_version = source.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix(";@FANTICON-GFX ")
+                .and_then(|version| version.parse::<u8>().ok())
+        });
+        if !palette_document && !matches!(graphics_version, Some(1..=3)) {
+            return Err("FILE IS MISSING ;@FANTICON-GFX 1/2/3 OR ;@FANTICON-PAL 1".to_owned());
         }
         let palette_reference = source
             .lines()
@@ -186,10 +197,12 @@ impl GraphicsEditor {
                 parse_section(source, ";@BITMAP", BITMAP_BYTES)?,
             )
         } else {
+            let legacy_map = graphics_version.is_some_and(|version| version < 3);
+            let map_bytes = if legacy_map { 40 * 25 } else { MAP_CELLS };
             (
                 parse_section(source, ";@TILES", TILE_BYTES)?,
-                parse_section(source, ";@MAP", MAP_CELLS)?,
-                parse_section(source, ";@ATTRIBUTES", MAP_CELLS)?,
+                expand_legacy_map(parse_section(source, ";@MAP", map_bytes)?, legacy_map),
+                expand_legacy_map(parse_section(source, ";@ATTRIBUTES", map_bytes)?, legacy_map),
                 vec![0; BITMAP_BYTES],
             )
         };
@@ -227,11 +240,8 @@ impl GraphicsEditor {
             );
             return output;
         }
-        let mut output = String::from(if self.palette_reference.is_some() {
-            ";@FANTICON-GFX 2\n; ASCII SOURCE - EDIT VISUALLY OR BY HAND\n"
-        } else {
-            ";@FANTICON-GFX 1\n; ASCII SOURCE - EDIT VISUALLY OR BY HAND\n"
-        });
+        let mut output =
+            String::from(";@FANTICON-GFX 3\n; ASCII SOURCE - EDIT VISUALLY OR BY HAND\n");
         if let Some(reference) = &self.palette_reference {
             output.push_str(&format!(";@PALETTE-FILE {reference}\n"));
         }
@@ -398,16 +408,32 @@ impl GraphicsEditor {
                 return true;
             }
             Key::Named(NamedKey::ArrowLeft) => {
-                self.selected_tile = self.selected_tile.wrapping_sub(1)
+                if self.view == GraphicsView::Map {
+                    self.map_view_x = (self.map_view_x + TILEMAP_WIDTH - 1) % TILEMAP_WIDTH;
+                } else {
+                    self.selected_tile = self.selected_tile.wrapping_sub(1);
+                }
             }
             Key::Named(NamedKey::ArrowRight) => {
-                self.selected_tile = self.selected_tile.wrapping_add(1)
+                if self.view == GraphicsView::Map {
+                    self.map_view_x = (self.map_view_x + 1) % TILEMAP_WIDTH;
+                } else {
+                    self.selected_tile = self.selected_tile.wrapping_add(1);
+                }
             }
             Key::Named(NamedKey::ArrowUp) => {
-                self.selected_tile = self.selected_tile.wrapping_sub(16)
+                if self.view == GraphicsView::Map {
+                    self.map_view_y = (self.map_view_y + TILEMAP_HEIGHT - 1) % TILEMAP_HEIGHT;
+                } else {
+                    self.selected_tile = self.selected_tile.wrapping_sub(16);
+                }
             }
             Key::Named(NamedKey::ArrowDown) => {
-                self.selected_tile = self.selected_tile.wrapping_add(16)
+                if self.view == GraphicsView::Map {
+                    self.map_view_y = (self.map_view_y + 1) % TILEMAP_HEIGHT;
+                } else {
+                    self.selected_tile = self.selected_tile.wrapping_add(16);
+                }
             }
             _ => return false,
         }
@@ -552,8 +578,12 @@ impl GraphicsEditor {
                 self.selected_color
             ),
             GraphicsView::Map => format!(
-                " BACKGROUND MAP - PLACE PATTERN ${:02X}  PAL {} COLOR {:X}",
-                self.selected_tile, self.palette_bank, self.selected_color
+                " 64X32 MAP VIEW {},{} - PLACE PATTERN ${:02X}  PAL {} COLOR {:X}",
+                self.map_view_x,
+                self.map_view_y,
+                self.selected_tile,
+                self.palette_bank,
+                self.selected_color
             ),
             GraphicsView::Sprite => {
                 let first = self.selected_tile & !3;
@@ -676,7 +706,14 @@ impl GraphicsEditor {
 
     fn render_map(&self, video: &mut Video) {
         let origin = (PANE_LEFT + 4, PANE_TOP + 38);
-        draw_group_box(video, PANE_LEFT + 2, PANE_TOP + 32, 326, 210, "40 X 25 BACKGROUND MAP");
+        draw_group_box(
+            video,
+            PANE_LEFT + 2,
+            PANE_TOP + 32,
+            326,
+            210,
+            &format!("64X32 MAP - VIEW {},{}", self.map_view_x, self.map_view_y),
+        );
         draw_group_box(video, PANE_LEFT + 332, PANE_TOP + 32, 136, 142, "8X8 PATTERNS");
         draw_group_box(video, PANE_LEFT + 332, PANE_TOP + 180, 136, 62, "CELL OPTIONS");
         draw_group_box(
@@ -687,9 +724,11 @@ impl GraphicsEditor {
             38,
             &format!("PALETTE BANK {}", self.palette_bank),
         );
-        for cell_y in 0..25 {
-            for cell_x in 0..40 {
-                let cell = cell_y * 40 + cell_x;
+        for cell_y in 0..MAP_VIEW_HEIGHT {
+            for cell_x in 0..MAP_VIEW_WIDTH {
+                let map_x = (self.map_view_x + cell_x) % TILEMAP_WIDTH;
+                let map_y = (self.map_view_y + cell_y) % TILEMAP_HEIGHT;
+                let cell = map_y * TILEMAP_WIDTH + map_x;
                 let tile = self.asset.map[cell];
                 let attribute = self.asset.attributes[cell];
                 for py in 0..8 {
@@ -715,7 +754,7 @@ impl GraphicsEditor {
             video,
             PANE_LEFT + 8,
             PANE_TOP + 252,
-            "MAP CELLS REFERENCE THE SHARED 8X8 PATTERNS",
+            "ARROWS PAN 64X32 MAP - VIEW WRAPS AT EDGES",
             UI_GRAY,
         );
         self.render_palette_strip(video, PANE_LEFT + 4, PANE_TOP + 278);
@@ -834,17 +873,19 @@ impl GraphicsEditor {
 
     fn apply_map(&mut self, x: usize, y: usize) -> bool {
         let origin = (PANE_LEFT + 4, PANE_TOP + 38);
-        let Some(cell_x) =
-            x.checked_sub(origin.0).map(|value| value / 8).filter(|value| *value < 40)
+        let Some(view_x) =
+            x.checked_sub(origin.0).map(|value| value / 8).filter(|value| *value < MAP_VIEW_WIDTH)
         else {
             return false;
         };
-        let Some(cell_y) =
-            y.checked_sub(origin.1).map(|value| value / 8).filter(|value| *value < 25)
+        let Some(view_y) =
+            y.checked_sub(origin.1).map(|value| value / 8).filter(|value| *value < MAP_VIEW_HEIGHT)
         else {
             return false;
         };
-        let cell = cell_y * 40 + cell_x;
+        let cell_x = (self.map_view_x + view_x) % TILEMAP_WIDTH;
+        let cell_y = (self.map_view_y + view_y) % TILEMAP_HEIGHT;
+        let cell = cell_y * TILEMAP_WIDTH + cell_x;
         if self.tool == GraphicsTool::Eyedropper {
             self.selected_tile = self.asset.map[cell];
             let attribute = self.asset.attributes[cell];
@@ -867,7 +908,7 @@ impl GraphicsEditor {
             }
             let mut stack = vec![(cell_x, cell_y)];
             while let Some((x, y)) = stack.pop() {
-                let index = y * 40 + x;
+                let index = y * TILEMAP_WIDTH + x;
                 if self.asset.map[index] != old_tile
                     || self.asset.attributes[index] != old_attribute
                 {
@@ -875,18 +916,10 @@ impl GraphicsEditor {
                 }
                 self.asset.map[index] = self.selected_tile;
                 self.asset.attributes[index] = attribute;
-                if x > 0 {
-                    stack.push((x - 1, y));
-                }
-                if x < 39 {
-                    stack.push((x + 1, y));
-                }
-                if y > 0 {
-                    stack.push((x, y - 1));
-                }
-                if y < 24 {
-                    stack.push((x, y + 1));
-                }
+                stack.push(((x + TILEMAP_WIDTH - 1) % TILEMAP_WIDTH, y));
+                stack.push(((x + 1) % TILEMAP_WIDTH, y));
+                stack.push((x, (y + TILEMAP_HEIGHT - 1) % TILEMAP_HEIGHT));
+                stack.push((x, (y + 1) % TILEMAP_HEIGHT));
             }
             return true;
         }
@@ -1067,6 +1100,18 @@ enum TileTransform {
     RotateClockwise,
 }
 
+fn expand_legacy_map(bytes: Vec<u8>, legacy: bool) -> Vec<u8> {
+    if !legacy {
+        return bytes;
+    }
+    let mut expanded = vec![0; MAP_CELLS];
+    for y in 0..25 {
+        expanded[y * TILEMAP_WIDTH..y * TILEMAP_WIDTH + 40]
+            .copy_from_slice(&bytes[y * 40..y * 40 + 40]);
+    }
+    expanded
+}
+
 fn parse_section(source: &str, marker: &str, expected: usize) -> Result<Vec<u8>, String> {
     let mut active = false;
     let mut bytes = Vec::new();
@@ -1080,24 +1125,47 @@ fn parse_section(source: &str, marker: &str, expected: usize) -> Result<Vec<u8>,
             break;
         }
         if active {
-            let mut fields = trimmed.split_whitespace();
-            let first = fields.next().unwrap_or("");
-            let is_hex = first.eq_ignore_ascii_case("HEX")
-                || fields.next().is_some_and(|field| field.eq_ignore_ascii_case("HEX"));
-            if !is_hex {
+            let code = trimmed.split(';').next().unwrap_or("").trim();
+            let fields = code.split_whitespace().collect::<Vec<_>>();
+            let operation = fields.iter().take(2).position(|field| {
+                field.eq_ignore_ascii_case("HEX") || field.eq_ignore_ascii_case("DS")
+            });
+            let Some(operation) = operation else {
                 continue;
-            }
-            let hex = fields.collect::<String>();
-            let compact =
-                hex.chars().filter(|character| character.is_ascii_hexdigit()).collect::<String>();
-            if !compact.len().is_multiple_of(2) {
-                return Err(format!("{marker} HAS AN ODD HEX DIGIT"));
-            }
-            for pair in compact.as_bytes().chunks_exact(2) {
-                let text = core::str::from_utf8(pair).expect("ASCII hex");
-                bytes.push(
-                    u8::from_str_radix(text, 16).map_err(|_| format!("INVALID HEX IN {marker}"))?,
-                );
+            };
+            if fields[operation].eq_ignore_ascii_case("DS") {
+                let Some(size) = fields.get(operation + 1) else {
+                    return Err(format!("{marker} DS IS MISSING A SIZE"));
+                };
+                if fields.len() != operation + 2 {
+                    return Err(format!("{marker} DS REQUIRES ONE CONSTANT SIZE"));
+                }
+                let count = size
+                    .strip_prefix('$')
+                    .map_or_else(|| size.parse::<usize>(), |hex| usize::from_str_radix(hex, 16))
+                    .map_err(|_| format!("INVALID DS SIZE IN {marker}"))?;
+                let new_length = bytes
+                    .len()
+                    .checked_add(count)
+                    .filter(|&length| length <= expected)
+                    .ok_or_else(|| format!("{marker} CONTAINS MORE THAN {expected} BYTES"))?;
+                bytes.resize(new_length, 0);
+            } else {
+                let hex = fields[operation + 1..].join("");
+                if !hex.chars().all(|character| character.is_ascii_hexdigit() || character == ',') {
+                    return Err(format!("INVALID HEX IN {marker}"));
+                }
+                let compact = hex.replace(',', "");
+                if !compact.len().is_multiple_of(2) {
+                    return Err(format!("{marker} HAS AN ODD HEX DIGIT"));
+                }
+                for pair in compact.as_bytes().chunks_exact(2) {
+                    let text = core::str::from_utf8(pair).expect("ASCII hex");
+                    bytes.push(
+                        u8::from_str_radix(text, 16)
+                            .map_err(|_| format!("INVALID HEX IN {marker}"))?,
+                    );
+                }
             }
         }
     }
@@ -1297,15 +1365,15 @@ mod tests {
         let mut editor =
             GraphicsEditor { selected_tile: 3, selected_color: 12, ..GraphicsEditor::default() };
         editor.set_tile_pixel(3, 7, 7, 12);
-        editor.asset.map[999] = 3;
-        editor.asset.attributes[999] = 0x5f;
+        editor.asset.map[MAP_CELLS - 1] = 3;
+        editor.asset.attributes[MAP_CELLS - 1] = 0x5f;
         let source = editor.serialize("hero.gfx");
         assert!(source.is_ascii());
         assert!(source.contains("HERO_CHR"));
         let restored = GraphicsEditor::parse(&source).unwrap();
         assert_eq!(restored.tile_pixel(3, 7, 7), 12);
-        assert_eq!(restored.asset.map[999], 3);
-        assert_eq!(restored.asset.attributes[999], 0x5f);
+        assert_eq!(restored.asset.map[MAP_CELLS - 1], 3);
+        assert_eq!(restored.asset.attributes[MAP_CELLS - 1], 0x5f);
     }
 
     #[test]
@@ -1330,7 +1398,7 @@ mod tests {
 
         let graphics = GraphicsEditor::with_shared_palette("GAME.PAL");
         let source = graphics.serialize("world.gfx");
-        assert!(source.starts_with(";@FANTICON-GFX 2"));
+        assert!(source.starts_with(";@FANTICON-GFX 3"));
         assert!(source.contains(";@PALETTE-FILE GAME.PAL"));
         assert!(!source.contains(";@PALETTE\n"));
         assert_eq!(GraphicsEditor::parse(&source).unwrap().palette_reference(), Some("GAME.PAL"));
@@ -1338,6 +1406,62 @@ mod tests {
             fanticon::assembler::assemble(&source).unwrap().bytes.len(),
             TILE_BYTES + MAP_CELLS * 2
         );
+    }
+
+    #[test]
+    fn compact_zero_filled_sections_are_valid_editor_and_assembler_input() {
+        let source = ";@FANTICON-PAL 1\n;@PALETTE\nGAME_PAL\n HEX 000102030405060708090A0B0C0D0E0F\n DS 240\n";
+        let restored = GraphicsEditor::parse(source).unwrap();
+        assert_eq!(&restored.asset.palette[..16], &(0_u8..16).collect::<Vec<_>>());
+        assert!(restored.asset.palette[16..].iter().all(|&byte| byte == 0));
+        assert_eq!(fanticon::assembler::assemble(source).unwrap().bytes.len(), PALETTE_BYTES);
+    }
+
+    #[test]
+    fn graphics_demo_asset_opens_in_the_visual_editor() {
+        let source = include_str!("../../code-assets/demos/graphics/scene.gfx");
+        let restored = GraphicsEditor::parse(source).unwrap();
+        assert_eq!(restored.palette_reference(), Some("GAME.PAL"));
+        assert_eq!(restored.tile_pixel(4, 6, 0), 8);
+        assert_eq!(restored.asset.map[13 * TILEMAP_WIDTH + 5], 10);
+        assert_eq!(restored.asset.map[19 * TILEMAP_WIDTH], 2);
+        assert!(restored.asset.attributes.iter().all(|&byte| byte == 0));
+
+        let palette =
+            GraphicsEditor::parse(include_str!("../../code-assets/demos/graphics/game.pal"))
+                .unwrap();
+        assert_eq!(&palette.asset.palette[..16], &DB16);
+    }
+
+    #[test]
+    fn legacy_40x25_maps_expand_into_the_new_64x32_layout() {
+        let legacy = GraphicsEditor::with_shared_palette("GAME.PAL");
+        let mut source = legacy.serialize("legacy.gfx");
+        source = source.replacen(";@FANTICON-GFX 3", ";@FANTICON-GFX 2", 1);
+        let old_map = vec![7; 40 * 25];
+        let old_attributes = vec![3; 40 * 25];
+        let map_start = source.find(";@MAP").unwrap();
+        source.truncate(map_start);
+        write_section(&mut source, ";@MAP", "LEGACY_MAP", &old_map, 20);
+        write_section(&mut source, ";@ATTRIBUTES", "LEGACY_ATR", &old_attributes, 20);
+        let restored = GraphicsEditor::parse(&source).unwrap();
+        assert_eq!(restored.asset.map[24 * TILEMAP_WIDTH + 39], 7);
+        assert_eq!(restored.asset.attributes[24 * TILEMAP_WIDTH + 39], 3);
+        assert_eq!(restored.asset.map[24 * TILEMAP_WIDTH + 40], 0);
+        assert_eq!(restored.asset.map[25 * TILEMAP_WIDTH], 0);
+    }
+
+    #[test]
+    fn map_view_pans_and_edits_across_the_circular_64x32_map() {
+        let mut editor = GraphicsEditor { view: GraphicsView::Map, ..GraphicsEditor::default() };
+        editor.map_view_x = TILEMAP_WIDTH - 1;
+        editor.map_view_y = TILEMAP_HEIGHT - 1;
+        editor.selected_tile = 9;
+        assert!(editor.apply_map(PANE_LEFT + 4 + 8, PANE_TOP + 38 + 8));
+        assert_eq!(editor.asset.map[0], 9);
+        editor.handle_key(&Key::Named(NamedKey::ArrowRight), ModifiersState::empty());
+        editor.handle_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty());
+        assert_eq!((editor.map_view_x, editor.map_view_y), (0, 0));
     }
 
     #[test]

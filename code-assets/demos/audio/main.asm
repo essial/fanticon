@@ -1,15 +1,16 @@
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; TWO PULSE, TRIANGLE, AND NOISE DEMO
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; Tonal voices have control, timer-low, timer-high, and
 ; phase-reset registers. A reset write starts waveform
-; step zero. Channel enable gates output without stopping
-; its oscillator. MASTER bit 7 enables the final mix.
+; step zero. Channel enable gates output without
+; stopping its oscillator. MASTER bit 7 enables the
+; final mix.
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; HARDWARE REGISTERS AND WORK RAM
-; -------------------------------------------------------
+; ---------------------------------------------------
 IRQPEND  EQU   $C002
 IRQEN    EQU   $C003
 BGCOLOR  EQU   $C012
@@ -32,9 +33,9 @@ MASTER   EQU   $C040
 NOTE     EQU   $20
 COUNT    EQU   $21
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; RESET AND CHANNEL SETUP
-; -------------------------------------------------------
+; ---------------------------------------------------
 
          FIXED
          ORG   $C100
@@ -83,9 +84,9 @@ RESET    SEI
          CLI
 LOOP     JMP   LOOP
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; VBLANK MUSIC SEQUENCER
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; VBlank arrives 60 times per second. COUNT divides it
 ; by 16 before selecting the next pulse-1 timer value.
@@ -108,8 +109,8 @@ IRQ      PHA
          LDA   COLORS,X
          STA   BGCOLOR
 DONE     LDA   #1
-; IRQPEND is write-one-to-clear. Bit 0 acknowledges only
-; VBlank.
+; IRQPEND is write-one-to-clear. Bit 0 acknowledges
+; only VBlank.
          STA   IRQPEND
          PLA
          TAX
@@ -117,17 +118,18 @@ DONE     LDA   #1
          RTI
 NMI      RTI
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; NOTE AND COLOR TABLES
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
-; P1HI remains one. These low bytes provide four pitches.
+; P1HI remains one. These low bytes provide four
+; pitches.
 NOTES    DFB   $BD,$7C,$52,$34
 COLORS   DFB   $E0,$1C,$03,$FF
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; INTERRUPT VECTORS
-; -------------------------------------------------------
+; ---------------------------------------------------
 
          ORG   $FFFA
          DA    NMI,RESET,IRQ

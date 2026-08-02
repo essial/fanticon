@@ -1,20 +1,20 @@
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; TILEMAP, VRAM, INPUT, AND VBLANK DEMO
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; BANKKIND=2 maps a 16 KiB VRAM bank at $8000-$BFFF.
 ; In VRAM bank 0:
 ;   $8020 = pattern bytes for tile 1
-;   $A000 = 40x25 tile-number map
-;   $A400 = 40x25 attribute map
+;   $A000 = 64x32 tile-number map
+;   $A800 = 64x32 attribute map
 ;
 ; A tile is 8x8 pixels at four bits per pixel. Four
 ; packed bytes describe each row. The high nibble is
 ; the left pixel and the low nibble is the right.
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; HARDWARE REGISTERS
-; -------------------------------------------------------
+; ---------------------------------------------------
 BANKKIND EQU   $C000
 IRQPEND  EQU   $C002
 IRQEN    EQU   $C003
@@ -26,9 +26,9 @@ SCRYLO   EQU   $C015
 SCRYHI   EQU   $C016
 PAD      EQU   $C050
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; RESET AND PATTERN COPY
-; -------------------------------------------------------
+; ---------------------------------------------------
 
          FIXED
          ORG   $C100
@@ -44,29 +44,33 @@ COPY     LDA   PATTERN,X
          CPX   #32
          BNE   COPY
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; TILEMAP SETUP
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
-; Three complete 256-byte pages plus 232 bytes fill all
-; 1,000 cells. X also selects changing palette banks.
+; Eight complete 256-byte pages fill all 2,048 cells.
+; X also selects changing palette banks.
          LDX   #0
 MAPLOOP  LDA   #1
          STA   $A000,X
          STA   $A100,X
          STA   $A200,X
-         CPX   #$E8
-         BCS   NOMAP4
          STA   $A300,X
-NOMAP4   TXA
-         AND   #$0F
          STA   $A400,X
          STA   $A500,X
          STA   $A600,X
-         CPX   #$E8
-         BCS   NOATT4
          STA   $A700,X
-NOATT4   INX
+         TXA
+         AND   #$0F
+         STA   $A800,X
+         STA   $A900,X
+         STA   $AA00,X
+         STA   $AB00,X
+         STA   $AC00,X
+         STA   $AD00,X
+         STA   $AE00,X
+         STA   $AF00,X
+         INX
          BNE   MAPLOOP
 
 ; Mode 1 selects tiles. VCTRL bit 0 enables the
@@ -79,13 +83,13 @@ NOATT4   INX
          CLI
 IDLE     JMP   IDLE
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; VBLANK INPUT AND SCROLLING
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; Controller bits 0-3 are Up, Down, Left, and Right.
 ; The handler updates both bytes of each 16-bit scroll
-; coordinate. Video hardware wraps them modulo 320x200.
+; coordinate. Video hardware wraps them modulo 512x256.
 IRQ      PHA
          LDA   PAD
          AND   #4
@@ -119,9 +123,9 @@ NODOWN   LDA   #1
          RTI
 NMI      RTI
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; TILE PATTERN DATA
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; Rotating nibbles make scrolling and tile boundaries
 ; easy to see with the identity RGB332 palette.
@@ -134,9 +138,9 @@ PATTERN  HEX   12345678
          HEX   78123456
          HEX   81234567
 
-; -------------------------------------------------------
+; ---------------------------------------------------
 ; INTERRUPT VECTORS
-; -------------------------------------------------------
+; ---------------------------------------------------
 ;
 ; Fixed-image offsets $3FFA-$3FFF map to CPU addresses
 ; $FFFA-$FFFF.

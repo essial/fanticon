@@ -16,9 +16,10 @@ use super::{
     boot_splash::BOOT_LOGO,
     builder::{GameLaunch, build_and_load_project, build_project, build_source},
     character_rom::{
-        BOX_BOTTOM_LEFT, BOX_BOTTOM_RIGHT, BOX_HORIZONTAL, BOX_TOP_LEFT, BOX_TOP_RIGHT,
-        BOX_VERTICAL, CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, SYMBOL_ARROW_RIGHT, SYMBOL_BUSY,
-        SYMBOL_CHECK, SYMBOL_CROSS, configure_text_gradient, gradient_color,
+        BOX_BOTTOM_HORIZONTAL, BOX_BOTTOM_LEFT, BOX_BOTTOM_RIGHT, BOX_CAPTION_LEFT,
+        BOX_CAPTION_RIGHT, BOX_HORIZONTAL, BOX_RIGHT_VERTICAL, BOX_TOP_HORIZONTAL, BOX_TOP_LEFT,
+        BOX_TOP_RIGHT, BOX_VERTICAL, CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, SYMBOL_ARROW_RIGHT,
+        SYMBOL_BUSY, SYMBOL_CHECK, SYMBOL_CROSS, configure_text_gradient, gradient_color,
     },
     filesystem::{ConsoleFilesystem, SharedFilesystem},
     graphics_editor::{DEFAULT_PALETTE_FILE, GraphicsEditor},
@@ -1657,7 +1658,7 @@ impl TextEditor {
         let y = 2;
         let width = 28;
         let height = ROWS - 3;
-        draw_window(
+        draw_caption_window(
             cells,
             foregrounds,
             backgrounds,
@@ -2366,10 +2367,9 @@ impl TextEditor {
                         }
                         continue;
                     }
-                    put_text_width(cells, x + 3, row, item, width - 4);
+                    put_text_width(cells, x + 1, row, item, width - 2);
                     if index == *selected {
                         inverse[row * COLUMNS + x + 1..row * COLUMNS + x + width - 1].fill(true);
-                        put_cell(cells, x + 1, row, SYMBOL_ARROW_RIGHT);
                     }
                 }
             }
@@ -2379,7 +2379,7 @@ impl TextEditor {
                 let height = 8;
                 let x = (COLUMNS - width) / 2;
                 let y = (ROWS - height) / 2;
-                draw_window(
+                draw_caption_window(
                     cells,
                     foregrounds,
                     backgrounds,
@@ -2412,7 +2412,7 @@ impl TextEditor {
                 let height = 9;
                 let x = (COLUMNS - width) / 2;
                 let y = (ROWS - height) / 2;
-                draw_window(
+                draw_caption_window(
                     cells,
                     foregrounds,
                     backgrounds,
@@ -2482,7 +2482,7 @@ impl TextEditor {
                 let height = if *mode == SearchMode::Replace { 11 } else { 9 };
                 let x = (COLUMNS - width) / 2;
                 let y = (ROWS - height) / 2;
-                draw_window(
+                draw_caption_window(
                     cells,
                     foregrounds,
                     backgrounds,
@@ -2524,7 +2524,7 @@ impl TextEditor {
                 }
             }
             Overlay::SearchResults { query, results, selected, scroll } => {
-                draw_window(
+                draw_caption_window(
                     cells,
                     foregrounds,
                     backgrounds,
@@ -2585,7 +2585,7 @@ impl TextEditor {
             Overlay::About { .. } => {
                 let x = (COLUMNS - ABOUT_WIDTH) / 2;
                 let y = (ROWS - ABOUT_HEIGHT) / 2;
-                draw_window(
+                draw_caption_window(
                     cells,
                     foregrounds,
                     backgrounds,
@@ -3826,7 +3826,14 @@ fn render_message_box(
     let visible_lines = lines.len().min(7);
     let height = visible_lines + 4;
     let y = (ROWS - height) / 2;
-    draw_window(cells, foregrounds, backgrounds, inverse, CellRect { x, y, width, height }, style);
+    draw_caption_window(
+        cells,
+        foregrounds,
+        backgrounds,
+        inverse,
+        CellRect { x, y, width, height },
+        style,
+    );
     let symbol = if title == "BUILD SUCCESSFUL" {
         SYMBOL_CHECK
     } else if title.contains("ERROR") {
@@ -3870,12 +3877,28 @@ fn draw_window(
     put_cell(cells, x, y + height - 1, BOX_BOTTOM_LEFT);
     put_cell(cells, x + width - 1, y + height - 1, BOX_BOTTOM_RIGHT);
     for column in x + 1..x + width - 1 {
-        put_cell(cells, column, y, BOX_HORIZONTAL);
-        put_cell(cells, column, y + height - 1, BOX_HORIZONTAL);
+        put_cell(cells, column, y, BOX_TOP_HORIZONTAL);
+        put_cell(cells, column, y + height - 1, BOX_BOTTOM_HORIZONTAL);
     }
     for row in y + 1..y + height - 1 {
         put_cell(cells, x, row, BOX_VERTICAL);
-        put_cell(cells, x + width - 1, row, BOX_VERTICAL);
+        put_cell(cells, x + width - 1, row, BOX_RIGHT_VERTICAL);
+    }
+}
+
+fn draw_caption_window(
+    cells: &mut [u8],
+    foregrounds: &mut [u8],
+    backgrounds: &mut [u8],
+    inverse: &mut [bool],
+    rect: CellRect,
+    style: CellStyle,
+) {
+    draw_window(cells, foregrounds, backgrounds, inverse, rect, style);
+    put_cell(cells, rect.x, rect.y, BOX_CAPTION_LEFT);
+    put_cell(cells, rect.x + rect.width - 1, rect.y, BOX_CAPTION_RIGHT);
+    for column in rect.x + 1..rect.x + rect.width - 1 {
+        put_cell(cells, column, rect.y, BOX_HORIZONTAL);
     }
 }
 
@@ -4054,6 +4077,11 @@ fn is_frame_character(character: u8) -> bool {
         character,
         BOX_HORIZONTAL
             | BOX_VERTICAL
+            | BOX_TOP_HORIZONTAL
+            | BOX_BOTTOM_HORIZONTAL
+            | BOX_RIGHT_VERTICAL
+            | BOX_CAPTION_LEFT
+            | BOX_CAPTION_RIGHT
             | BOX_TOP_LEFT
             | BOX_TOP_RIGHT
             | BOX_BOTTOM_LEFT
@@ -4716,6 +4744,9 @@ mod tests {
             &mut inverse,
             CellStyle { foreground: UI_WHITE_COLOR, background: 0 },
         );
+        assert_eq!(cells[2 * COLUMNS + 1], b'N');
+        assert_eq!(cells[2 * COLUMNS + 2], b'E');
+        assert!(inverse[2 * COLUMNS + 1]);
         assert!(
             cells[6 * COLUMNS + 1..6 * COLUMNS + 15].iter().all(|cell| *cell == BOX_HORIZONTAL)
         );
@@ -5567,19 +5598,34 @@ mod tests {
     }
 
     #[test]
-    fn project_separator_and_frame_glyphs_use_clean_solid_color() {
+    fn project_separator_is_thin_edge_aligned_and_uniform() {
         let editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
         let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut video, false);
 
-        let separator_x = PROJECT_WIDTH * GLYPH_WIDTH + 3;
+        let separator_x = PROJECT_WIDTH * GLYPH_WIDTH;
         for y in GLYPH_HEIGHT..(ROWS - 1) * GLYPH_HEIGHT {
             assert_eq!(
                 video.pixels()[y * EDITOR_DISPLAY_WIDTH + separator_x],
                 UI_WHITE_COLOR,
                 "separator changed color at scanline {y}"
             );
+            assert_eq!(video.pixels()[y * EDITOR_DISPLAY_WIDTH + separator_x + 1], 0);
         }
+    }
+
+    #[test]
+    fn window_frame_glyphs_align_to_their_outer_cell_edges() {
+        assert_eq!(CHARACTER_ROM[BOX_TOP_HORIZONTAL as usize], [0xff, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(CHARACTER_ROM[BOX_BOTTOM_HORIZONTAL as usize], [0, 0, 0, 0, 0, 0, 0, 0xff]);
+        assert_eq!(CHARACTER_ROM[BOX_VERTICAL as usize], [0x80; GLYPH_HEIGHT]);
+        assert_eq!(CHARACTER_ROM[BOX_RIGHT_VERTICAL as usize], [0x01; GLYPH_HEIGHT]);
+        assert_eq!(CHARACTER_ROM[BOX_CAPTION_LEFT as usize][3], 0xff);
+        assert_eq!(CHARACTER_ROM[BOX_CAPTION_RIGHT as usize][3], 0xff);
+        assert_eq!(&CHARACTER_ROM[BOX_CAPTION_LEFT as usize][..3], &[0; 3]);
+        assert_eq!(&CHARACTER_ROM[BOX_CAPTION_RIGHT as usize][..3], &[0; 3]);
+        assert_eq!(CHARACTER_ROM[BOX_CAPTION_LEFT as usize][4], 0x80);
+        assert_eq!(CHARACTER_ROM[BOX_CAPTION_RIGHT as usize][4], 0x01);
     }
 
     #[test]
@@ -5589,7 +5635,7 @@ mod tests {
         let mut backgrounds = [ASM_ERROR_COLOR; COLUMNS * ROWS];
         let mut inverse = [true; COLUMNS * ROWS];
 
-        draw_window(
+        draw_caption_window(
             &mut cells,
             &mut foregrounds,
             &mut backgrounds,
@@ -5598,8 +5644,8 @@ mod tests {
             CellStyle { foreground: UI_WHITE_COLOR, background: UI_ERROR_BACKGROUND },
         );
 
-        assert_eq!(cells[4 * COLUMNS + 3], BOX_TOP_LEFT);
-        assert_eq!(cells[4 * COLUMNS + 14], BOX_TOP_RIGHT);
+        assert_eq!(cells[4 * COLUMNS + 3], BOX_CAPTION_LEFT);
+        assert_eq!(cells[4 * COLUMNS + 14], BOX_CAPTION_RIGHT);
         assert_eq!(cells[9 * COLUMNS + 3], BOX_BOTTOM_LEFT);
         assert_eq!(cells[9 * COLUMNS + 14], BOX_BOTTOM_RIGHT);
         assert_eq!(cells[6 * COLUMNS + 8], b' ');
@@ -5657,17 +5703,17 @@ mod tests {
 
         let source = filesystem.borrow().read_text("world.gfx").unwrap();
         assert!(source.is_ascii());
-        assert!(source.contains(";@FANTICON-GFX 2"));
+        assert!(source.contains(";@FANTICON-GFX 3"));
         assert!(source.contains(";@PALETTE-FILE GAME.PAL"));
         assert!(source.contains("WORLD_CHR"));
-        assert_eq!(fanticon::assembler::assemble(&source).unwrap().bytes.len(), 10_192);
+        assert_eq!(fanticon::assembler::assemble(&source).unwrap().bytes.len(), 12_288);
         let palette = filesystem.borrow().read_text("game.pal").unwrap();
         assert!(palette.contains(";@FANTICON-PAL 1"));
         assert_eq!(fanticon::assembler::assemble(&palette).unwrap().bytes.len(), 256);
 
         editor.toggle_graphics_source_view();
         assert!(editor.graphics_source_active());
-        assert_eq!(editor.lines[0], ";@FANTICON-GFX 2");
+        assert_eq!(editor.lines[0], ";@FANTICON-GFX 3");
         editor.toggle_graphics_source_view();
         assert!(!editor.graphics_source_active());
 

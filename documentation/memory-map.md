@@ -129,10 +129,10 @@ Read `FRAME_LOW` before `FRAME_HIGH` to get one coherent frame-counter value.
 | `$C010` | `VIDEO_MODE` | R/W | 0 blank, 1 tilemap, 2 packed bitmap |
 | `$C011` | `VIDEO_CONTROL` | R/W | Bit 0 background enable, bit 1 sprites enable |
 | `$C012` | `BACKDROP_COLOR` | R/W | 8-bit palette index behind a disabled background |
-| `$C013` | `SCROLL_X_LOW` | R/W | Tilemap X scroll bits 0-7 |
-| `$C014` | `SCROLL_X_HIGH` | R/W | Tilemap X scroll bits 8-15 |
-| `$C015` | `SCROLL_Y_LOW` | R/W | Tilemap Y scroll bits 0-7 |
-| `$C016` | `SCROLL_Y_HIGH` | R/W | Tilemap Y scroll bits 8-15 |
+| `$C013` | `SCROLL_X_LOW` | R/W | Signed tilemap X scroll bits 0-7 |
+| `$C014` | `SCROLL_X_HIGH` | R/W | Signed tilemap X scroll bits 8-15 |
+| `$C015` | `SCROLL_Y_LOW` | R/W | Signed tilemap Y scroll bits 0-7 |
+| `$C016` | `SCROLL_Y_HIGH` | R/W | Signed tilemap Y scroll bits 8-15 |
 | `$C017` | `RASTER_X_LOW` | R/W | Raster compare dot bits 0-7 |
 | `$C018` | `RASTER_X_HIGH` | R/W | Raster compare dot bit 8 |
 | `$C019` | `RASTER_Y_LOW` | R/W | Raster compare line bits 0-7 |
@@ -143,6 +143,10 @@ Read `FRAME_LOW` before `FRAME_HIGH` to get one coherent frame-counter value.
 | `$C01E` | `VIDEO_STATUS` | R | VBlank, HBlank, and sprite-overflow status |
 | `$C01F-$C02F` | — | — | Reserved |
 
+`SCROLL_X` and `SCROLL_Y` are signed 16-bit two's-complement offsets. Tilemap
+fetches wrap them modulo 512 and 256 respectively, so decrementing zero to
+`$FFFF` scrolls left or up by exactly one pixel.
+
 `VIDEO_CONTROL` masks:
 
 | Mask | Meaning |
@@ -150,7 +154,7 @@ Read `FRAME_LOW` before `FRAME_HIGH` to get one coherent frame-counter value.
 | `$01` | Enable tilemap or bitmap background |
 | `$02` | Enable hardware sprites |
 
-Scroll X and Y are independent and wrap modulo 320 and 200. Increasing a scroll
+Scroll X and Y are independent and wrap modulo 512 and 256. Increasing a scroll
 coordinate moves the viewport right or down; decreasing it moves left or up.
 When the background is disabled, `BACKDROP_COLOR` fills it. Sprites can remain
 visible over the backdrop.
@@ -179,19 +183,19 @@ Select `BANK_KIND=$02`. Banks 0-2 expose VRAM offsets `$0000-$BFFF`.
 | VRAM offset | Bank | Size | Description |
 | --- | ---: | ---: | --- |
 | `$0000-$1FFF` | 0 | 8 KiB | 256 packed 4-bpp, 8×8 tile patterns |
-| `$2000-$23E7` | 0 | 1,000 B | 40×25 tile-number map |
-| `$2400-$27E7` | 0 | 1,000 B | 40×25 tile-attribute map |
-| `$2800-$28FF` | 0 | 256 B | 32 eight-byte sprite records |
-| `$2900-$3FFF` | 0 | — | Reserved/scratch VRAM |
+| `$2000-$27FF` | 0 | 2,048 B | 64×32 tile-number map |
+| `$2800-$2FFF` | 0 | 2,048 B | 64×32 tile-attribute map |
+| `$3000-$30FF` | 0 | 256 B | 32 eight-byte sprite records |
+| `$3100-$3FFF` | 0 | — | Reserved/scratch VRAM |
 
 Useful formulas:
 
 ```text
 tile pattern offset = tile_number × 32
-tilemap offset       = tile_y × 40 + tile_x
+tilemap offset       = tile_y × 64 + tile_x
 tile number byte     = $2000 + tilemap offset
-tile attribute byte  = $2400 + tilemap offset
-sprite record        = $2800 + sprite_number × 8
+tile attribute byte  = $2800 + tilemap offset
+sprite record        = $3000 + sprite_number × 8
 ```
 
 Each pattern byte contains two pixels. The high nibble is the left pixel; the

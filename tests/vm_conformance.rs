@@ -2,13 +2,14 @@ use std::path::{Path, PathBuf};
 
 use fanticon::{project::build_project_with_loader, system::FanticonMachine, video::Video};
 
-const DEMOS: [(&str, u64); 6] = [
+const DEMOS: [(&str, u64); 7] = [
     ("audio", 0xcdba_2792_82b0_2f8c),
     ("bitmap", 0x16a9_1eb2_9ae1_e086),
+    ("graphics", 0x9631_20a2_45c2_069d),
     ("raster", 0xf4bc_2c90_7eff_04c5),
     ("sprites", 0x3ff7_98c4_eb46_d6f1),
-    ("tiles", 0x37f4_324f_d8a9_7db4),
-    ("wave", 0x3d09_7fee_2639_06cc),
+    ("tiles", 0x6428_1b7b_5efd_639e),
+    ("wave", 0x38bd_759c_ea2d_d1ed),
 ];
 
 #[test]

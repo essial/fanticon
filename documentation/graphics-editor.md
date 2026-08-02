@@ -20,10 +20,10 @@ tilemap mode it contains exactly:
 | Block | Size | Hardware destination |
 | --- | ---: | --- |
 | Patterns | 8,192 bytes | VRAM `$0000-$1FFF` |
-| Tile numbers | 1,000 bytes | VRAM `$2000-$23E7` |
-| Tile attributes | 1,000 bytes | VRAM `$2400-$27E7` |
+| Tile numbers | 2,048 bytes | VRAM `$2000-$27FF` |
+| Tile attributes | 2,048 bytes | VRAM `$2800-$2FFF` |
 
-That is 10,192 bytes and fits in one 16 KiB cartridge bank. The referenced
+That is 12,288 bytes and fits in one 16 KiB cartridge bank. The referenced
 `.PAL` contains the separate 256-byte global palette. Pattern bytes use the VM's
 native format: the high nibble is the left pixel and the low nibble is the right
 pixel, so runtime conversion is unnecessary.
@@ -38,7 +38,7 @@ level patterns `$80-$FF`.
 There is one shared library of 256 reusable 8×8 patterns:
 
 1. **Pattern** edits one reusable 8×8 image.
-2. **Map** places those patterns into the 40×25 scrolling background.
+2. **Map** places those patterns into the 64×32 circular background.
 3. **16×16 Sprite** edits four consecutive patterns together as a sprite
    composite.
 
@@ -60,7 +60,7 @@ sprites and their patterns remain usable over either background.
 The visual views are:
 
 - `1` — one shared 8×8 pattern and the complete 16×16 pattern sheet.
-- `2` — the 40×25 background map with palette-bank, flip, and foreground flags.
+- `2` — a pannable 40×25 view of the 64×32 background map. Arrow keys pan it.
 - `3` — a 16×16 sprite composite made from four shared patterns.
 - `4` — the referenced 256-color palette.
 - `5` — a packed 320×200 bitmap background.
@@ -69,6 +69,11 @@ Drawing tools are `P` Pencil, `F` connected Fill, and `I` Eyedropper. Pattern
 view supports `H`/`V` flips, `R` clockwise rotation, Delete, arrow-key pattern
 selection, and Undo/Cut/Copy/Paste. Map view uses `H`, `V`, and `Q` for placement
 flips and foreground priority.
+
+In Map view, the arrow keys move the editor viewport one tile and wrap at all
+four map edges. This exposes every cell and makes the circular seam directly
+editable. The viewport origin shown in the status bar is the hardware cell at
+its upper-left corner; it does not alter data when the asset is saved.
 
 ## Shared palettes
 
@@ -100,10 +105,10 @@ Bitmap pixels contain only color numbers 0-15 and use the bank selected by the
 
 ## ASCII formats
 
-New graphics files use version 2 and reference their palette:
+New graphics files use version 3 and reference their palette:
 
 ```asm
-;@FANTICON-GFX 2
+;@FANTICON-GFX 3
 ;@PALETTE-FILE GAME.PAL
 ;@MODE TILEMAP
 ```
@@ -119,7 +124,8 @@ A palette begins with:
 GAME_PAL
 ```
 
-Legacy `;@FANTICON-GFX 1` files containing an embedded palette remain readable.
+Legacy version 1 and 2 files remain readable. Their 40×25 maps are placed at the
+top-left of the new 64×32 map and the added cells are initialized to zero.
 
 Both resources are ordinary assembler input. Include a shared palette once,
 followed by the graphics sets the cartridge needs:
@@ -150,7 +156,7 @@ PALLOOP  LDA   GAME_PAL,X
 ```
 
 Copy `WORLD_CHR` to VRAM `$0000`, `WORLD_MAP` to `$2000`, and `WORLD_ATR` to
-`$2400`. Their exact sizes are `$2000`, `$03E8`, and `$03E8`. Then select video
+`$2800`. Their exact sizes are `$2000`, `$0800`, and `$0800`. Then select video
 mode 1 and enable the background and sprite layers as required.
 
 ## Loading a bitmap set

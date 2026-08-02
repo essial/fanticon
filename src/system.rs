@@ -5,8 +5,8 @@ use crate::{
     audio::{NOISE_PERIODS, PULSE_DUTY_TABLE, TRIANGLE_SEQUENCE, mix_sample, step_noise_lfsr},
     cartridge::Cartridge,
     machine::{
-        BANK_SIZE, CPU_CYCLES_PER_FRAME, MAIN_RAM_SIZE, VIDEO_RAM_SIZE, WORK_RAM_BANKS, bank_kind,
-        register,
+        BANK_SIZE, CPU_CYCLES_PER_FRAME, MAIN_RAM_SIZE, TILEMAP_CELLS, TILEMAP_PIXEL_HEIGHT,
+        TILEMAP_PIXEL_WIDTH, TILEMAP_WIDTH, VIDEO_RAM_SIZE, WORK_RAM_BANKS, bank_kind, register,
     },
     video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, DOTS_PER_FRAME, DOTS_PER_SCANLINE, Video},
 };
@@ -17,8 +17,8 @@ const IRQ_TIMER0: u8 = 4;
 const IRQ_TIMER1: u8 = 8;
 const TILE_PATTERNS: usize = 0x0000;
 const TILE_MAP: usize = 0x2000;
-const TILE_ATTRIBUTES: usize = 0x2400;
-const SPRITE_TABLE: usize = 0x2800;
+const TILE_ATTRIBUTES: usize = TILE_MAP + TILEMAP_CELLS;
+const SPRITE_TABLE: usize = TILE_ATTRIBUTES + TILEMAP_CELLS;
 const BITMAP: usize = 0x4000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -550,9 +550,11 @@ impl FanticonBus {
         }
         match self.video_mode {
             1 => {
-                let sx = (x + usize::from(self.scroll_x) % DISPLAY_WIDTH) % DISPLAY_WIDTH;
-                let sy = (y + usize::from(self.scroll_y) % DISPLAY_HEIGHT) % DISPLAY_HEIGHT;
-                let cell = (sy / 8) * 40 + sx / 8;
+                let sx =
+                    (x + wrap_scroll(self.scroll_x, TILEMAP_PIXEL_WIDTH)) % TILEMAP_PIXEL_WIDTH;
+                let sy =
+                    (y + wrap_scroll(self.scroll_y, TILEMAP_PIXEL_HEIGHT)) % TILEMAP_PIXEL_HEIGHT;
+                let cell = (sy / 8) * TILEMAP_WIDTH + sx / 8;
                 let tile = self.video_ram[TILE_MAP + cell] as usize;
                 let attr = self.video_ram[TILE_ATTRIBUTES + cell];
                 let mut px = sx & 7;
@@ -828,6 +830,11 @@ impl FanticonBus {
     }
 }
 
+#[inline]
+fn wrap_scroll(raw: u16, extent: usize) -> usize {
+    i32::from(raw as i16).rem_euclid(extent as i32) as usize
+}
+
 impl Bus for FanticonBus {
     fn read(&mut self, address: u16) -> u8 {
         self.last_access = Some((address, BusAccessKind::Read));
@@ -985,6 +992,44 @@ mod tests {
         bus.video_ram[BITMAP] = 0xc5;
         assert_eq!(bus.background_pixel(0, 0).0, 0x3c);
         assert_eq!(bus.background_pixel(1, 0).0, 0x35);
+    }
+
+    #[test]
+    fn negative_scroll_offsets_wrap_one_pixel_across_tilemap_edges() {
+        let mut bus = FanticonBus::new(test_cartridge(&[0xea], 0), None);
+        bus.video_mode = 1;
+        bus.video_control = 1;
+
+        // Horizontal -1 samples x=511: cell 63, pixel 7.
+        bus.video_ram[TILE_MAP + 63] = 1;
+        bus.video_ram[32 + 3] = 0x0a;
+        bus.write(register::SCROLL_X_LOW, 0xff);
+        bus.write(register::SCROLL_X_HIGH, 0xff);
+        assert_eq!(bus.background_pixel(0, 0).0, 0x0a);
+
+        // Vertical -1 samples y=255: row 31, pixel row 7.
+        bus.write(register::SCROLL_X_LOW, 0);
+        bus.write(register::SCROLL_X_HIGH, 0);
+        bus.video_ram[TILE_MAP + (TILEMAP_PIXEL_HEIGHT / 8 - 1) * TILEMAP_WIDTH] = 2;
+        bus.video_ram[64 + 7 * 4] = 0xb0;
+        bus.write(register::SCROLL_Y_LOW, 0xff);
+        bus.write(register::SCROLL_Y_HIGH, 0xff);
+        assert_eq!(bus.background_pixel(0, 0).0, 0x0b);
+    }
+
+    #[test]
+    fn tilemap_has_offscreen_columns_available_for_streaming() {
+        assert_eq!(TILE_ATTRIBUTES, 0x2800);
+        assert_eq!(SPRITE_TABLE, 0x3000);
+        let mut bus = FanticonBus::new(test_cartridge(&[0xea], 0), None);
+        bus.video_mode = 1;
+        bus.video_control = 1;
+        bus.video_ram[TILE_MAP + 40] = 3;
+        bus.video_ram[3 * 32] = 0xc0;
+        let [scroll_low, scroll_high] = 320_u16.to_le_bytes();
+        bus.write(register::SCROLL_X_LOW, scroll_low);
+        bus.write(register::SCROLL_X_HIGH, scroll_high);
+        assert_eq!(bus.background_pixel(0, 0).0, 0x0c);
     }
 
     #[test]

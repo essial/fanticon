@@ -309,6 +309,7 @@ pub struct Cpu {
     pub cycles: u64,
     engine: Engine,
     opcode: u8,
+    action: Action,
     phase: u8,
     lo: u8,
     hi: u8,
@@ -339,7 +340,7 @@ enum Interrupt {
     Nmi,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Imm,
     Zp,
@@ -352,7 +353,7 @@ enum Mode {
     IndY,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReadOp {
     Ora,
     And,
@@ -375,7 +376,7 @@ enum ReadOp {
     Las,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RmwOp {
     Asl,
     Rol,
@@ -391,7 +392,7 @@ enum RmwOp {
     Isc,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WriteOp {
     A,
     X,
@@ -403,7 +404,7 @@ enum WriteOp {
     Shx,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ImpliedOp {
     Nop,
     Clc,
@@ -425,7 +426,7 @@ enum ImpliedOp {
     Tsx,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Read(ReadOp, Mode),
     Write(WriteOp, Mode),
@@ -630,6 +631,7 @@ impl Default for Cpu {
             cycles: 0,
             engine: Engine::Fetch,
             opcode: 0,
+            action: decode(0),
             phase: 0,
             lo: 0,
             hi: 0,
@@ -654,25 +656,6 @@ impl Cpu {
     }
 
     #[inline(always)]
-    fn read<B: Bus>(&mut self, bus: &mut B, address: u16) -> u8 {
-        self.cycles = self.cycles.wrapping_add(1);
-        bus.read(address)
-    }
-
-    #[inline(always)]
-    fn write<B: Bus>(&mut self, bus: &mut B, address: u16, value: u8) {
-        self.cycles = self.cycles.wrapping_add(1);
-        bus.write(address, value);
-    }
-
-    #[inline(always)]
-    fn fetch<B: Bus>(&mut self, bus: &mut B) -> u8 {
-        let value = self.read(bus, self.pc);
-        self.pc = self.pc.wrapping_add(1);
-        value
-    }
-
-    #[inline(always)]
     fn flag(&self, mask: u8) -> bool {
         self.status.0 & mask != 0
     }
@@ -686,18 +669,6 @@ impl Cpu {
     fn nz(&mut self, value: u8) {
         self.set_flag(Status::ZERO, value == 0);
         self.set_flag(Status::NEGATIVE, value & 0x80 != 0);
-    }
-
-    #[inline(always)]
-    fn push<B: Bus>(&mut self, bus: &mut B, value: u8) {
-        self.write(bus, 0x0100 | self.sp as u16, value);
-        self.sp = self.sp.wrapping_sub(1);
-    }
-
-    #[inline(always)]
-    fn pull<B: Bus>(&mut self, bus: &mut B) -> u8 {
-        self.sp = self.sp.wrapping_add(1);
-        self.read(bus, 0x0100 | self.sp as u16)
     }
 
     /// Execute exactly one instruction (or interrupt/reset sequence) by
@@ -808,6 +779,7 @@ impl Cpu {
         }
         if let Some(opcode) = self.tick_read(bus, self.pc) {
             self.opcode = opcode;
+            self.action = decode(opcode);
             self.pc = self.pc.wrapping_add(1);
             self.phase = 0;
             self.engine = Engine::Instruction;
@@ -892,17 +864,8 @@ impl Cpu {
         false
     }
 
-    /// Original instruction-atomic executor retained as an explicitly named
-    /// fast path for profiling; system emulation should use `step`/`clock`.
-    pub fn step_fast<B: Bus>(&mut self, bus: &mut B) -> u8 {
-        let start = self.cycles;
-        let opcode = self.fetch(bus);
-        self.execute(bus, opcode);
-        self.cycles.wrapping_sub(start) as u8
-    }
-
     fn clock_action<B: Bus>(&mut self, bus: &mut B) -> bool {
-        match decode(self.opcode) {
+        match self.action {
             Action::Read(op, mode) => {
                 if let Some(value) = self.clock_read_mode(bus, mode) {
                     if self.opcode == 0xab {
@@ -1838,157 +1801,6 @@ impl Cpu {
         false
     }
 
-    fn read_addr<B: Bus>(&mut self, bus: &mut B, mode: Mode) -> u8 {
-        match mode {
-            Mode::Imm => self.fetch(bus),
-            Mode::Zp => {
-                let a = self.fetch(bus);
-                self.read(bus, a as u16)
-            }
-            Mode::ZpX => {
-                let a = self.fetch(bus);
-                self.read(bus, a as u16);
-                self.read(bus, a.wrapping_add(self.x) as u16)
-            }
-            Mode::ZpY => {
-                let a = self.fetch(bus);
-                self.read(bus, a as u16);
-                self.read(bus, a.wrapping_add(self.y) as u16)
-            }
-            Mode::Abs => {
-                let lo = self.fetch(bus);
-                let hi = self.fetch(bus);
-                self.read(bus, u16::from_le_bytes([lo, hi]))
-            }
-            Mode::AbsX => self.read_indexed(bus, self.x),
-            Mode::AbsY => self.read_indexed(bus, self.y),
-            Mode::IndX => {
-                let zp = self.fetch(bus);
-                self.read(bus, zp as u16);
-                let p = zp.wrapping_add(self.x);
-                let lo = self.read(bus, p as u16);
-                let hi = self.read(bus, p.wrapping_add(1) as u16);
-                self.read(bus, u16::from_le_bytes([lo, hi]))
-            }
-            Mode::IndY => {
-                let zp = self.fetch(bus);
-                let lo = self.read(bus, zp as u16);
-                let hi = self.read(bus, zp.wrapping_add(1) as u16);
-                let base = u16::from_le_bytes([lo, hi]);
-                let addr = base.wrapping_add(self.y as u16);
-                let wrong = (base & 0xff00) | (addr & 0x00ff);
-                let value = self.read(bus, wrong);
-                if wrong != addr { self.read(bus, addr) } else { value }
-            }
-        }
-    }
-
-    fn read_indexed<B: Bus>(&mut self, bus: &mut B, index: u8) -> u8 {
-        let lo = self.fetch(bus);
-        let hi = self.fetch(bus);
-        let base = u16::from_le_bytes([lo, hi]);
-        let addr = base.wrapping_add(index as u16);
-        let wrong = (base & 0xff00) | (addr & 0x00ff);
-        let value = self.read(bus, wrong);
-        if wrong != addr { self.read(bus, addr) } else { value }
-    }
-
-    fn write_addr<B: Bus>(&mut self, bus: &mut B, mode: Mode, value: u8) {
-        let addr = match mode {
-            Mode::Zp => self.fetch(bus) as u16,
-            Mode::ZpX => {
-                let a = self.fetch(bus);
-                self.read(bus, a as u16);
-                a.wrapping_add(self.x) as u16
-            }
-            Mode::ZpY => {
-                let a = self.fetch(bus);
-                self.read(bus, a as u16);
-                a.wrapping_add(self.y) as u16
-            }
-            Mode::Abs => {
-                let lo = self.fetch(bus);
-                let hi = self.fetch(bus);
-                u16::from_le_bytes([lo, hi])
-            }
-            Mode::AbsX | Mode::AbsY => {
-                let index = if matches!(mode, Mode::AbsX) { self.x } else { self.y };
-                let lo = self.fetch(bus);
-                let hi = self.fetch(bus);
-                let base = u16::from_le_bytes([lo, hi]);
-                let addr = base.wrapping_add(index as u16);
-                self.read(bus, (base & 0xff00) | (addr & 0xff));
-                addr
-            }
-            Mode::IndX => {
-                let zp = self.fetch(bus);
-                self.read(bus, zp as u16);
-                let p = zp.wrapping_add(self.x);
-                let lo = self.read(bus, p as u16);
-                let hi = self.read(bus, p.wrapping_add(1) as u16);
-                u16::from_le_bytes([lo, hi])
-            }
-            Mode::IndY => {
-                let zp = self.fetch(bus);
-                let lo = self.read(bus, zp as u16);
-                let hi = self.read(bus, zp.wrapping_add(1) as u16);
-                let base = u16::from_le_bytes([lo, hi]);
-                let addr = base.wrapping_add(self.y as u16);
-                self.read(bus, (base & 0xff00) | (addr & 0xff));
-                addr
-            }
-            Mode::Imm => unreachable!(),
-        };
-        self.write(bus, addr, value);
-    }
-
-    fn rmw_addr<B: Bus>(&mut self, bus: &mut B, mode: Mode, op: RmwOp) {
-        let addr = match mode {
-            Mode::Zp => self.fetch(bus) as u16,
-            Mode::ZpX => {
-                let a = self.fetch(bus);
-                self.read(bus, a as u16);
-                a.wrapping_add(self.x) as u16
-            }
-            Mode::Abs => {
-                let lo = self.fetch(bus);
-                let hi = self.fetch(bus);
-                u16::from_le_bytes([lo, hi])
-            }
-            Mode::AbsX | Mode::AbsY => {
-                let index = if matches!(mode, Mode::AbsX) { self.x } else { self.y };
-                let lo = self.fetch(bus);
-                let hi = self.fetch(bus);
-                let base = u16::from_le_bytes([lo, hi]);
-                let addr = base.wrapping_add(index as u16);
-                self.read(bus, (base & 0xff00) | (addr & 0xff));
-                addr
-            }
-            Mode::IndX => {
-                let zp = self.fetch(bus);
-                self.read(bus, zp as u16);
-                let p = zp.wrapping_add(self.x);
-                let lo = self.read(bus, p as u16);
-                let hi = self.read(bus, p.wrapping_add(1) as u16);
-                u16::from_le_bytes([lo, hi])
-            }
-            Mode::IndY => {
-                let zp = self.fetch(bus);
-                let lo = self.read(bus, zp as u16);
-                let hi = self.read(bus, zp.wrapping_add(1) as u16);
-                let base = u16::from_le_bytes([lo, hi]);
-                let addr = base.wrapping_add(self.y as u16);
-                self.read(bus, (base & 0xff00) | (addr & 0xff));
-                addr
-            }
-            _ => unreachable!(),
-        };
-        let old = self.read(bus, addr);
-        self.write(bus, addr, old);
-        let new = self.apply_rmw(op, old);
-        self.write(bus, addr, new);
-    }
-
     fn apply_read(&mut self, op: ReadOp, value: u8) {
         match op {
             ReadOp::Ora => {
@@ -2190,471 +2002,8 @@ impl Cpu {
         }
     }
 
-    fn branch<B: Bus>(&mut self, bus: &mut B, condition: bool) {
-        let offset = self.fetch(bus) as i8;
-        if condition {
-            self.read(bus, self.pc);
-            let old = self.pc;
-            let new = self.pc.wrapping_add_signed(offset as i16);
-            if old & 0xff00 != new & 0xff00 {
-                self.read(bus, (old & 0xff00) | (new & 0xff));
-            }
-            self.pc = new;
-        }
-    }
-
     fn accumulator(&mut self, op: RmwOp) {
         self.a = self.apply_rmw(op, self.a);
-    }
-
-    fn implied<B: Bus>(&mut self, bus: &mut B) {
-        self.read(bus, self.pc);
-    }
-
-    fn read_op<B: Bus>(&mut self, bus: &mut B, mode: Mode, op: ReadOp) {
-        let v = self.read_addr(bus, mode);
-        self.apply_read(op, v);
-    }
-
-    fn execute<B: Bus>(&mut self, bus: &mut B, opcode: u8) {
-        use Mode::*;
-        use ReadOp::*;
-        use RmwOp::*;
-        match opcode {
-            0x00 => {
-                self.fetch(bus);
-                self.push(bus, (self.pc >> 8) as u8);
-                self.push(bus, self.pc as u8);
-                self.push(bus, self.status.0 | 0x30);
-                self.set_flag(Status::INTERRUPT_DISABLE, true);
-                let lo = self.read(bus, 0xfffe);
-                let hi = self.read(bus, 0xffff);
-                self.pc = u16::from_le_bytes([lo, hi]);
-            }
-            0x01 => self.read_op(bus, IndX, Ora),
-            0x05 => self.read_op(bus, Zp, Ora),
-            0x09 => self.read_op(bus, Imm, Ora),
-            0x0d => self.read_op(bus, Abs, Ora),
-            0x11 => self.read_op(bus, IndY, Ora),
-            0x15 => self.read_op(bus, ZpX, Ora),
-            0x19 => self.read_op(bus, AbsY, Ora),
-            0x1d => self.read_op(bus, AbsX, Ora),
-            0x21 => self.read_op(bus, IndX, And),
-            0x25 => self.read_op(bus, Zp, And),
-            0x29 => self.read_op(bus, Imm, And),
-            0x2d => self.read_op(bus, Abs, And),
-            0x31 => self.read_op(bus, IndY, And),
-            0x35 => self.read_op(bus, ZpX, And),
-            0x39 => self.read_op(bus, AbsY, And),
-            0x3d => self.read_op(bus, AbsX, And),
-            0x41 => self.read_op(bus, IndX, Eor),
-            0x45 => self.read_op(bus, Zp, Eor),
-            0x49 => self.read_op(bus, Imm, Eor),
-            0x4d => self.read_op(bus, Abs, Eor),
-            0x51 => self.read_op(bus, IndY, Eor),
-            0x55 => self.read_op(bus, ZpX, Eor),
-            0x59 => self.read_op(bus, AbsY, Eor),
-            0x5d => self.read_op(bus, AbsX, Eor),
-            0x61 => self.read_op(bus, IndX, Adc),
-            0x65 => self.read_op(bus, Zp, Adc),
-            0x69 => self.read_op(bus, Imm, Adc),
-            0x6d => self.read_op(bus, Abs, Adc),
-            0x71 => self.read_op(bus, IndY, Adc),
-            0x75 => self.read_op(bus, ZpX, Adc),
-            0x79 => self.read_op(bus, AbsY, Adc),
-            0x7d => self.read_op(bus, AbsX, Adc),
-            0xa1 => self.read_op(bus, IndX, Lda),
-            0xa5 => self.read_op(bus, Zp, Lda),
-            0xa9 => self.read_op(bus, Imm, Lda),
-            0xad => self.read_op(bus, Abs, Lda),
-            0xb1 => self.read_op(bus, IndY, Lda),
-            0xb5 => self.read_op(bus, ZpX, Lda),
-            0xb9 => self.read_op(bus, AbsY, Lda),
-            0xbd => self.read_op(bus, AbsX, Lda),
-            0xc1 => self.read_op(bus, IndX, Cmp),
-            0xc5 => self.read_op(bus, Zp, Cmp),
-            0xc9 => self.read_op(bus, Imm, Cmp),
-            0xcd => self.read_op(bus, Abs, Cmp),
-            0xd1 => self.read_op(bus, IndY, Cmp),
-            0xd5 => self.read_op(bus, ZpX, Cmp),
-            0xd9 => self.read_op(bus, AbsY, Cmp),
-            0xdd => self.read_op(bus, AbsX, Cmp),
-            0xe1 => self.read_op(bus, IndX, Sbc),
-            0xe5 => self.read_op(bus, Zp, Sbc),
-            0xe9 | 0xeb => self.read_op(bus, Imm, Sbc),
-            0xed => self.read_op(bus, Abs, Sbc),
-            0xf1 => self.read_op(bus, IndY, Sbc),
-            0xf5 => self.read_op(bus, ZpX, Sbc),
-            0xf9 => self.read_op(bus, AbsY, Sbc),
-            0xfd => self.read_op(bus, AbsX, Sbc),
-
-            0xa0 => self.read_op(bus, Imm, Ldy),
-            0xa4 => self.read_op(bus, Zp, Ldy),
-            0xac => self.read_op(bus, Abs, Ldy),
-            0xb4 => self.read_op(bus, ZpX, Ldy),
-            0xbc => self.read_op(bus, AbsX, Ldy),
-            0xa2 => self.read_op(bus, Imm, Ldx),
-            0xa6 => self.read_op(bus, Zp, Ldx),
-            0xae => self.read_op(bus, Abs, Ldx),
-            0xb6 => self.read_op(bus, ZpY, Ldx),
-            0xbe => self.read_op(bus, AbsY, Ldx),
-            0xc0 => self.read_op(bus, Imm, Cpy),
-            0xc4 => self.read_op(bus, Zp, Cpy),
-            0xcc => self.read_op(bus, Abs, Cpy),
-            0xe0 => self.read_op(bus, Imm, Cpx),
-            0xe4 => self.read_op(bus, Zp, Cpx),
-            0xec => self.read_op(bus, Abs, Cpx),
-            0x24 => self.read_op(bus, Zp, Bit),
-            0x2c => self.read_op(bus, Abs, Bit),
-
-            0x81 => self.write_addr(bus, IndX, self.a),
-            0x85 => self.write_addr(bus, Zp, self.a),
-            0x8d => self.write_addr(bus, Abs, self.a),
-            0x91 => self.write_addr(bus, IndY, self.a),
-            0x95 => self.write_addr(bus, ZpX, self.a),
-            0x99 => self.write_addr(bus, AbsY, self.a),
-            0x9d => self.write_addr(bus, AbsX, self.a),
-            0x84 => self.write_addr(bus, Zp, self.y),
-            0x8c => self.write_addr(bus, Abs, self.y),
-            0x94 => self.write_addr(bus, ZpX, self.y),
-            0x86 => self.write_addr(bus, Zp, self.x),
-            0x8e => self.write_addr(bus, Abs, self.x),
-            0x96 => self.write_addr(bus, ZpY, self.x),
-
-            0x06 => self.rmw_addr(bus, Zp, Asl),
-            0x0e => self.rmw_addr(bus, Abs, Asl),
-            0x16 => self.rmw_addr(bus, ZpX, Asl),
-            0x1e => self.rmw_addr(bus, AbsX, Asl),
-            0x0a => {
-                self.implied(bus);
-                self.accumulator(Asl)
-            }
-            0x26 => self.rmw_addr(bus, Zp, Rol),
-            0x2e => self.rmw_addr(bus, Abs, Rol),
-            0x36 => self.rmw_addr(bus, ZpX, Rol),
-            0x3e => self.rmw_addr(bus, AbsX, Rol),
-            0x2a => {
-                self.implied(bus);
-                self.accumulator(Rol)
-            }
-            0x46 => self.rmw_addr(bus, Zp, Lsr),
-            0x4e => self.rmw_addr(bus, Abs, Lsr),
-            0x56 => self.rmw_addr(bus, ZpX, Lsr),
-            0x5e => self.rmw_addr(bus, AbsX, Lsr),
-            0x4a => {
-                self.implied(bus);
-                self.accumulator(Lsr)
-            }
-            0x66 => self.rmw_addr(bus, Zp, Ror),
-            0x6e => self.rmw_addr(bus, Abs, Ror),
-            0x76 => self.rmw_addr(bus, ZpX, Ror),
-            0x7e => self.rmw_addr(bus, AbsX, Ror),
-            0x6a => {
-                self.implied(bus);
-                self.accumulator(Ror)
-            }
-            0xc6 => self.rmw_addr(bus, Zp, Dec),
-            0xce => self.rmw_addr(bus, Abs, Dec),
-            0xd6 => self.rmw_addr(bus, ZpX, Dec),
-            0xde => self.rmw_addr(bus, AbsX, Dec),
-            0xe6 => self.rmw_addr(bus, Zp, Inc),
-            0xee => self.rmw_addr(bus, Abs, Inc),
-            0xf6 => self.rmw_addr(bus, ZpX, Inc),
-            0xfe => self.rmw_addr(bus, AbsX, Inc),
-
-            0x10 => self.branch(bus, !self.flag(Status::NEGATIVE)),
-            0x30 => self.branch(bus, self.flag(Status::NEGATIVE)),
-            0x50 => self.branch(bus, !self.flag(Status::OVERFLOW)),
-            0x70 => self.branch(bus, self.flag(Status::OVERFLOW)),
-            0x90 => self.branch(bus, !self.flag(Status::CARRY)),
-            0xb0 => self.branch(bus, self.flag(Status::CARRY)),
-            0xd0 => self.branch(bus, !self.flag(Status::ZERO)),
-            0xf0 => self.branch(bus, self.flag(Status::ZERO)),
-            0x18 => {
-                self.implied(bus);
-                self.set_flag(Status::CARRY, false)
-            }
-            0x38 => {
-                self.implied(bus);
-                self.set_flag(Status::CARRY, true)
-            }
-            0x58 => {
-                self.implied(bus);
-                self.set_flag(Status::INTERRUPT_DISABLE, false)
-            }
-            0x78 => {
-                self.implied(bus);
-                self.set_flag(Status::INTERRUPT_DISABLE, true)
-            }
-            0xb8 => {
-                self.implied(bus);
-                self.set_flag(Status::OVERFLOW, false)
-            }
-            0xd8 => {
-                self.implied(bus);
-                self.set_flag(Status::DECIMAL, false)
-            }
-            0xf8 => {
-                self.implied(bus);
-                self.set_flag(Status::DECIMAL, true)
-            }
-            0x88 => {
-                self.implied(bus);
-                self.y = self.y.wrapping_sub(1);
-                self.nz(self.y)
-            }
-            0xc8 => {
-                self.implied(bus);
-                self.y = self.y.wrapping_add(1);
-                self.nz(self.y)
-            }
-            0xca => {
-                self.implied(bus);
-                self.x = self.x.wrapping_sub(1);
-                self.nz(self.x)
-            }
-            0xe8 => {
-                self.implied(bus);
-                self.x = self.x.wrapping_add(1);
-                self.nz(self.x)
-            }
-            0x8a => {
-                self.implied(bus);
-                self.a = self.x;
-                self.nz(self.a)
-            }
-            0x98 => {
-                self.implied(bus);
-                self.a = self.y;
-                self.nz(self.a)
-            }
-            0x9a => {
-                self.implied(bus);
-                self.sp = self.x
-            }
-            0xaa => {
-                self.implied(bus);
-                self.x = self.a;
-                self.nz(self.x)
-            }
-            0xa8 => {
-                self.implied(bus);
-                self.y = self.a;
-                self.nz(self.y)
-            }
-            0xba => {
-                self.implied(bus);
-                self.x = self.sp;
-                self.nz(self.x)
-            }
-            0x4c => {
-                let lo = self.fetch(bus);
-                let hi = self.fetch(bus);
-                self.pc = u16::from_le_bytes([lo, hi])
-            }
-            0x6c => {
-                let lo = self.fetch(bus);
-                let hi = self.fetch(bus);
-                let ptr = u16::from_le_bytes([lo, hi]);
-                let l = self.read(bus, ptr);
-                let h = self.read(bus, (ptr & 0xff00) | ptr.wrapping_add(1) & 0xff);
-                self.pc = u16::from_le_bytes([l, h])
-            }
-            0x20 => {
-                let lo = self.fetch(bus);
-                self.read(bus, 0x0100 | self.sp as u16);
-                let ret = self.pc;
-                self.push(bus, (ret >> 8) as u8);
-                self.push(bus, ret as u8);
-                let hi = self.fetch(bus);
-                self.pc = u16::from_le_bytes([lo, hi])
-            }
-            0x40 => {
-                self.implied(bus);
-                self.read(bus, 0x0100 | self.sp as u16);
-                self.status.0 = (self.pull(bus) & !Status::BREAK) | Status::UNUSED;
-                let lo = self.pull(bus);
-                let hi = self.pull(bus);
-                self.pc = u16::from_le_bytes([lo, hi])
-            }
-            0x60 => {
-                self.implied(bus);
-                self.read(bus, 0x0100 | self.sp as u16);
-                let lo = self.pull(bus);
-                let hi = self.pull(bus);
-                self.pc = u16::from_le_bytes([lo, hi]);
-                self.read(bus, self.pc);
-                self.pc = self.pc.wrapping_add(1)
-            }
-            0x08 => {
-                self.implied(bus);
-                self.push(bus, self.status.0 | 0x30)
-            }
-            0x28 => {
-                self.implied(bus);
-                self.read(bus, 0x0100 | self.sp as u16);
-                self.status.0 = (self.pull(bus) & !Status::BREAK) | Status::UNUSED
-            }
-            0x48 => {
-                self.implied(bus);
-                self.push(bus, self.a)
-            }
-            0x68 => {
-                self.implied(bus);
-                self.read(bus, 0x0100 | self.sp as u16);
-                self.a = self.pull(bus);
-                self.nz(self.a)
-            }
-            0xea => self.implied(bus),
-
-            // Stable undocumented read/modify/write families.
-            0x03 => self.rmw_addr(bus, IndX, Slo),
-            0x07 => self.rmw_addr(bus, Zp, Slo),
-            0x0f => self.rmw_addr(bus, Abs, Slo),
-            0x13 => self.rmw_addr(bus, IndY, Slo),
-            0x17 => self.rmw_addr(bus, ZpX, Slo),
-            0x1b => self.rmw_addr(bus, AbsY, Slo),
-            0x1f => self.rmw_addr(bus, AbsX, Slo),
-            0x23 => self.rmw_addr(bus, IndX, Rla),
-            0x27 => self.rmw_addr(bus, Zp, Rla),
-            0x2f => self.rmw_addr(bus, Abs, Rla),
-            0x33 => self.rmw_addr(bus, IndY, Rla),
-            0x37 => self.rmw_addr(bus, ZpX, Rla),
-            0x3b => self.rmw_addr(bus, AbsY, Rla),
-            0x3f => self.rmw_addr(bus, AbsX, Rla),
-            0x43 => self.rmw_addr(bus, IndX, Sre),
-            0x47 => self.rmw_addr(bus, Zp, Sre),
-            0x4f => self.rmw_addr(bus, Abs, Sre),
-            0x53 => self.rmw_addr(bus, IndY, Sre),
-            0x57 => self.rmw_addr(bus, ZpX, Sre),
-            0x5b => self.rmw_addr(bus, AbsY, Sre),
-            0x5f => self.rmw_addr(bus, AbsX, Sre),
-            0x63 => self.rmw_addr(bus, IndX, Rra),
-            0x67 => self.rmw_addr(bus, Zp, Rra),
-            0x6f => self.rmw_addr(bus, Abs, Rra),
-            0x73 => self.rmw_addr(bus, IndY, Rra),
-            0x77 => self.rmw_addr(bus, ZpX, Rra),
-            0x7b => self.rmw_addr(bus, AbsY, Rra),
-            0x7f => self.rmw_addr(bus, AbsX, Rra),
-            0xc3 => self.rmw_addr(bus, IndX, Dcp),
-            0xc7 => self.rmw_addr(bus, Zp, Dcp),
-            0xcf => self.rmw_addr(bus, Abs, Dcp),
-            0xd3 => self.rmw_addr(bus, IndY, Dcp),
-            0xd7 => self.rmw_addr(bus, ZpX, Dcp),
-            0xdb => self.rmw_addr(bus, AbsY, Dcp),
-            0xdf => self.rmw_addr(bus, AbsX, Dcp),
-            0xe3 => self.rmw_addr(bus, IndX, Isc),
-            0xe7 => self.rmw_addr(bus, Zp, Isc),
-            0xef => self.rmw_addr(bus, Abs, Isc),
-            0xf3 => self.rmw_addr(bus, IndY, Isc),
-            0xf7 => self.rmw_addr(bus, ZpX, Isc),
-            0xfb => self.rmw_addr(bus, AbsY, Isc),
-            0xff => self.rmw_addr(bus, AbsX, Isc),
-            0x83 => self.write_addr(bus, IndX, self.a & self.x),
-            0x87 => self.write_addr(bus, Zp, self.a & self.x),
-            0x8f => self.write_addr(bus, Abs, self.a & self.x),
-            0x97 => self.write_addr(bus, ZpY, self.a & self.x),
-            0xa3 => self.read_op(bus, IndX, Lax),
-            0xa7 => self.read_op(bus, Zp, Lax),
-            0xab => {
-                let value = self.fetch(bus);
-                let result = (self.a | 0xee) & value;
-                self.a = result;
-                self.x = result;
-                self.nz(result);
-            }
-            0xaf => self.read_op(bus, Abs, Lax),
-            0xb3 => self.read_op(bus, IndY, Lax),
-            0xb7 => self.read_op(bus, ZpY, Lax),
-            0xbf => self.read_op(bus, AbsY, Lax),
-            0x0b | 0x2b => self.read_op(bus, Imm, Anc),
-            0x4b => self.read_op(bus, Imm, Alr),
-            0x6b => self.read_op(bus, Imm, Arr),
-            0x8b => self.read_op(bus, Imm, Xaa),
-            0xcb => self.read_op(bus, Imm, Axs),
-            0xbb => self.read_op(bus, AbsY, Las),
-
-            // Undocumented NOPs still perform their documented bus accesses.
-            0x1a | 0x3a | 0x5a | 0x7a | 0xda | 0xfa => self.implied(bus),
-            0x80 | 0x82 | 0x89 | 0xc2 | 0xe2 => {
-                self.fetch(bus);
-            }
-            0x04 | 0x44 | 0x64 => {
-                self.read_addr(bus, Zp);
-            }
-            0x14 | 0x34 | 0x54 | 0x74 | 0xd4 | 0xf4 => {
-                self.read_addr(bus, ZpX);
-            }
-            0x0c => {
-                self.read_addr(bus, Abs);
-            }
-            0x1c | 0x3c | 0x5c | 0x7c | 0xdc | 0xfc => {
-                self.read_addr(bus, AbsX);
-            }
-
-            // Unstable stores: the value and, on page crossing, high address byte
-            // are both driven by the indexed base high byte plus one.
-            0x93 => self.unstable_store(bus, IndY, self.a & self.x),
-            0x9f => self.unstable_store(bus, AbsY, self.a & self.x),
-            0x9b => {
-                self.sp = self.a & self.x;
-                self.unstable_store(bus, AbsY, self.sp)
-            }
-            0x9c => self.unstable_store(bus, AbsX, self.y),
-            0x9e => self.unstable_store(bus, AbsY, self.x),
-
-            // NMOS KIL/JAM bus behavior used by the SingleStepTests suite.
-            0x02 | 0x12 | 0x22 | 0x32 | 0x42 | 0x52 | 0x62 | 0x72 | 0x92 | 0xb2 | 0xd2 | 0xf2 => {
-                self.fetch(bus);
-                let hi = self.read(bus, 0xffff);
-                let lo = self.read(bus, 0xfffe);
-                self.read(bus, 0xfffe);
-                self.read(bus, 0xffff);
-                let _ = (hi, lo);
-                for _ in 0..5 {
-                    self.read(bus, 0xffff);
-                }
-                self.pc = self.pc.wrapping_sub(1);
-            }
-        }
-    }
-
-    fn unstable_store<B: Bus>(&mut self, bus: &mut B, mode: Mode, source: u8) {
-        match mode {
-            Mode::AbsX | Mode::AbsY => {
-                let index = if matches!(mode, Mode::AbsX) { self.x } else { self.y };
-                let lo = self.fetch(bus);
-                let hi = self.fetch(bus);
-                let base = u16::from_le_bytes([lo, hi]);
-                let indexed = base.wrapping_add(index as u16);
-                let wrong = (base & 0xff00) | (indexed & 0xff);
-                self.read(bus, wrong);
-                let value = source & hi.wrapping_add(1);
-                let addr = if base & 0xff00 != indexed & 0xff00 {
-                    (value as u16) << 8 | (indexed & 0xff)
-                } else {
-                    indexed
-                };
-                self.write(bus, addr, value);
-            }
-            Mode::IndY => {
-                let zp = self.fetch(bus);
-                let lo = self.read(bus, zp as u16);
-                let hi = self.read(bus, zp.wrapping_add(1) as u16);
-                let base = u16::from_le_bytes([lo, hi]);
-                let indexed = base.wrapping_add(self.y as u16);
-                let wrong = (base & 0xff00) | (indexed & 0xff);
-                self.read(bus, wrong);
-                let value = source & hi.wrapping_add(1);
-                let addr = if base & 0xff00 != indexed & 0xff00 {
-                    (value as u16) << 8 | (indexed & 0xff)
-                } else {
-                    indexed
-                };
-                self.write(bus, addr, value);
-            }
-            _ => unreachable!(),
-        }
     }
 }
 

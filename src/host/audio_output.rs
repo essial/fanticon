@@ -10,6 +10,8 @@ use cpal::{
 };
 use fanticon::machine::CPU_CLOCK_HZ;
 
+const INV_U16_MAX: f32 = 1.0 / u16::MAX as f32;
+
 pub struct AudioOutput {
     _stream: Stream,
     presenter: Arc<Mutex<AudioPresenter>>,
@@ -120,7 +122,7 @@ impl AudioPresenter {
             self.reconstruction_alpha = reconstruction_alpha(source_rate);
         }
         for &sample in cycle_samples {
-            let input = f32::from(sample) / f32::from(u16::MAX);
+            let input = f32::from(sample) * INV_U16_MAX;
             self.high_pass =
                 self.high_pass_coefficient * (self.high_pass + input - self.previous_input);
             self.previous_input = input;

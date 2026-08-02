@@ -611,9 +611,10 @@ impl FanticonBus {
         let offset = address as usize - 0x8000;
         let bank = usize::from(self.bank_number);
         match self.bank_kind {
-            bank_kind::CARTRIDGE_ROM => {
-                self.cartridge.rom_banks.get(bank).map_or(0xff, |data| data[offset])
+            bank_kind::CARTRIDGE_ROM if bank < self.cartridge.bank_count() => {
+                self.cartridge.rom_banks[bank * BANK_SIZE + offset]
             }
+            bank_kind::CARTRIDGE_ROM => 0xff,
             bank_kind::WORK_RAM if bank < WORK_RAM_BANKS => {
                 self.work_ram[bank * BANK_SIZE + offset]
             }

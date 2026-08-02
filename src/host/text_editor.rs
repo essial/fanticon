@@ -79,6 +79,16 @@ struct Snapshot {
     cursor: Position,
 }
 
+/// Identifies a run of same-kind, cursor-adjacent edits (e.g. holding down a
+/// letter key or Backspace) that should share a single undo snapshot instead
+/// of cloning the whole document on every keystroke.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditRunKind {
+    Insert,
+    Backspace,
+    DeleteForward,
+}
+
 #[derive(Clone)]
 struct DocumentState {
     id: u32,
@@ -228,6 +238,7 @@ pub struct TextEditor {
     filename: Option<String>,
     clipboard: String,
     undo: Vec<Snapshot>,
+    edit_run: Option<(EditRunKind, Position)>,
     dirty: bool,
     overlay: Overlay,
     diagnostics: Vec<Diagnostic>,
@@ -278,6 +289,7 @@ impl TextEditor {
             filename: None,
             clipboard: String::new(),
             undo: Vec::new(),
+            edit_run: None,
             dirty: false,
             overlay: Overlay::None,
             diagnostics: Vec::new(),
@@ -995,6 +1007,7 @@ impl TextEditor {
         self.scroll_column = document.scroll_column;
         self.filename = document.filename;
         self.undo = document.undo;
+        self.edit_run = None;
         self.dirty = document.dirty;
     }
 
@@ -2729,6 +2742,7 @@ impl TextEditor {
             self.scroll_column = 0;
             self.filename = Some(filename.to_ascii_lowercase());
             self.undo.clear();
+            self.edit_run = None;
             self.dirty = false;
         } else if self.active_tab_is_disposable() {
             let document = DocumentState {
@@ -2784,6 +2798,17 @@ impl TextEditor {
             self.undo.remove(0);
         }
         self.undo.push(Snapshot { lines: self.lines.clone(), cursor: self.cursor });
+        self.edit_run = None;
+    }
+
+    /// Like `record_undo`, but skips the snapshot when this edit continues an
+    /// uninterrupted run of the same kind at the same cursor position (e.g.
+    /// typing or holding Backspace), so a whole editing session doesn't clone
+    /// the entire document once per keystroke.
+    fn record_undo_for(&mut self, run: EditRunKind) {
+        if self.edit_run != Some((run, self.cursor)) {
+            self.record_undo();
+        }
     }
 
     fn undo(&mut self) {
@@ -2792,6 +2817,7 @@ impl TextEditor {
             self.lines = snapshot.lines;
             self.cursor = snapshot.cursor;
             self.selection_anchor = None;
+            self.edit_run = None;
             self.dirty = true;
             self.ensure_cursor_visible();
         }
@@ -2801,11 +2827,12 @@ impl TextEditor {
         if text.is_empty() {
             return;
         }
-        self.record_undo();
+        self.record_undo_for(EditRunKind::Insert);
         self.delete_selection_without_undo();
         self.lines[self.cursor.line].insert_str(self.cursor.column, text);
         self.cursor.column += text.len();
         self.dirty = true;
+        self.edit_run = Some((EditRunKind::Insert, self.cursor));
     }
 
     fn insert_newline(&mut self) {
@@ -2839,9 +2866,10 @@ impl TextEditor {
             self.record_undo();
             self.delete_selection_without_undo();
         } else if self.cursor.column > 0 {
-            self.record_undo();
+            self.record_undo_for(EditRunKind::Backspace);
             self.cursor.column -= 1;
             self.lines[self.cursor.line].remove(self.cursor.column);
+            self.edit_run = Some((EditRunKind::Backspace, self.cursor));
         } else if self.cursor.line > 0 {
             self.record_undo();
             let line = self.lines.remove(self.cursor.line);
@@ -2859,8 +2887,9 @@ impl TextEditor {
             self.record_undo();
             self.delete_selection_without_undo();
         } else if self.cursor.column < self.lines[self.cursor.line].len() {
-            self.record_undo();
+            self.record_undo_for(EditRunKind::DeleteForward);
             self.lines[self.cursor.line].remove(self.cursor.column);
+            self.edit_run = Some((EditRunKind::DeleteForward, self.cursor));
         } else if self.cursor.line + 1 < self.lines.len() {
             self.record_undo();
             let next = self.lines.remove(self.cursor.line + 1);

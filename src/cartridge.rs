@@ -22,7 +22,10 @@ pub struct Cartridge {
     pub machine_minor: u8,
     pub save_banks: u8,
     pub fixed_rom: Box<[u8; FIXED_ROM_IMAGE_SIZE]>,
-    pub rom_banks: Vec<Box<[u8; BANK_SIZE]>>,
+    /// Banked ROM images stored contiguously, `bank_count() * BANK_SIZE` bytes
+    /// long, so bus reads are a single flat-slice index instead of chasing a
+    /// separate heap allocation per bank.
+    pub rom_banks: Box<[u8]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,11 +54,16 @@ impl Cartridge {
             machine_minor: MACHINE_VERSION_MINOR,
             save_banks,
             fixed_rom: Box::new(fixed_rom),
-            rom_banks: rom_banks.into_iter().map(Box::new).collect(),
+            rom_banks: rom_banks.into_iter().flatten().collect(),
         };
         cartridge.validate_metadata()?;
         cartridge.validate_vectors()?;
         Ok(cartridge)
+    }
+
+    /// Number of banked ROM images (each `BANK_SIZE` bytes).
+    pub fn bank_count(&self) -> usize {
+        self.rom_banks.len() / BANK_SIZE
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CartridgeError> {
@@ -118,10 +126,7 @@ impl Cartridge {
         }
 
         let fixed_rom = Box::new(bytes[fixed_start..fixed_end].try_into().expect("fixed length"));
-        let rom_banks = banked
-            .chunks_exact(BANK_SIZE)
-            .map(|bank| Box::new(bank.try_into().expect("bank length")))
-            .collect();
+        let rom_banks: Box<[u8]> = banked.into();
         let cartridge = Self {
             title: String::from_utf8(title_bytes[..title_end].to_vec()).expect("ASCII title"),
             id,
@@ -145,7 +150,7 @@ impl Cartridge {
         bytes[9] = FORMAT_MINOR;
         write_u16(&mut bytes, 0x0a, CARTRIDGE_HEADER_SIZE as u16);
         write_u32(&mut bytes, 0x0c, u32::from(self.save_banks != 0));
-        write_u16(&mut bytes, 0x10, self.rom_banks.len() as u16);
+        write_u16(&mut bytes, 0x10, self.bank_count() as u16);
         bytes[0x12] = self.save_banks;
         bytes[0x13] = 0;
         write_u64(&mut bytes, 0x1c, self.id);
@@ -153,9 +158,7 @@ impl Cartridge {
         bytes[0x3a] = self.machine_major;
         bytes[0x3b] = self.machine_minor;
         bytes.extend_from_slice(self.fixed_rom.as_slice());
-        for bank in &self.rom_banks {
-            bytes.extend_from_slice(bank.as_slice());
-        }
+        bytes.extend_from_slice(&self.rom_banks);
         write_u32(&mut bytes, 0x14, crc32(self.fixed_rom.as_slice()));
         let banked_crc = if self.rom_banks.is_empty() {
             0
@@ -178,7 +181,7 @@ impl Cartridge {
         {
             return err("cartridge title must be 1-22 printable ASCII characters");
         }
-        if self.rom_banks.len() > MAX_CARTRIDGE_BANKS {
+        if self.bank_count() > MAX_CARTRIDGE_BANKS {
             return err("cartridge contains more than 256 ROM banks");
         }
         if usize::from(self.save_banks) > MAX_SAVE_RAM_BANKS {

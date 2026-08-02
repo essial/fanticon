@@ -55,7 +55,7 @@ pub fn build_project(
     Ok(ProjectBuildSuccess {
         output: build.manifest.output,
         title: build.manifest.title,
-        banks: build.cartridge.rom_banks.len(),
+        banks: build.cartridge.bank_count(),
         size: build.bytes.len(),
         symbols: build.symbols,
         source_map: build.source_map,

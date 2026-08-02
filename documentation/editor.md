@@ -255,6 +255,12 @@ testable and gives the application one place to manage tool lifetimes. Likely
 future actions include opening source, sprite, map, sound, palette, and cartridge
 project editors.
 
+The graphics editor is implemented with first-class `.GFX` resident-set and
+shared `.PAL` palette documents in the same tab strip rather than separate
+windows. See the
+[Fanticon Graphics Editor](graphics-editor.md) for its visual tools, ASCII file
+format, generated labels, and VM upload workflow.
+
 Game and Editor mode currently share the command-console surface. Once cartridge
 loading exists, Game mode can hand display ownership to the emulated video device
 while Editor mode continues using native terminal and tool rendering.

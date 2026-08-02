@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use fanticon::{
     assembler::{CartridgeSourceMapEntry, Diagnostic, SymbolSection},
@@ -21,6 +21,7 @@ use super::{
         SYMBOL_CHECK, SYMBOL_CROSS, configure_text_gradient, gradient_color,
     },
     filesystem::{ConsoleFilesystem, SharedFilesystem},
+    graphics_editor::{DEFAULT_PALETTE_FILE, GraphicsEditor},
     ui_colors::SharedUiColors,
 };
 
@@ -304,6 +305,8 @@ pub struct TextEditor {
     music_status: Option<MusicStatus>,
     music_marquee_frame: u8,
     music_marquee_offset: usize,
+    graphics_tabs: BTreeMap<u32, GraphicsEditor>,
+    graphics_source_views: BTreeSet<u32>,
 }
 
 impl TextEditor {
@@ -355,6 +358,8 @@ impl TextEditor {
             music_status: None,
             music_marquee_frame: 0,
             music_marquee_offset: 0,
+            graphics_tabs: BTreeMap::new(),
+            graphics_source_views: BTreeSet::new(),
         };
         if let Some(filename) = filename
             && let Err(error) = editor.load(&filename)
@@ -387,6 +392,47 @@ impl TextEditor {
         if (modifiers.control_key() || modifiers.super_key())
             && let Key::Character(text) = key
         {
+            if self.graphics_active() && !self.graphics_source_active() {
+                match text.to_ascii_lowercase().as_str() {
+                    "c" => {
+                        self.graphics_tabs.get_mut(&self.document_id).unwrap().copy();
+                        return EditorAction::None;
+                    }
+                    "x" => {
+                        let graphics = self.graphics_tabs.get_mut(&self.document_id).unwrap();
+                        graphics.copy();
+                        if graphics
+                            .handle_key(&Key::Named(NamedKey::Delete), ModifiersState::empty())
+                        {
+                            self.dirty = true;
+                            self.propagate_active_palette();
+                        }
+                        return EditorAction::None;
+                    }
+                    "v" => {
+                        if self.graphics_tabs.get_mut(&self.document_id).unwrap().paste() {
+                            self.dirty = true;
+                            self.propagate_active_palette();
+                        }
+                        return EditorAction::None;
+                    }
+                    "z" => {
+                        if self.graphics_tabs.get_mut(&self.document_id).unwrap().undo() {
+                            self.dirty = true;
+                            self.propagate_active_palette();
+                        }
+                        return EditorAction::None;
+                    }
+                    "g" => {
+                        self.toggle_graphics_source_view();
+                        return EditorAction::None;
+                    }
+                    _ => {}
+                }
+            } else if text.eq_ignore_ascii_case("g") && self.graphics_active() {
+                self.toggle_graphics_source_view();
+                return EditorAction::None;
+            }
             return match text.to_ascii_lowercase().as_str() {
                 "a" => {
                     self.select_all();
@@ -425,7 +471,11 @@ impl TextEditor {
                     EditorAction::None
                 }
                 "n" => {
-                    self.new_document();
+                    if modifiers.shift_key() {
+                        self.new_graphics_document();
+                    } else {
+                        self.new_document();
+                    }
                     EditorAction::None
                 }
                 "b" => {
@@ -532,6 +582,25 @@ impl TextEditor {
                 PhysicalKey::Code(KeyCode::KeyM) => self.open_menu(MenuKind::Music),
                 PhysicalKey::Code(KeyCode::KeyH) => self.open_menu(MenuKind::Help),
                 _ => {}
+            }
+            return EditorAction::None;
+        }
+
+        if self.graphics_active() && !self.graphics_source_active() {
+            match key {
+                Key::Named(NamedKey::F10) => self.open_menu(MenuKind::File),
+                Key::Named(NamedKey::F2) => self.save_or_prompt(),
+                _ => {
+                    if self
+                        .graphics_tabs
+                        .get_mut(&self.document_id)
+                        .expect("active graphics tab")
+                        .handle_key(key, modifiers)
+                    {
+                        self.dirty = true;
+                        self.propagate_active_palette();
+                    }
+                }
             }
             return EditorAction::None;
         }
@@ -1135,7 +1204,9 @@ impl TextEditor {
         let closing_active = tab == self.active_tab;
         let active_id = self.document_id;
         self.sync_active_document();
-        self.tabs.remove(tab);
+        let removed = self.tabs.remove(tab);
+        self.graphics_tabs.remove(&removed.id);
+        self.graphics_source_views.remove(&removed.id);
         if self.tabs.is_empty() {
             let document = self.blank_document();
             self.tabs.push(document);
@@ -1279,6 +1350,19 @@ impl TextEditor {
             return EditorAction::None;
         }
 
+        if self.graphics_active() && !self.graphics_source_active() {
+            if self
+                .graphics_tabs
+                .get_mut(&self.document_id)
+                .expect("active graphics tab")
+                .handle_mouse_press(x, y)
+            {
+                self.dirty = true;
+                self.propagate_active_palette();
+            }
+            return EditorAction::None;
+        }
+
         if !(EDITOR_FIRST_ROW..ROWS - 1).contains(&cell_y) {
             return EditorAction::None;
         }
@@ -1328,9 +1412,23 @@ impl TextEditor {
             self.cursor = self.document_position(cell_x - EDITOR_CODE_START, cell_y);
             self.ensure_cursor_visible();
         }
+        if self.graphics_active()
+            && !self.graphics_source_active()
+            && self
+                .graphics_tabs
+                .get_mut(&self.document_id)
+                .expect("active graphics tab")
+                .handle_mouse_move(x, y)
+        {
+            self.dirty = true;
+            self.propagate_active_palette();
+        }
     }
 
     pub fn handle_mouse_release(&mut self) {
+        if let Some(graphics) = self.graphics_tabs.get_mut(&self.document_id) {
+            graphics.handle_mouse_release();
+        }
         self.mouse_selecting = false;
         if self.selection_anchor == Some(self.cursor) {
             self.selection_anchor = None;
@@ -1723,57 +1821,60 @@ impl TextEditor {
         foregrounds[..COLUMNS].fill(UI_WHITE_COLOR);
         background_gradients[..COLUMNS].fill(true);
 
-        for screen_y in 0..TEXT_ROWS {
-            let line_index = self.scroll_line + screen_y;
-            let Some(line) = self.lines.get(line_index) else { break };
-            let syntax = assembly_mode.then(|| assembly_syntax_colors(line, foreground));
-            for (screen_x, byte) in
-                line.bytes().skip(self.scroll_column).take(EDITOR_COLUMNS).enumerate()
-            {
-                let index = (screen_y + EDITOR_FIRST_ROW) * COLUMNS + EDITOR_CODE_START + screen_x;
-                let source_column = self.scroll_column + screen_x;
-                cells[index] = byte.to_ascii_uppercase();
-                if let Some(syntax) = &syntax
-                    && let Some(color) = syntax.get(source_column)
+        if !self.graphics_active() || self.graphics_source_active() {
+            for screen_y in 0..TEXT_ROWS {
+                let line_index = self.scroll_line + screen_y;
+                let Some(line) = self.lines.get(line_index) else { break };
+                let syntax = assembly_mode.then(|| assembly_syntax_colors(line, foreground));
+                for (screen_x, byte) in
+                    line.bytes().skip(self.scroll_column).take(EDITOR_COLUMNS).enumerate()
                 {
-                    foregrounds[index] = *color;
+                    let index =
+                        (screen_y + EDITOR_FIRST_ROW) * COLUMNS + EDITOR_CODE_START + screen_x;
+                    let source_column = self.scroll_column + screen_x;
+                    cells[index] = byte.to_ascii_uppercase();
+                    if let Some(syntax) = &syntax
+                        && let Some(color) = syntax.get(source_column)
+                    {
+                        foregrounds[index] = *color;
+                    }
+                    if self.line_has_error(line_index) {
+                        foregrounds[index] = ASM_ERROR_COLOR;
+                    }
+                    let position = Position { line: line_index, column: source_column };
+                    inverse[index] = self.position_selected(position);
                 }
-                if self.line_has_error(line_index) {
-                    foregrounds[index] = ASM_ERROR_COLOR;
-                }
-                let position = Position { line: line_index, column: source_column };
-                inverse[index] = self.position_selected(position);
-            }
-            let row = screen_y + EDITOR_FIRST_ROW;
-            let breakpoint = self.line_has_breakpoint(line_index);
-            let executing = self.debug_location.as_ref().is_some_and(|(source, line)| {
-                *line == line_index
-                    && self
-                        .filename
-                        .as_deref()
-                        .is_some_and(|filename| filename.eq_ignore_ascii_case(source))
-            });
-            if breakpoint {
-                put_cell(&mut cells, EDITOR_START, row, b'@');
-                foregrounds[row * COLUMNS + EDITOR_START] = UI_WHITE_COLOR;
-            }
-            if executing {
-                put_cell(&mut cells, EDITOR_START + 1, row, SYMBOL_ARROW_RIGHT);
-                foregrounds[row * COLUMNS + EDITOR_START + 1] = UI_WHITE_COLOR;
-            }
-            if executing || breakpoint {
-                let start = row * COLUMNS + EDITOR_START;
-                let end = row * COLUMNS + COLUMNS;
-                foregrounds[start..end].fill(UI_WHITE_COLOR);
-                backgrounds[start..end].fill(if executing {
-                    UI_DEBUG_CURRENT_BACKGROUND
-                } else {
-                    UI_BREAKPOINT_BACKGROUND
+                let row = screen_y + EDITOR_FIRST_ROW;
+                let breakpoint = self.line_has_breakpoint(line_index);
+                let executing = self.debug_location.as_ref().is_some_and(|(source, line)| {
+                    *line == line_index
+                        && self
+                            .filename
+                            .as_deref()
+                            .is_some_and(|filename| filename.eq_ignore_ascii_case(source))
                 });
-                background_gradients[start..end].fill(true);
-                inverse[start..end].fill(false);
-                if executing && breakpoint {
-                    backgrounds[start] = UI_BREAKPOINT_BACKGROUND;
+                if breakpoint {
+                    put_cell(&mut cells, EDITOR_START, row, b'@');
+                    foregrounds[row * COLUMNS + EDITOR_START] = UI_WHITE_COLOR;
+                }
+                if executing {
+                    put_cell(&mut cells, EDITOR_START + 1, row, SYMBOL_ARROW_RIGHT);
+                    foregrounds[row * COLUMNS + EDITOR_START + 1] = UI_WHITE_COLOR;
+                }
+                if executing || breakpoint {
+                    let start = row * COLUMNS + EDITOR_START;
+                    let end = row * COLUMNS + COLUMNS;
+                    foregrounds[start..end].fill(UI_WHITE_COLOR);
+                    backgrounds[start..end].fill(if executing {
+                        UI_DEBUG_CURRENT_BACKGROUND
+                    } else {
+                        UI_BREAKPOINT_BACKGROUND
+                    });
+                    background_gradients[start..end].fill(true);
+                    inverse[start..end].fill(false);
+                    if executing && breakpoint {
+                        backgrounds[start] = UI_BREAKPOINT_BACKGROUND;
+                    }
                 }
             }
         }
@@ -1790,6 +1891,9 @@ impl TextEditor {
             })
             .or_else(|| self.build_message.as_ref().map(|message| format!(" {message}")))
             .unwrap_or_else(|| {
+                if self.graphics_active() && !self.graphics_source_active() {
+                    return self.graphics_tabs[&self.document_id].status();
+                }
                 format!(
                     " {name}{dirty}  LN {} COL {}",
                     self.cursor.line + 1,
@@ -1831,6 +1935,36 @@ impl TextEditor {
             CellStyle { foreground, background },
         );
 
+        if self.graphics_active() && !self.graphics_source_active() {
+            self.graphics_tabs[&self.document_id].render(video);
+            if !matches!(self.overlay, Overlay::None) {
+                let mut mask_cells = [u8::MAX; COLUMNS * ROWS];
+                let mut mask_foregrounds = [u8::MAX; COLUMNS * ROWS];
+                let mut mask_backgrounds = [u8::MAX; COLUMNS * ROWS];
+                let mut mask_inverse = [true; COLUMNS * ROWS];
+                self.render_overlay(
+                    &mut mask_cells,
+                    &mut mask_foregrounds,
+                    &mut mask_backgrounds,
+                    &mut mask_inverse,
+                    CellStyle { foreground: UI_WHITE_COLOR, background },
+                );
+                render_masked_cells(
+                    video,
+                    &cells,
+                    &foregrounds,
+                    &backgrounds,
+                    &inverse,
+                    &background_gradients,
+                    &mask_cells,
+                    &mask_foregrounds,
+                    &mask_backgrounds,
+                    &mask_inverse,
+                    CellStyle { foreground, background },
+                );
+            }
+        }
+
         if let Overlay::About { frame } = &self.overlay {
             draw_about_logo(video, *frame);
         }
@@ -1838,6 +1972,7 @@ impl TextEditor {
         if cursor_visible
             && !self.project_focused
             && matches!(self.overlay, Overlay::None)
+            && (!self.graphics_active() || self.graphics_source_active())
             && let Some(screen_line) = self.cursor.line.checked_sub(self.scroll_line)
             && screen_line < TEXT_ROWS
             && let Some(screen_column) = self.cursor.column.checked_sub(self.scroll_column)
@@ -2085,14 +2220,43 @@ impl TextEditor {
     }
 
     fn activate_menu(&mut self, menu: MenuKind, selected: usize) -> EditorAction {
+        if menu == MenuKind::Edit && self.graphics_active() && !self.graphics_source_active() {
+            match selected {
+                0 => {
+                    if self.graphics_tabs.get_mut(&self.document_id).unwrap().undo() {
+                        self.dirty = true;
+                        self.propagate_active_palette();
+                    }
+                }
+                2 => {
+                    let graphics = self.graphics_tabs.get_mut(&self.document_id).unwrap();
+                    graphics.copy();
+                    if graphics.handle_key(&Key::Named(NamedKey::Delete), ModifiersState::empty()) {
+                        self.dirty = true;
+                        self.propagate_active_palette();
+                    }
+                }
+                3 => self.graphics_tabs.get_mut(&self.document_id).unwrap().copy(),
+                4 => {
+                    if self.graphics_tabs.get_mut(&self.document_id).unwrap().paste() {
+                        self.dirty = true;
+                        self.propagate_active_palette();
+                    }
+                }
+                _ => {}
+            }
+            return EditorAction::None;
+        }
         match (menu, selected) {
             (MenuKind::File, 0) => self.new_document(),
-            (MenuKind::File, 1) => self.open_dialog(DialogKind::Open),
-            (MenuKind::File, 3) => self.save_or_prompt(),
-            (MenuKind::File, 4) => self.open_dialog(DialogKind::SaveAs),
-            (MenuKind::File, 5) => self.save_all(),
-            (MenuKind::File, 7) => self.request_close_tab(self.active_tab),
-            (MenuKind::File, 9) => {
+            (MenuKind::File, 1) => self.new_graphics_document(),
+            (MenuKind::File, 2) => self.new_palette_document(),
+            (MenuKind::File, 3) => self.open_dialog(DialogKind::Open),
+            (MenuKind::File, 5) => self.save_or_prompt(),
+            (MenuKind::File, 6) => self.open_dialog(DialogKind::SaveAs),
+            (MenuKind::File, 7) => self.save_all(),
+            (MenuKind::File, 9) => self.request_close_tab(self.active_tab),
+            (MenuKind::File, 11) => {
                 if self.any_dirty_tabs() {
                     self.show_build_message(
                         "UNSAVED TABS",
@@ -2530,12 +2694,32 @@ impl TextEditor {
     fn save_named_tabs(&mut self) -> Result<(), String> {
         self.sync_active_document();
         let mut failure = None;
-        for document in &mut self.tabs {
-            let Some(filename) = document.filename.clone().filter(|_| document.dirty) else {
+        for index in 0..self.tabs.len() {
+            let document_id = self.tabs[index].id;
+            let Some(filename) =
+                self.tabs[index].filename.clone().filter(|_| self.tabs[index].dirty)
+            else {
                 continue;
             };
-            let mut lines = document.lines.clone();
-            if assembly_filename(&filename) {
+            let mut lines = self.tabs[index].lines.clone();
+            if self.graphics_tabs.contains_key(&document_id) {
+                if self.graphics_source_views.contains(&document_id) {
+                    match self.parse_graphics_asset(&filename, &lines.join("\n")) {
+                        Ok(graphics) => {
+                            self.graphics_tabs.insert(document_id, graphics);
+                        }
+                        Err(error) => {
+                            failure = Some(format!("{filename}: {error}"));
+                            break;
+                        }
+                    }
+                }
+                if let Err(error) = self.save_graphics_palette(document_id, &filename) {
+                    failure = Some(format!("{filename}: {error}"));
+                    break;
+                }
+                lines = normalized_lines(&self.graphics_tabs[&document_id].serialize(&filename));
+            } else if assembly_filename(&filename) {
                 format_assembly_lines(&mut lines);
             }
             let save_result = self.filesystem.borrow_mut().write_text(&filename, &lines.join("\n"));
@@ -2543,6 +2727,7 @@ impl TextEditor {
                 failure = Some(format!("{filename}: {error}"));
                 break;
             }
+            let document = &mut self.tabs[index];
             document.lines = lines;
             document.cursor.line = document.cursor.line.min(document.lines.len() - 1);
             document.cursor.column =
@@ -2561,8 +2746,16 @@ impl TextEditor {
         }
         self.sync_active_document();
         let Some(filename) = self.tabs[tab].filename.clone() else { return Ok(false) };
+        let document_id = self.tabs[tab].id;
         let mut lines = self.tabs[tab].lines.clone();
-        if assembly_filename(&filename) {
+        if self.graphics_tabs.contains_key(&document_id) {
+            if self.graphics_source_views.contains(&document_id) {
+                let graphics = self.parse_graphics_asset(&filename, &lines.join("\n"))?;
+                self.graphics_tabs.insert(document_id, graphics);
+            }
+            self.save_graphics_palette(document_id, &filename)?;
+            lines = normalized_lines(&self.graphics_tabs[&document_id].serialize(&filename));
+        } else if assembly_filename(&filename) {
             format_assembly_lines(&mut lines);
         }
         self.filesystem.borrow_mut().write_text(&filename, &lines.join("\n"))?;
@@ -2766,6 +2959,32 @@ impl TextEditor {
         }) {
             return Err("FILE IS ALREADY OPEN".to_owned());
         }
+        if self.graphics_active() {
+            let palette_document = self.graphics_tabs[&self.document_id].is_palette_document();
+            if palette_document && !palette_filename(filename) {
+                return Err("PALETTE DOCUMENTS REQUIRE A .PAL NAME".to_owned());
+            }
+            if !palette_document && !graphics_filename(filename) {
+                return Err("GRAPHICS DOCUMENTS REQUIRE A .GFX NAME".to_owned());
+            }
+            if self.graphics_source_active() {
+                let parsed = self.parse_graphics_asset(filename, &self.lines.join("\n"))?;
+                self.graphics_tabs.insert(self.document_id, parsed);
+            }
+            self.save_graphics_palette(self.document_id, filename)?;
+            let text = self.graphics_tabs[&self.document_id].serialize(filename);
+            self.filesystem.borrow_mut().write_text(filename, &text)?;
+            self.lines = normalized_lines(&text);
+            self.filename = Some(filename.to_ascii_lowercase());
+            self.dirty = false;
+            self.propagate_active_palette();
+            self.sync_active_document();
+            self.refresh_project_browser();
+            if self.close_after_save.take() == Some(self.document_id) {
+                self.close_tab(self.active_tab);
+            }
+            return Ok(());
+        }
         let mut lines = self.lines.clone();
         if assembly_filename(filename) {
             format_assembly_lines(&mut lines);
@@ -2797,6 +3016,9 @@ impl TextEditor {
             return Ok(());
         }
         let text = self.filesystem.borrow().read_text(filename)?;
+        let graphics = graphics_asset_filename(filename)
+            .then(|| self.parse_graphics_asset(filename, &text))
+            .transpose()?;
         let mut lines = text
             .replace("\r\n", "\n")
             .replace('\r', "\n")
@@ -2819,7 +3041,12 @@ impl TextEditor {
             self.undo.clear();
             self.edit_run = None;
             self.dirty = false;
+            if let Some(graphics) = graphics {
+                self.graphics_tabs.insert(self.document_id, graphics);
+            }
         } else if self.active_tab_is_disposable() {
+            self.graphics_tabs.remove(&self.document_id);
+            self.graphics_source_views.remove(&self.document_id);
             let document = DocumentState {
                 id: self.document_id,
                 lines,
@@ -2833,6 +3060,9 @@ impl TextEditor {
             };
             self.tabs[self.active_tab] = document.clone();
             self.restore_document(document);
+            if let Some(graphics) = graphics {
+                self.graphics_tabs.insert(self.document_id, graphics);
+            }
         } else {
             self.sync_active_document();
             let id = self.next_document_id;
@@ -2852,6 +3082,9 @@ impl TextEditor {
             self.active_tab = self.tabs.len() - 1;
             self.restore_document(document);
             self.ensure_active_tab_visible();
+            if let Some(graphics) = graphics {
+                self.graphics_tabs.insert(self.document_id, graphics);
+            }
         }
         self.invalidate_build();
         Ok(())
@@ -2865,6 +3098,57 @@ impl TextEditor {
         self.restore_document(document);
         self.ensure_active_tab_visible();
         self.invalidate_build();
+    }
+
+    fn new_graphics_document(&mut self) {
+        self.sync_active_document();
+        let mut document = self.blank_document();
+        let palette = match self.ensure_default_palette() {
+            Ok(palette) => palette,
+            Err(error) => {
+                self.show_build_message("PALETTE ERROR", &[error]);
+                return;
+            }
+        };
+        let mut graphics = GraphicsEditor::with_shared_palette(DEFAULT_PALETTE_FILE);
+        let _ = graphics.replace_palette(palette.palette());
+        document.lines = normalized_lines(&graphics.serialize("UNTITLED.GFX"));
+        self.graphics_tabs.insert(document.id, graphics);
+        self.tabs.push(document.clone());
+        self.active_tab = self.tabs.len() - 1;
+        self.restore_document(document);
+        self.ensure_active_tab_visible();
+        self.invalidate_build();
+    }
+
+    fn new_palette_document(&mut self) {
+        if let Err(error) =
+            self.ensure_default_palette().and_then(|_| self.load(DEFAULT_PALETTE_FILE))
+        {
+            self.show_build_message("PALETTE ERROR", &[error]);
+        } else {
+            self.refresh_project_browser();
+        }
+    }
+
+    fn ensure_default_palette(&mut self) -> Result<GraphicsEditor, String> {
+        let exists = self.filesystem.borrow().list(None)?.iter().any(|entry| {
+            !entry.is_directory && entry.name.eq_ignore_ascii_case(DEFAULT_PALETTE_FILE)
+        });
+        if exists {
+            let source = self.filesystem.borrow().read_text(DEFAULT_PALETTE_FILE)?;
+            let palette = GraphicsEditor::parse(&source)?;
+            if !palette.is_palette_document() {
+                return Err(format!("{DEFAULT_PALETTE_FILE} IS NOT A PALETTE RESOURCE"));
+            }
+            return Ok(palette);
+        }
+
+        let palette = GraphicsEditor::palette_document();
+        let source = palette.serialize(DEFAULT_PALETTE_FILE);
+        self.filesystem.borrow_mut().write_text(DEFAULT_PALETTE_FILE, &source)?;
+        self.refresh_project_browser();
+        Ok(palette)
     }
 
     fn record_undo(&mut self) {
@@ -3128,6 +3412,151 @@ impl TextEditor {
     fn assembly_mode(&self) -> bool {
         self.filename.as_deref().is_some_and(assembly_filename)
     }
+
+    fn graphics_active(&self) -> bool {
+        self.graphics_tabs.contains_key(&self.document_id)
+    }
+
+    fn graphics_source_active(&self) -> bool {
+        self.graphics_source_views.contains(&self.document_id)
+    }
+
+    fn toggle_graphics_source_view(&mut self) {
+        if self.graphics_source_views.remove(&self.document_id) {
+            let filename = self.filename.as_deref().unwrap_or("UNTITLED.GFX");
+            match self.parse_graphics_asset(filename, &self.lines.join("\n")) {
+                Ok(graphics) => {
+                    self.graphics_tabs.insert(self.document_id, graphics);
+                    self.selection_anchor = None;
+                    self.propagate_active_palette();
+                }
+                Err(error) => {
+                    self.graphics_source_views.insert(self.document_id);
+                    self.show_build_message("GFX SOURCE ERROR", &[error]);
+                }
+            }
+        } else if let Some(graphics) = self.graphics_tabs.get(&self.document_id) {
+            let filename = self.filename.as_deref().unwrap_or("UNTITLED.GFX");
+            self.lines = normalized_lines(&graphics.serialize(filename));
+            self.cursor = Position::default();
+            self.selection_anchor = None;
+            self.scroll_line = 0;
+            self.scroll_column = 0;
+            self.graphics_source_views.insert(self.document_id);
+        }
+    }
+
+    fn parse_graphics_asset(&self, filename: &str, source: &str) -> Result<GraphicsEditor, String> {
+        let mut graphics = GraphicsEditor::parse(source)?;
+        let Some(reference) = graphics.palette_reference() else { return Ok(graphics) };
+        let palette_path = sibling_asset_path(filename, reference);
+        let palette_source = match self.filesystem.borrow().read_text(&palette_path) {
+            Ok(source) => source,
+            Err(error) => {
+                let fallback = self.tabs.iter().find_map(|document| {
+                    let open = self.graphics_tabs.get(&document.id)?;
+                    let open_path = if open.is_palette_document() {
+                        document.filename.clone()
+                    } else {
+                        open.palette_reference().map(|open_reference| {
+                            sibling_asset_path(
+                                document.filename.as_deref().unwrap_or(""),
+                                open_reference,
+                            )
+                        })
+                    }?;
+                    open_path.eq_ignore_ascii_case(&palette_path).then(|| {
+                        let mut palette = GraphicsEditor::palette_document();
+                        let _ = palette.replace_palette(open.palette());
+                        palette.serialize(&palette_path)
+                    })
+                });
+                fallback.ok_or_else(|| format!("PALETTE {palette_path}: {error}"))?
+            }
+        };
+        let palette = GraphicsEditor::parse(&palette_source)
+            .map_err(|error| format!("PALETTE {palette_path}: {error}"))?;
+        if !palette.is_palette_document() {
+            return Err(format!("{palette_path} IS NOT A PALETTE RESOURCE"));
+        }
+        graphics.replace_palette(palette.palette())?;
+        Ok(graphics)
+    }
+
+    fn save_graphics_palette(&mut self, document_id: u32, filename: &str) -> Result<(), String> {
+        let Some(graphics) = self.graphics_tabs.get(&document_id) else { return Ok(()) };
+        let Some(reference) = graphics.palette_reference() else { return Ok(()) };
+        let palette_path = sibling_asset_path(filename, reference);
+        let mut palette = GraphicsEditor::palette_document();
+        palette.replace_palette(graphics.palette())?;
+        let source = palette.serialize(&palette_path);
+        self.filesystem.borrow_mut().write_text(&palette_path, &source)?;
+        Ok(())
+    }
+
+    fn propagate_active_palette(&mut self) {
+        let Some(active_graphics) = self.graphics_tabs.get(&self.document_id) else { return };
+        let active_filename = self.filename.as_deref().unwrap_or("");
+        let active_path = if active_graphics.is_palette_document() {
+            (!active_filename.is_empty()).then(|| active_filename.to_owned())
+        } else {
+            active_graphics
+                .palette_reference()
+                .map(|reference| sibling_asset_path(active_filename, reference))
+        };
+        let Some(active_path) = active_path else { return };
+        let palette = active_graphics.palette().to_vec();
+        for index in 0..self.tabs.len() {
+            let document_id = self.tabs[index].id;
+            if document_id == self.document_id {
+                continue;
+            }
+            let filename = self.tabs[index].filename.clone();
+            let Some(graphics) = self.graphics_tabs.get_mut(&document_id) else { continue };
+            let palette_document = graphics.is_palette_document();
+            let path = if graphics.is_palette_document() {
+                filename
+            } else {
+                graphics.palette_reference().map(|reference| {
+                    sibling_asset_path(
+                        self.tabs[index].filename.as_deref().unwrap_or(""),
+                        reference,
+                    )
+                })
+            };
+            if path.is_some_and(|path| path.eq_ignore_ascii_case(&active_path)) {
+                let _ = graphics.replace_palette(&palette);
+                if palette_document {
+                    self.tabs[index].dirty = true;
+                }
+            }
+        }
+    }
+}
+
+fn graphics_filename(filename: &str) -> bool {
+    filename.rsplit_once('.').is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("gfx"))
+}
+
+fn palette_filename(filename: &str) -> bool {
+    filename.rsplit_once('.').is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("pal"))
+}
+
+fn graphics_asset_filename(filename: &str) -> bool {
+    graphics_filename(filename) || palette_filename(filename)
+}
+
+fn sibling_asset_path(filename: &str, reference: &str) -> String {
+    if reference.starts_with(['/', '\\']) {
+        return reference.trim_start_matches(['/', '\\']).to_ascii_lowercase();
+    }
+    let filename = filename.replace('\\', "/");
+    match filename.rsplit_once('/') {
+        Some((directory, _)) if !directory.is_empty() => {
+            format!("{directory}/{}", reference.to_ascii_lowercase())
+        }
+        _ => reference.to_ascii_lowercase(),
+    }
 }
 
 fn collect_project_entries(
@@ -3176,9 +3605,20 @@ fn collect_project_files(
 
 fn menu_items(menu: MenuKind) -> &'static [&'static str] {
     match menu {
-        MenuKind::File => {
-            &["NEW", "OPEN...", "", "SAVE", "SAVE AS...", "SAVE ALL", "", "CLOSE TAB", "", "EXIT"]
-        }
+        MenuKind::File => &[
+            "NEW TEXT",
+            "NEW GRAPHICS",
+            "NEW PALETTE",
+            "OPEN...",
+            "",
+            "SAVE",
+            "SAVE AS...",
+            "SAVE ALL",
+            "",
+            "CLOSE TAB",
+            "",
+            "EXIT",
+        ],
         MenuKind::Edit => &[
             "UNDO",
             "",
@@ -3251,7 +3691,9 @@ const fn menu_bar_hit(column: usize) -> Option<MenuKind> {
 fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
     match menu {
         MenuKind::File => &[
-            "NEW       N",
+            "NEW TEXT  N",
+            "NEW GFX   G",
+            "NEW PAL   P",
             "OPEN      O",
             "",
             "SAVE      S",
@@ -3310,7 +3752,17 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
 fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
     let key = key.to_ascii_lowercase();
     let hotkeys: &[(usize, &str)] = match menu {
-        MenuKind::File => &[(0, "n"), (1, "o"), (3, "s"), (4, "a"), (5, "l"), (7, "w"), (9, "x")],
+        MenuKind::File => &[
+            (0, "n"),
+            (1, "g"),
+            (2, "p"),
+            (3, "o"),
+            (5, "s"),
+            (6, "a"),
+            (7, "l"),
+            (9, "w"),
+            (11, "x"),
+        ],
         MenuKind::Edit => &[
             (0, "u"),
             (2, "t"),
@@ -3510,18 +3962,103 @@ fn render_cells(
                 }
             }
             let glyph = CHARACTER_ROM[(cells[index] as usize).min(CHARACTER_ROM.len() - 1)];
+            let frame = is_frame_character(cells[index]);
             for (glyph_y, bits) in glyph.into_iter().enumerate() {
                 for glyph_x in 0..GLYPH_WIDTH {
                     if bits & (0x80 >> glyph_x) != 0 {
                         let x = cell_x * GLYPH_WIDTH + glyph_x;
                         let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                        pixels[y * EDITOR_DISPLAY_WIDTH + x] =
-                            gradient_color(&gradient, cell_foreground, glyph_y);
+                        pixels[y * EDITOR_DISPLAY_WIDTH + x] = if frame {
+                            cell_foreground
+                        } else {
+                            gradient_color(&gradient, cell_foreground, glyph_y)
+                        };
                     }
                 }
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_masked_cells(
+    video: &mut Video,
+    cells: &[u8],
+    foregrounds: &[u8],
+    backgrounds: &[u8],
+    inverse: &[bool],
+    background_gradients: &[bool],
+    mask_cells: &[u8],
+    mask_foregrounds: &[u8],
+    mask_backgrounds: &[u8],
+    mask_inverse: &[bool],
+    style: CellStyle,
+) {
+    let CellStyle { foreground, background } = style;
+    let gradient = configure_text_gradient(
+        video,
+        foregrounds
+            .iter()
+            .copied()
+            .chain(backgrounds.iter().copied())
+            .chain([foreground, background]),
+    );
+    let pixels = video.pixels_mut();
+    for cell_y in 0..ROWS {
+        for cell_x in 0..COLUMNS {
+            let index = cell_y * COLUMNS + cell_x;
+            let covered = mask_cells[index] != u8::MAX
+                || mask_foregrounds[index] != u8::MAX
+                || mask_backgrounds[index] != u8::MAX
+                || !mask_inverse[index];
+            if !covered {
+                continue;
+            }
+            let (cell_foreground, cell_background) = if inverse[index] {
+                (backgrounds[index], foregrounds[index])
+            } else {
+                (foregrounds[index], backgrounds[index])
+            };
+            for glyph_y in 0..GLYPH_HEIGHT {
+                let y = cell_y * GLYPH_HEIGHT + glyph_y;
+                let color = if background_gradients[index] {
+                    gradient_color(&gradient, cell_background, glyph_y)
+                } else {
+                    cell_background
+                };
+                pixels[y * EDITOR_DISPLAY_WIDTH + cell_x * GLYPH_WIDTH
+                    ..y * EDITOR_DISPLAY_WIDTH + (cell_x + 1) * GLYPH_WIDTH]
+                    .fill(color);
+            }
+            let glyph = CHARACTER_ROM[(cells[index] as usize).min(CHARACTER_ROM.len() - 1)];
+            let frame = is_frame_character(cells[index]);
+            for (glyph_y, bits) in glyph.into_iter().enumerate() {
+                for glyph_x in 0..GLYPH_WIDTH {
+                    if bits & (0x80 >> glyph_x) != 0 {
+                        let x = cell_x * GLYPH_WIDTH + glyph_x;
+                        let y = cell_y * GLYPH_HEIGHT + glyph_y;
+                        pixels[y * EDITOR_DISPLAY_WIDTH + x] = if frame {
+                            cell_foreground
+                        } else {
+                            gradient_color(&gradient, cell_foreground, glyph_y)
+                        };
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn is_frame_character(character: u8) -> bool {
+    matches!(
+        character,
+        BOX_HORIZONTAL
+            | BOX_VERTICAL
+            | BOX_TOP_LEFT
+            | BOX_TOP_RIGHT
+            | BOX_BOTTOM_LEFT
+            | BOX_BOTTOM_RIGHT
+    )
 }
 
 fn draw_about_logo(video: &mut Video, frame: u16) {
@@ -4161,11 +4698,11 @@ mod tests {
         editor.open_menu(MenuKind::File);
 
         editor.handle_overlay_key(&Key::Named(NamedKey::ArrowUp), ModifiersState::empty());
-        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 9 }));
+        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 11 }));
         editor.handle_overlay_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty());
         assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 0 }));
 
-        editor.handle_mouse_press(4 * GLYPH_WIDTH, 4 * GLYPH_HEIGHT, false);
+        editor.handle_mouse_press(4 * GLYPH_WIDTH, 6 * GLYPH_HEIGHT, false);
         assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, .. }));
 
         let mut cells = [b' '; COLUMNS * ROWS];
@@ -4180,7 +4717,7 @@ mod tests {
             CellStyle { foreground: UI_WHITE_COLOR, background: 0 },
         );
         assert!(
-            cells[4 * COLUMNS + 1..4 * COLUMNS + 15].iter().all(|cell| *cell == BOX_HORIZONTAL)
+            cells[6 * COLUMNS + 1..6 * COLUMNS + 15].iter().all(|cell| *cell == BOX_HORIZONTAL)
         );
     }
 
@@ -5025,11 +5562,24 @@ mod tests {
             .unwrap();
         let border_pixel =
             video.pixels()[(GLYPH_HEIGHT + border.1) * EDITOR_DISPLAY_WIDTH + border.0];
-        let brightness = 255 * (14 - border.1 as u16) / 14;
-        assert_eq!(
-            video.palette()[border_pixel as usize][..3],
-            [brightness as u8, brightness as u8, brightness as u8]
-        );
+        assert_eq!(border_pixel, UI_WHITE_COLOR);
+        assert_eq!(video.palette()[border_pixel as usize][..3], [255, 255, 255]);
+    }
+
+    #[test]
+    fn project_separator_and_frame_glyphs_use_clean_solid_color() {
+        let editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut video, false);
+
+        let separator_x = PROJECT_WIDTH * GLYPH_WIDTH + 3;
+        for y in GLYPH_HEIGHT..(ROWS - 1) * GLYPH_HEIGHT {
+            assert_eq!(
+                video.pixels()[y * EDITOR_DISPLAY_WIDTH + separator_x],
+                UI_WHITE_COLOR,
+                "separator changed color at scanline {y}"
+            );
+        }
     }
 
     #[test]
@@ -5093,6 +5643,133 @@ mod tests {
         editor.save_as("defs.inc").unwrap();
         assert!(editor.assembly_mode());
         assert_eq!(filesystem.borrow().read_text("DEFS.INC").unwrap(), editor.lines.join("\n"));
+    }
+
+    #[test]
+    fn graphics_assets_live_in_tabs_save_as_ascii_and_toggle_source_view() {
+        let filesystem = shared_filesystem();
+        let mut editor = TextEditor::new(filesystem.clone(), shared_ui_colors(), None);
+        editor.new_graphics_document();
+        assert!(editor.graphics_active());
+        assert_eq!(editor.tabs.len(), 2);
+        assert!(filesystem.borrow().read_text("game.pal").unwrap().contains(";@FANTICON-PAL 1"));
+        editor.save_as("world.gfx").unwrap();
+
+        let source = filesystem.borrow().read_text("world.gfx").unwrap();
+        assert!(source.is_ascii());
+        assert!(source.contains(";@FANTICON-GFX 2"));
+        assert!(source.contains(";@PALETTE-FILE GAME.PAL"));
+        assert!(source.contains("WORLD_CHR"));
+        assert_eq!(fanticon::assembler::assemble(&source).unwrap().bytes.len(), 10_192);
+        let palette = filesystem.borrow().read_text("game.pal").unwrap();
+        assert!(palette.contains(";@FANTICON-PAL 1"));
+        assert_eq!(fanticon::assembler::assemble(&palette).unwrap().bytes.len(), 256);
+
+        editor.toggle_graphics_source_view();
+        assert!(editor.graphics_source_active());
+        assert_eq!(editor.lines[0], ";@FANTICON-GFX 2");
+        editor.toggle_graphics_source_view();
+        assert!(!editor.graphics_source_active());
+
+        editor.new_document();
+        editor.load("world.gfx").unwrap();
+        assert!(editor.graphics_active());
+        assert_eq!(editor.filename.as_deref(), Some("world.gfx"));
+    }
+
+    #[test]
+    fn menus_composite_over_graphics_without_hiding_the_workspace() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.new_graphics_document();
+        let pane_left = EDITOR_START * GLYPH_WIDTH;
+        let pane_top = 3 * GLYPH_HEIGHT;
+        editor.handle_mouse_press(pane_left + 12 + 5 * 24, pane_top + 319, false);
+        editor.handle_mouse_press(pane_left + 13 + 3 * 28, pane_top + 39 + 3 * 28, false);
+        editor.handle_mouse_release();
+
+        let mut unobscured = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut unobscured, false);
+        let pattern_sample = (pane_top + 38 + 3) * EDITOR_DISPLAY_WIDTH + pane_left + 252 + 3;
+        assert_ne!(unobscured.pixels()[pattern_sample], 0);
+
+        editor.open_menu(MenuKind::Debug);
+        let mut with_menu = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut with_menu, false);
+
+        assert_eq!(with_menu.pixels()[pattern_sample], unobscured.pixels()[pattern_sample]);
+        assert!((24..120).any(|y| {
+            (pane_left..368).any(|x| {
+                with_menu.pixels()[y * EDITOR_DISPLAY_WIDTH + x]
+                    != unobscured.pixels()[y * EDITOR_DISPLAY_WIDTH + x]
+            })
+        }));
+    }
+
+    #[test]
+    fn new_palette_immediately_creates_and_opens_game_pal() {
+        let filesystem = shared_filesystem();
+        let mut editor = TextEditor::new(filesystem.clone(), shared_ui_colors(), None);
+
+        editor.new_palette_document();
+
+        assert_eq!(editor.filename.as_deref(), Some("game.pal"));
+        assert!(editor.graphics_tabs[&editor.document_id].is_palette_document());
+        assert!(!editor.dirty);
+        assert!(filesystem.borrow().read_text("GAME.PAL").unwrap().starts_with(";@FANTICON-PAL 1"));
+
+        let tab_count = editor.tabs.len();
+        editor.new_palette_document();
+        assert_eq!(editor.tabs.len(), tab_count);
+        assert_eq!(editor.filename.as_deref(), Some("game.pal"));
+    }
+
+    #[test]
+    fn new_graphics_refuses_to_replace_an_invalid_existing_game_pal() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("game.pal", "NOT A PALETTE").unwrap();
+        let mut editor = TextEditor::new(filesystem.clone(), shared_ui_colors(), None);
+
+        editor.new_graphics_document();
+
+        assert_eq!(editor.tabs.len(), 1);
+        assert_eq!(filesystem.borrow().read_text("game.pal").unwrap(), "NOT A PALETTE");
+        assert!(matches!(editor.overlay, Overlay::Message { .. }));
+    }
+
+    #[test]
+    fn palette_resource_is_shared_by_multiple_graphics_documents() {
+        let filesystem = shared_filesystem();
+        let mut editor = TextEditor::new(filesystem.clone(), shared_ui_colors(), None);
+        editor.new_graphics_document();
+        editor.save_as("world.gfx").unwrap();
+        let world_source = filesystem.borrow().read_text("world.gfx").unwrap();
+        filesystem.borrow_mut().write_text("title.gfx", &world_source).unwrap();
+
+        editor.load("game.pal").unwrap();
+        assert!(editor.graphics_tabs[&editor.document_id].is_palette_document());
+        assert!(
+            editor
+                .graphics_tabs
+                .get_mut(&editor.document_id)
+                .unwrap()
+                .handle_key(&Key::Character("r".into()), ModifiersState::empty())
+        );
+        editor.propagate_active_palette();
+        let changed = editor.graphics_tabs[&editor.document_id].palette()[1];
+        assert_eq!(
+            editor
+                .graphics_tabs
+                .values()
+                .find(|graphics| { graphics.palette_reference() == Some("GAME.PAL") })
+                .unwrap()
+                .palette()[1],
+            changed
+        );
+        editor.dirty = true;
+        assert!(editor.save_tab(editor.active_tab).unwrap());
+
+        editor.load("title.gfx").unwrap();
+        assert_eq!(editor.graphics_tabs[&editor.document_id].palette()[1], changed);
     }
 
     #[test]

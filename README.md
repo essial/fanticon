@@ -29,6 +29,8 @@ The [audio programmer's reference](documentation/audio.md) defines the two pulse
 triangle, and noise voices, including exact waveforms, timing, and mixing.
 The [editor and command console](documentation/editor.md) describes application
 modes, the embedded character ROM, native commands, and future tool dispatch.
+The [graphics editor](documentation/graphics-editor.md) documents `.GFX` resident
+sets, shared `.PAL` resources, tile/map/sprite/bitmap tools, and direct VM loading.
 The [macro assembler](documentation/assembler.md) documents building raw `.BIN`
 files, supported syntax and directives, Merlin-style macros, and diagnostics.
 The [system architecture](documentation/system-architecture.md) defines the VM's

@@ -430,6 +430,19 @@ impl TextEditor {
             return EditorAction::None;
         }
 
+        if self.debug_active
+            && self.debug_snapshot.is_some()
+            && (modifiers.control_key() || modifiers.super_key())
+            && let Key::Character(text) = key
+            && let Some(digit) = text.chars().next().and_then(|character| character.to_digit(10))
+            && (1..=6).contains(&digit)
+        {
+            self.debug_view = DebugView::ALL[digit as usize - 1];
+            self.debug_selected = 0;
+            self.debug_memory_nibble = None;
+            return EditorAction::None;
+        }
+
         if (modifiers.control_key() || modifiers.super_key())
             && let Key::Character(text) = key
         {
@@ -1610,16 +1623,6 @@ impl TextEditor {
         key: &Key,
         modifiers: ModifiersState,
     ) -> Option<EditorAction> {
-        if (modifiers.control_key() || modifiers.super_key())
-            && let Key::Character(text) = key
-            && let Some(digit) = text.chars().next().and_then(|character| character.to_digit(10))
-            && (1..=6).contains(&digit)
-        {
-            self.debug_view = DebugView::ALL[digit as usize - 1];
-            self.debug_selected = 0;
-            self.debug_memory_nibble = None;
-            return Some(EditorAction::None);
-        }
         if matches!(key, Key::Named(NamedKey::Tab)) {
             let current = DebugView::ALL.iter().position(|view| *view == self.debug_view).unwrap();
             self.debug_view = DebugView::ALL[(current + 1) % DebugView::ALL.len()];

@@ -325,6 +325,9 @@ pub struct TextEditor {
     debug_location: Option<(String, usize)>,
     debug_symbols: BTreeMap<String, CartridgeSymbol>,
     debug_view: DebugView,
+    /// Whether the register/memory/video detail panel covers the editor. Stopping
+    /// at a breakpoint leaves this hidden so the caret stays in the source file.
+    debug_panel_visible: bool,
     debug_address: u16,
     debug_selected: usize,
     debug_video_page: usize,
@@ -388,6 +391,7 @@ impl TextEditor {
             debug_location: None,
             debug_symbols: BTreeMap::new(),
             debug_view: DebugView::State,
+            debug_panel_visible: false,
             debug_address: 0,
             debug_selected: 0,
             debug_video_page: 0,
@@ -430,6 +434,18 @@ impl TextEditor {
             return EditorAction::None;
         }
 
+        // Show or hide the debug detail panel over the editor.
+        if self.debug_active
+            && self.debug_snapshot.is_some()
+            && (modifiers.control_key() || modifiers.super_key())
+            && let Key::Character(text) = key
+            && text.eq_ignore_ascii_case("d")
+        {
+            self.debug_panel_visible = !self.debug_panel_visible;
+            return EditorAction::None;
+        }
+
+        // Selecting a view also reveals the panel when it is hidden.
         if self.debug_active
             && self.debug_snapshot.is_some()
             && (modifiers.control_key() || modifiers.super_key())
@@ -438,6 +454,7 @@ impl TextEditor {
             && (1..=6).contains(&digit)
         {
             self.debug_view = DebugView::ALL[digit as usize - 1];
+            self.debug_panel_visible = true;
             self.debug_selected = 0;
             self.debug_memory_nibble = None;
             return EditorAction::None;
@@ -675,11 +692,11 @@ impl TextEditor {
             });
         }
 
-        if self.debug_active
-            && self.debug_snapshot.is_some()
-            && let Some(action) = self.handle_debug_key(key, modifiers)
-        {
-            return action;
+        // The panel is modal: while it is on screen it owns the keyboard, so the
+        // source editor and project browser never see these keys. Stepping,
+        // continuing, and Ctrl/Cmd+D are handled above and still work.
+        if self.debug_paused() && self.debug_panel_visible {
+            return self.handle_debug_key(key).unwrap_or(EditorAction::None);
         }
 
         if matches!(key, Key::Named(NamedKey::F6)) {
@@ -887,6 +904,8 @@ impl TextEditor {
             self.cursor.line = location.line.saturating_sub(1).min(self.lines.len() - 1);
             self.cursor.column = 0;
             self.selection_anchor = None;
+            // Stopping belongs in the source: give the caret back to the editor.
+            self.project_focused = false;
             self.ensure_cursor_visible();
         }
         self.overlay = Overlay::None;
@@ -1094,7 +1113,7 @@ impl TextEditor {
     }
 
     fn replace_all(&mut self, query: &str, replacement: &str) -> usize {
-        if query.is_empty() {
+        if query.is_empty() || self.debug_read_only() {
             return 0;
         }
         let matches = line_matches(&self.lines, query, false);
@@ -1618,11 +1637,12 @@ impl TextEditor {
         EditorAction::None
     }
 
-    fn handle_debug_key(
-        &mut self,
-        key: &Key,
-        modifiers: ModifiersState,
-    ) -> Option<EditorAction> {
+    fn handle_debug_key(&mut self, key: &Key) -> Option<EditorAction> {
+        // Escape returns the keyboard to the source without leaving the session.
+        if matches!(key, Key::Named(NamedKey::Escape)) {
+            self.debug_panel_visible = false;
+            return Some(EditorAction::None);
+        }
         if matches!(key, Key::Named(NamedKey::Tab)) {
             let current = DebugView::ALL.iter().position(|view| *view == self.debug_view).unwrap();
             self.debug_view = DebugView::ALL[(current + 1) % DebugView::ALL.len()];
@@ -2050,6 +2070,9 @@ impl TextEditor {
         inverse: &mut [bool],
         style: CellStyle,
     ) {
+        if !self.debug_panel_visible {
+            return;
+        }
         let Some(snapshot) = &self.debug_snapshot else { return };
         let x = EDITOR_START;
         let y = 2;
@@ -2076,7 +2099,7 @@ impl TextEditor {
             cells,
             x + 2,
             y + height - 2,
-            "CTRL/CMD+1-6 VIEW  TAB NEXT  F5 CONTINUE  F10/F11 STEP",
+            "ESC/CTRL+D HIDE  1-6 VIEW  TAB NEXT  F5 CONTINUE  F10/F11 STEP",
             width - 4,
         );
 
@@ -2527,12 +2550,20 @@ impl TextEditor {
         let name = self.filename.as_deref().unwrap_or("UNTITLED.TXT");
         let dirty = if self.dirty { "*" } else { " " };
         let status = self
-            .current_diagnostic()
-            .map(|diagnostic| {
+            .debug_paused()
+            .then(|| {
                 format!(
-                    " {}:{}:{} {}",
-                    diagnostic.source, diagnostic.line, diagnostic.column, diagnostic.message
+                    " {name}  PAUSED - READ ONLY  LN {}  CTRL/CMD+D DETAILS  F5 CONTINUE",
+                    self.cursor.line + 1
                 )
+            })
+            .or_else(|| {
+                self.current_diagnostic().map(|diagnostic| {
+                    format!(
+                        " {}:{}:{} {}",
+                        diagnostic.source, diagnostic.line, diagnostic.column, diagnostic.message
+                    )
+                })
             })
             .or_else(|| self.build_message.as_ref().map(|message| format!(" {message}")))
             .unwrap_or_else(|| {
@@ -2991,6 +3022,9 @@ impl TextEditor {
             (MenuKind::Debug, 13) => {
                 self.source_breakpoints.clear();
                 return EditorAction::Debug(DebugCommand::ClearBreakpoints);
+            }
+            (MenuKind::Debug, 15) if self.debug_active && self.debug_snapshot.is_some() => {
+                self.debug_panel_visible = !self.debug_panel_visible;
             }
             (MenuKind::Music, 0) if self.music_status.is_some() => {
                 return EditorAction::Music(if self.music_status.as_ref().unwrap().paused {
@@ -3915,7 +3949,22 @@ impl TextEditor {
         }
     }
 
+    /// A debug session owns the source that produced the running cartridge: its
+    /// line numbers back the source map and every resolved breakpoint, so the
+    /// buffer stays read-only until the session stops.
+    fn debug_read_only(&self) -> bool {
+        self.debug_active
+    }
+
+    /// True only while the machine is stopped, with a snapshot to inspect.
+    fn debug_paused(&self) -> bool {
+        self.debug_active && self.debug_snapshot.is_some()
+    }
+
     fn undo(&mut self) {
+        if self.debug_read_only() {
+            return;
+        }
         if let Some(snapshot) = self.undo.pop() {
             self.invalidate_build();
             self.lines = snapshot.lines;
@@ -3928,7 +3977,7 @@ impl TextEditor {
     }
 
     fn insert_text(&mut self, text: &str) {
-        if text.is_empty() {
+        if text.is_empty() || self.debug_read_only() {
             return;
         }
         self.record_undo_for(EditRunKind::Insert);
@@ -3940,6 +3989,9 @@ impl TextEditor {
     }
 
     fn insert_newline(&mut self) {
+        if self.debug_read_only() {
+            return;
+        }
         self.record_undo();
         self.delete_selection_without_undo();
         if self.assembly_mode() && self.cursor.column == self.lines[self.cursor.line].len() {
@@ -3966,6 +4018,9 @@ impl TextEditor {
     }
 
     fn backspace(&mut self) {
+        if self.debug_read_only() {
+            return;
+        }
         if self.has_selection() {
             self.record_undo();
             self.delete_selection_without_undo();
@@ -3987,6 +4042,9 @@ impl TextEditor {
     }
 
     fn delete_forward(&mut self) {
+        if self.debug_read_only() {
+            return;
+        }
         if self.has_selection() {
             self.record_undo();
             self.delete_selection_without_undo();
@@ -4041,6 +4099,11 @@ impl TextEditor {
     }
 
     fn cut_selection(&mut self) {
+        if self.debug_read_only() {
+            // Still copy: reading the selection is harmless while paused.
+            self.copy_selection();
+            return;
+        }
         if let Some(text) = self.selected_text() {
             self.clipboard = text;
             self.record_undo();
@@ -4050,7 +4113,7 @@ impl TextEditor {
     }
 
     fn paste(&mut self) {
-        if self.clipboard.is_empty() {
+        if self.clipboard.is_empty() || self.debug_read_only() {
             return;
         }
         let clipboard = self.clipboard.clone();
@@ -4108,7 +4171,7 @@ impl TextEditor {
     }
 
     fn format_departed_line(&mut self, line: usize) {
-        if !self.assembly_mode() {
+        if !self.assembly_mode() || self.debug_read_only() {
             return;
         }
         let formatted = format_assembly_line(&self.lines[line]);
@@ -4445,6 +4508,8 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "RASTER BREAK",
             "",
             "CLEAR BREAKS",
+            "",
+            "DEBUG PANEL",
         ],
         MenuKind::Music => &["PLAY/PAUSE", "PREVIOUS", "NEXT", "LOOP", "", "STOP"],
         MenuKind::Help => &["ABOUT"],
@@ -4531,6 +4596,8 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "RASTER BREAK          A",
             "",
             "CLEAR BREAKS          C",
+            "",
+            "DEBUG PANEL  CTRL/CMD+D",
         ],
         MenuKind::Music => &[
             "PLAY/PAUSE          F7",
@@ -4574,7 +4641,7 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
         ],
         MenuKind::Build => &[(0, "b"), (1, "r"), (3, "n"), (4, "p")],
         MenuKind::Debug => {
-            &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c")]
+            &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c"), (15, "d")]
         }
         MenuKind::Music => &[(0, "p"), (1, "r"), (2, "n"), (3, "l"), (5, "s")],
         MenuKind::Help => &[(0, "a")],
@@ -6163,6 +6230,155 @@ mod tests {
             ),
             EditorAction::Debug(DebugCommand::Continue)
         );
+    }
+
+    #[test]
+    fn breakpoints_stop_in_the_source_editor_and_the_detail_panel_is_opt_in() {
+        use fanticon::{
+            cartridge::Cartridge, debugger::Debugger, machine::BANK_SIZE, system::FanticonMachine,
+        };
+
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("main.asm", "RESET NOP\n RTS").unwrap();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.debug_source_map = vec![CartridgeSourceMapEntry {
+            source: "main.asm".to_owned(),
+            line: 1,
+            address: 0xc100,
+            length: 1,
+            section: SymbolSection::Fixed,
+        }];
+        let mut fixed = [0xff; BANK_SIZE];
+        fixed[0x100] = 0xea;
+        fixed[0x3ffa..].copy_from_slice(&[0x00, 0xc1, 0x00, 0xc1, 0x00, 0xc1]);
+        let mut debugger = Debugger::new(FanticonMachine::new(
+            Cartridge::new("DEBUG", 1, 0, fixed, Vec::new()).unwrap(),
+            None,
+        ));
+        debugger.step_instruction();
+        editor.set_debug_snapshot(debugger.snapshot());
+
+        // Stopping lands in the source file with the caret on the executing line.
+        assert!(!editor.debug_panel_visible);
+        assert!(!editor.project_focused);
+        assert_eq!(editor.filename.as_deref(), Some("main.asm"));
+        assert_eq!(editor.debug_location, Some(("main.asm".to_owned(), 0)));
+        assert_eq!(editor.cursor.line, 0);
+
+        // The executing line keeps its blue highlight with the panel hidden.
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut video, false);
+        let row_colors = |column: usize, row: usize| {
+            (0..GLYPH_HEIGHT)
+                .flat_map(|glyph_y| {
+                    let start = (row * GLYPH_HEIGHT + glyph_y) * EDITOR_DISPLAY_WIDTH
+                        + column * GLYPH_WIDTH;
+                    &video.pixels()[start..start + GLYPH_WIDTH]
+                })
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            row_colors(EDITOR_START + 1, EDITOR_FIRST_ROW).contains(&UI_DEBUG_CURRENT_BACKGROUND)
+        );
+
+        // The source is read-only while paused: typing and deleting do nothing.
+        let original = editor.lines.clone();
+        editor.handle_key(
+            &Key::Character("X".into()),
+            PhysicalKey::Code(KeyCode::KeyX),
+            ModifiersState::empty(),
+        );
+        editor.handle_key(
+            &Key::Named(NamedKey::Tab),
+            PhysicalKey::Code(KeyCode::Tab),
+            ModifiersState::empty(),
+        );
+        editor.handle_key(
+            &Key::Named(NamedKey::Enter),
+            PhysicalKey::Code(KeyCode::Enter),
+            ModifiersState::empty(),
+        );
+        editor.handle_key(
+            &Key::Named(NamedKey::Delete),
+            PhysicalKey::Code(KeyCode::Delete),
+            ModifiersState::empty(),
+        );
+        editor.handle_key(
+            &Key::Named(NamedKey::Backspace),
+            PhysicalKey::Code(KeyCode::Backspace),
+            ModifiersState::empty(),
+        );
+        editor.clipboard = "PASTED".to_owned();
+        editor.handle_key(
+            &Key::Character("v".into()),
+            PhysicalKey::Code(KeyCode::KeyV),
+            ModifiersState::CONTROL,
+        );
+        assert_eq!(editor.lines, original);
+        assert!(!editor.dirty);
+
+        // Navigation still works, and the panel did not steal Tab while hidden.
+        assert_eq!(editor.debug_view, DebugView::State);
+        editor.handle_key(
+            &Key::Named(NamedKey::ArrowDown),
+            PhysicalKey::Code(KeyCode::ArrowDown),
+            ModifiersState::empty(),
+        );
+        assert_eq!(editor.cursor.line, 1);
+
+        // Ctrl/Cmd+D reveals it, and then Tab cycles the detail views.
+        editor.handle_key(
+            &Key::Character("d".into()),
+            PhysicalKey::Code(KeyCode::KeyD),
+            ModifiersState::CONTROL,
+        );
+        assert!(editor.debug_panel_visible);
+        editor.handle_key(
+            &Key::Named(NamedKey::Tab),
+            PhysicalKey::Code(KeyCode::Tab),
+            ModifiersState::empty(),
+        );
+        assert_eq!(editor.debug_view, DebugView::Code);
+
+        // With the panel open the editor is inert: the caret does not move.
+        let caret = editor.cursor;
+        editor.handle_key(
+            &Key::Named(NamedKey::End),
+            PhysicalKey::Code(KeyCode::End),
+            ModifiersState::empty(),
+        );
+        editor.handle_key(
+            &Key::Named(NamedKey::F6),
+            PhysicalKey::Code(KeyCode::F6),
+            ModifiersState::empty(),
+        );
+        assert_eq!(editor.cursor, caret);
+        assert!(!editor.project_focused);
+
+        // Escape hands the keyboard back to the source without ending the session.
+        editor.handle_key(
+            &Key::Named(NamedKey::Escape),
+            PhysicalKey::Code(KeyCode::Escape),
+            ModifiersState::empty(),
+        );
+        assert!(!editor.debug_panel_visible);
+        assert!(editor.debug_active);
+
+        // The same shortcut hides it again, and picking a view re-opens it.
+        editor.handle_key(
+            &Key::Character("d".into()),
+            PhysicalKey::Code(KeyCode::KeyD),
+            ModifiersState::CONTROL,
+        );
+        assert!(!editor.debug_panel_visible);
+        editor.handle_key(
+            &Key::Character("4".into()),
+            PhysicalKey::Code(KeyCode::Digit4),
+            ModifiersState::CONTROL,
+        );
+        assert!(editor.debug_panel_visible);
+        assert_eq!(editor.debug_view, DebugView::Video);
     }
 
     #[test]

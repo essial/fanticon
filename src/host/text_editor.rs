@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fanticon::{
-    assembler::{CartridgeSourceMapEntry, Diagnostic, SymbolSection},
-    debugger::DebugSnapshot,
-    disassemble_instruction,
+    assembler::{CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic, SymbolSection},
+    debugger::{DebugSnapshot, DebugStop},
+    disassemble_instruction, instruction_length,
     machine::{VIDEO_DOTS_PER_CPU_CYCLE, bank_kind},
     project::MANIFEST_NAME,
     video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, DOTS_PER_SCANLINE, SCANLINES_PER_FRAME, Video},
@@ -180,6 +180,23 @@ enum DebugPromptKind {
     RasterBreakpoint,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DebugView {
+    #[default]
+    State,
+    Code,
+    Memory,
+    Video,
+    Stops,
+    Symbols,
+}
+
+impl DebugView {
+    const ALL: [Self; 6] =
+        [Self::State, Self::Code, Self::Memory, Self::Video, Self::Stops, Self::Symbols];
+    const LABELS: [&'static str; 6] = ["STATE", "CODE", "MEMORY", "VIDEO", "STOPS", "SYMBOLS"];
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SearchResult {
     path: String,
@@ -261,6 +278,8 @@ pub enum DebugCommand {
     AddReadWatchpoint(u16),
     AddWriteWatchpoint(u16),
     AddRasterBreakpoint { dot: u16, line: u16 },
+    WriteMemory { address: u16, value: u8 },
+    RemoveStop(DebugStop),
     ClearBreakpoints,
 }
 
@@ -304,6 +323,13 @@ pub struct TextEditor {
     debug_snapshot: Option<DebugSnapshot>,
     debug_active: bool,
     debug_location: Option<(String, usize)>,
+    debug_symbols: BTreeMap<String, CartridgeSymbol>,
+    debug_view: DebugView,
+    debug_address: u16,
+    debug_selected: usize,
+    debug_video_page: usize,
+    debug_memory_nibble: Option<u8>,
+    debug_watches: Vec<String>,
     music_status: Option<MusicStatus>,
     music_marquee_frame: u8,
     music_marquee_offset: usize,
@@ -360,6 +386,13 @@ impl TextEditor {
             debug_snapshot: None,
             debug_active: false,
             debug_location: None,
+            debug_symbols: BTreeMap::new(),
+            debug_view: DebugView::State,
+            debug_address: 0,
+            debug_selected: 0,
+            debug_video_page: 0,
+            debug_memory_nibble: None,
+            debug_watches: Vec::new(),
             music_status: None,
             music_marquee_frame: 0,
             music_marquee_offset: 0,
@@ -629,6 +662,13 @@ impl TextEditor {
             });
         }
 
+        if self.debug_active
+            && self.debug_snapshot.is_some()
+            && let Some(action) = self.handle_debug_key(key, modifiers)
+        {
+            return action;
+        }
+
         if matches!(key, Key::Named(NamedKey::F6)) {
             self.project_focused = !self.project_focused;
             return EditorAction::None;
@@ -798,6 +838,11 @@ impl TextEditor {
 
     pub fn set_debug_snapshot(&mut self, snapshot: DebugSnapshot) {
         self.debug_active = true;
+        if self.debug_snapshot.is_none() {
+            self.debug_address = snapshot.pc;
+            self.debug_selected = 0;
+            self.debug_memory_nibble = None;
+        }
         let (section, address) = if snapshot.instruction_boundary {
             (execution_section(&snapshot), snapshot.pc)
         } else {
@@ -865,7 +910,12 @@ impl TextEditor {
         self.debug_active = false;
         self.debug_snapshot = None;
         self.debug_source_map.clear();
+        self.debug_symbols.clear();
         self.debug_location = None;
+    }
+
+    pub fn show_debug_error(&mut self, error: String) {
+        self.show_build_message("DEBUG ERROR", &[error]);
     }
 
     fn toggle_source_breakpoint(&mut self) -> EditorAction {
@@ -1437,6 +1487,32 @@ impl TextEditor {
             Overlay::None => {}
         }
 
+        if self.debug_snapshot.is_some() && cell_y == 2 && cell_x >= EDITOR_START + 1 {
+            let mut start = EDITOR_START + 2;
+            for (index, label) in DebugView::LABELS.iter().enumerate() {
+                let end = start + label.len() + 2;
+                if (start..end).contains(&cell_x) {
+                    self.debug_view = DebugView::ALL[index];
+                    self.debug_selected = 0;
+                    self.debug_memory_nibble = None;
+                    return EditorAction::None;
+                }
+                start = end + 1;
+            }
+        }
+
+        if self.debug_snapshot.is_some() && self.debug_view == DebugView::Memory {
+            let row = cell_y.checked_sub(6).filter(|row| *row < 16);
+            let column =
+                cell_x.checked_sub(29).filter(|column| *column % 3 < 2).map(|column| column / 3);
+            if let (Some(row), Some(column)) = (row, column.filter(|column| *column < 16)) {
+                self.debug_address =
+                    (self.debug_address & 0xff00).wrapping_add((row * 16 + column) as u16);
+                self.debug_memory_nibble = None;
+                return EditorAction::None;
+            }
+        }
+
         if cell_y == 1 && cell_x >= EDITOR_START {
             if cell_x == EDITOR_START && self.tab_scroll > 0 {
                 self.tab_scroll -= 1;
@@ -1527,6 +1603,168 @@ impl TextEditor {
         self.mouse_selecting = true;
         self.ensure_cursor_visible();
         EditorAction::None
+    }
+
+    fn handle_debug_key(
+        &mut self,
+        key: &Key,
+        modifiers: ModifiersState,
+    ) -> Option<EditorAction> {
+        if (modifiers.control_key() || modifiers.super_key())
+            && let Key::Character(text) = key
+            && let Some(digit) = text.chars().next().and_then(|character| character.to_digit(10))
+            && (1..=6).contains(&digit)
+        {
+            self.debug_view = DebugView::ALL[digit as usize - 1];
+            self.debug_selected = 0;
+            self.debug_memory_nibble = None;
+            return Some(EditorAction::None);
+        }
+        if matches!(key, Key::Named(NamedKey::Tab)) {
+            let current = DebugView::ALL.iter().position(|view| *view == self.debug_view).unwrap();
+            self.debug_view = DebugView::ALL[(current + 1) % DebugView::ALL.len()];
+            self.debug_selected = 0;
+            return Some(EditorAction::None);
+        }
+        let snapshot = self.debug_snapshot.as_ref()?;
+        match self.debug_view {
+            DebugView::State => None,
+            DebugView::Code => match key {
+                Key::Named(NamedKey::ArrowDown) => {
+                    let length =
+                        instruction_length(snapshot.address_space[self.debug_address as usize]);
+                    self.debug_address = self.debug_address.wrapping_add(u16::from(length));
+                    Some(EditorAction::None)
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    self.debug_address = self.debug_address.wrapping_sub(1);
+                    Some(EditorAction::None)
+                }
+                Key::Named(NamedKey::Home) => {
+                    self.debug_address = snapshot.pc;
+                    Some(EditorAction::None)
+                }
+                Key::Named(NamedKey::Enter) => {
+                    self.debug_view = DebugView::Memory;
+                    self.debug_memory_nibble = None;
+                    Some(EditorAction::None)
+                }
+                _ => None,
+            },
+            DebugView::Memory => {
+                let delta = match key {
+                    Key::Named(NamedKey::ArrowLeft) => Some(-1),
+                    Key::Named(NamedKey::ArrowRight) => Some(1),
+                    Key::Named(NamedKey::ArrowUp) => Some(-16),
+                    Key::Named(NamedKey::ArrowDown) => Some(16),
+                    Key::Named(NamedKey::PageUp) => Some(-256),
+                    Key::Named(NamedKey::PageDown) => Some(256),
+                    _ => None,
+                };
+                if let Some(delta) = delta {
+                    self.debug_address = self.debug_address.wrapping_add_signed(delta);
+                    self.debug_memory_nibble = None;
+                    return Some(EditorAction::None);
+                }
+                if matches!(key, Key::Named(NamedKey::Home)) {
+                    self.debug_address = snapshot.pc;
+                    self.debug_memory_nibble = None;
+                    return Some(EditorAction::None);
+                }
+                if matches!(key, Key::Named(NamedKey::Delete)) {
+                    return Some(EditorAction::Debug(DebugCommand::WriteMemory {
+                        address: self.debug_address,
+                        value: 0,
+                    }));
+                }
+                let nibble = match key {
+                    Key::Character(text) if text.len() == 1 => text
+                        .chars()
+                        .next()
+                        .and_then(|character| character.to_digit(16))
+                        .map(|n| n as u8),
+                    _ => None,
+                };
+                if let Some(nibble) = nibble {
+                    if let Some(high) = self.debug_memory_nibble.take() {
+                        let address = self.debug_address;
+                        self.debug_address = self.debug_address.wrapping_add(1);
+                        return Some(EditorAction::Debug(DebugCommand::WriteMemory {
+                            address,
+                            value: (high << 4) | nibble,
+                        }));
+                    }
+                    self.debug_memory_nibble = Some(nibble);
+                    return Some(EditorAction::None);
+                }
+                None
+            }
+            DebugView::Video => match key {
+                Key::Named(NamedKey::ArrowLeft) => {
+                    self.debug_video_page = self.debug_video_page.saturating_sub(1);
+                    Some(EditorAction::None)
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    self.debug_video_page = (self.debug_video_page + 1).min(3);
+                    Some(EditorAction::None)
+                }
+                _ => None,
+            },
+            DebugView::Stops => match key {
+                Key::Named(NamedKey::ArrowUp) => {
+                    self.debug_selected = self.debug_selected.saturating_sub(1);
+                    Some(EditorAction::None)
+                }
+                Key::Named(NamedKey::ArrowDown) => {
+                    self.debug_selected =
+                        (self.debug_selected + 1).min(snapshot.stops.len().saturating_sub(1));
+                    Some(EditorAction::None)
+                }
+                Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => snapshot
+                    .stops
+                    .get(self.debug_selected)
+                    .copied()
+                    .map(|stop| EditorAction::Debug(DebugCommand::RemoveStop(stop))),
+                _ => None,
+            },
+            DebugView::Symbols => {
+                let count = self.debug_symbols.len();
+                match key {
+                    Key::Named(NamedKey::ArrowUp) => {
+                        self.debug_selected = self.debug_selected.saturating_sub(1);
+                        Some(EditorAction::None)
+                    }
+                    Key::Named(NamedKey::ArrowDown) => {
+                        self.debug_selected =
+                            (self.debug_selected + 1).min(count.saturating_sub(1));
+                        Some(EditorAction::None)
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        if let Some((_, symbol)) =
+                            self.debug_symbols.iter().nth(self.debug_selected)
+                        {
+                            self.debug_address = symbol.address;
+                            self.debug_view = DebugView::Memory;
+                        }
+                        Some(EditorAction::None)
+                    }
+                    Key::Character(text) if text.eq_ignore_ascii_case("w") => {
+                        if let Some((name, _)) = self.debug_symbols.iter().nth(self.debug_selected)
+                        {
+                            if let Some(index) =
+                                self.debug_watches.iter().position(|watch| watch == name)
+                            {
+                                self.debug_watches.remove(index);
+                            } else {
+                                self.debug_watches.push(name.clone());
+                            }
+                        }
+                        Some(EditorAction::None)
+                    }
+                    _ => None,
+                }
+            }
+        }
     }
 
     pub fn handle_mouse_move(&mut self, x: usize, y: usize) {
@@ -1810,9 +2048,9 @@ impl TextEditor {
         style: CellStyle,
     ) {
         let Some(snapshot) = &self.debug_snapshot else { return };
-        let x = 52;
+        let x = EDITOR_START;
         let y = 2;
-        let width = 28;
+        let width = COLUMNS - EDITOR_START;
         let height = ROWS - 3;
         draw_caption_window(
             cells,
@@ -1822,133 +2060,378 @@ impl TextEditor {
             CellRect { x, y, width, height },
             style,
         );
-        put_text(cells, x + 3, y, "DEBUGGER - PAUSED");
-        put_text(cells, x + 2, y + 2, &format!("PC ${:04X}  SP ${:02X}", snapshot.pc, snapshot.sp));
-        put_text(
-            cells,
-            x + 2,
-            y + 3,
-            &format!("A ${:02X} X ${:02X} Y ${:02X}", snapshot.a, snapshot.x, snapshot.y),
-        );
-        put_text(
-            cells,
-            x + 2,
-            y + 4,
-            &format!("P ${:02X}  {}", snapshot.status, status_flags(snapshot.status)),
-        );
-        put_text(cells, x + 2, y + 5, &format!("CYCLES {}", snapshot.cycles));
-        put_text(
-            cells,
-            x + 2,
-            y + 6,
-            &format!("BANK {}:{:02X}", bank_kind_name(snapshot.bank_kind), snapshot.bank_number),
-        );
-        put_text(
-            cells,
-            x + 2,
-            y + 7,
-            &format!("IRQ {:X}/{:X}", snapshot.irq_pending, snapshot.irq_enable),
-        );
-        put_text(
-            cells,
-            x + 2,
-            y + 8,
-            &format!("RASTER {},{}", snapshot.raster_line, snapshot.raster_dot),
-        );
-        put_text(
-            cells,
-            x + 2,
-            y + 9,
-            &format!("APU {:02X} OUT {:04X}", snapshot.apu.master, snapshot.apu.sample),
-        );
-        put_text(
-            cells,
-            x + 2,
-            y + 10,
-            &format!(
-                "P1 {:02X}/{:03X} P2 {:02X}/{:03X}",
-                snapshot.apu.pulse_control[0],
-                snapshot.apu.pulse_timer[0],
-                snapshot.apu.pulse_control[1],
-                snapshot.apu.pulse_timer[1]
-            ),
-        );
-        put_text(
-            cells,
-            x + 2,
-            y + 11,
-            &format!(
-                "TRI {:02X}/{:03X} NOI {:02X}/{:X}",
-                snapshot.apu.triangle_control,
-                snapshot.apu.triangle_timer,
-                snapshot.apu.noise_control,
-                snapshot.apu.noise_period
-            ),
-        );
-        put_text_width(cells, x + 2, y + 12, &format!("STOP {:?}", snapshot.reason), width - 4);
-        let current_instruction = if snapshot.instruction_boundary {
-            format!("NEXT {}", disassemble_instruction(snapshot.pc, snapshot.instruction_bytes))
-        } else {
-            format!("BUS PC ${:04X}", snapshot.pc)
-        };
-        put_text_width(cells, x + 2, y + 13, &current_instruction, width - 4);
-        put_text(cells, x + 2, y + 14, "STACK");
-        for row in 0..4 {
-            let offset = row * 4;
-            put_text(
-                cells,
-                x + 2,
-                y + 15 + row,
-                &format!(
-                    "{:02X}: {:02X} {:02X} {:02X} {:02X}",
-                    snapshot.sp.wrapping_add(1 + offset as u8),
-                    snapshot.stack[offset],
-                    snapshot.stack[offset + 1],
-                    snapshot.stack[offset + 2],
-                    snapshot.stack[offset + 3]
-                ),
-            );
+        let mut tab_x = x + 2;
+        for (index, label) in DebugView::LABELS.iter().enumerate() {
+            let text = format!(" {label} ");
+            put_text(cells, tab_x, y, &text);
+            if DebugView::ALL[index] == self.debug_view {
+                inverse[y * COLUMNS + tab_x..y * COLUMNS + tab_x + text.len()].fill(true);
+            }
+            tab_x += text.len() + 1;
         }
-        put_text(cells, x + 2, y + 20, "RECENT CODE");
-        for (row, trace) in snapshot.trace.iter().rev().take(8).enumerate() {
-            let section = match trace.section {
-                Some(SymbolSection::Fixed) => "F".to_owned(),
-                Some(SymbolSection::Bank(bank)) => format!("B{bank:02X}"),
-                None => "RAM".to_owned(),
-            };
-            put_text_width(
-                cells,
-                x + 2,
-                y + 21 + row,
-                &format!(
-                    "{section} {:04X}: {}",
-                    trace.address,
-                    disassemble_instruction(trace.address, trace.bytes)
-                ),
-                width - 4,
-            );
+        put_text_width(
+            cells,
+            x + 2,
+            y + height - 2,
+            "CTRL/CMD+1-6 VIEW  TAB NEXT  F5 CONTINUE  F10/F11 STEP",
+            width - 4,
+        );
+
+        match self.debug_view {
+            DebugView::State => {
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 2,
+                    &format!(
+                        "PC ${:04X}  SP ${:02X}  A ${:02X}  X ${:02X}  Y ${:02X}",
+                        snapshot.pc, snapshot.sp, snapshot.a, snapshot.x, snapshot.y
+                    ),
+                );
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 3,
+                    &format!(
+                        "P ${:02X} {}   CYCLES {}",
+                        snapshot.status,
+                        status_flags(snapshot.status),
+                        snapshot.cycles
+                    ),
+                );
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 4,
+                    &format!(
+                        "BANK {}:{:02X}   IRQ {:X}/{:X}   RASTER {},{}",
+                        bank_kind_name(snapshot.bank_kind),
+                        snapshot.bank_number,
+                        snapshot.irq_pending,
+                        snapshot.irq_enable,
+                        snapshot.raster_line,
+                        snapshot.raster_dot
+                    ),
+                );
+                put_text_width(
+                    cells,
+                    x + 2,
+                    y + 5,
+                    &format!("STOP {:?}", snapshot.reason),
+                    width - 4,
+                );
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 7,
+                    &format!(
+                        "NEXT  {}",
+                        disassemble_instruction(snapshot.pc, snapshot.instruction_bytes)
+                    ),
+                );
+                put_text(cells, x + 2, y + 9, "STACK");
+                for row in 0..2 {
+                    let offset = row * 8;
+                    let values = snapshot.stack[offset..offset + 8]
+                        .iter()
+                        .map(|value| format!("{value:02X}"))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    put_text(
+                        cells,
+                        x + 2,
+                        y + 10 + row,
+                        &format!("{:02X}: {values}", snapshot.sp.wrapping_add(1 + offset as u8)),
+                    );
+                }
+                put_text(cells, x + 2, y + 14, "RECENT INSTRUCTIONS");
+                for (row, trace) in snapshot.trace.iter().rev().take(12).enumerate() {
+                    put_text_width(
+                        cells,
+                        x + 2,
+                        y + 15 + row,
+                        &format!(
+                            "${:04X}  {}",
+                            trace.address,
+                            disassemble_instruction(trace.address, trace.bytes)
+                        ),
+                        width - 4,
+                    );
+                }
+                put_text(cells, x + 2, y + 29, "AUDIO");
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 30,
+                    &format!(
+                        "P1 {:02X}/{:03X}  P2 {:02X}/{:03X}  TRI {:02X}/{:03X}  NOI {:02X}/{:X}",
+                        snapshot.apu.pulse_control[0],
+                        snapshot.apu.pulse_timer[0],
+                        snapshot.apu.pulse_control[1],
+                        snapshot.apu.pulse_timer[1],
+                        snapshot.apu.triangle_control,
+                        snapshot.apu.triangle_timer,
+                        snapshot.apu.noise_control,
+                        snapshot.apu.noise_period
+                    ),
+                );
+            }
+            DebugView::Code => {
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 2,
+                    "DISASSEMBLY                         HOME = CURRENT PC",
+                );
+                let mut address = self.debug_address;
+                for row in 0..36 {
+                    let bytes = core::array::from_fn(|offset| {
+                        snapshot.address_space[address.wrapping_add(offset as u16) as usize]
+                    });
+                    let length = instruction_length(bytes[0]);
+                    let raw = (0..length)
+                        .map(|offset| format!("{:02X}", bytes[offset as usize]))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    put_text_width(
+                        cells,
+                        x + 2,
+                        y + 4 + row,
+                        &format!(
+                            "{}${address:04X}  {raw:<8}  {}",
+                            if address == snapshot.pc { ">" } else { " " },
+                            disassemble_instruction(address, bytes)
+                        ),
+                        width - 4,
+                    );
+                    if address == self.debug_address {
+                        inverse[(y + 4 + row) * COLUMNS + x + 1
+                            ..(y + 4 + row) * COLUMNS + x + width - 1]
+                            .fill(true);
+                    }
+                    address = address.wrapping_add(u16::from(length));
+                }
+            }
+            DebugView::Memory => {
+                let base = self.debug_address & 0xff00;
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 2,
+                    &format!("MEMORY PAGE ${base:04X}   TYPE HEX TO EDIT   DEL = 00"),
+                );
+                put_text(cells, x + 8, y + 3, "00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F");
+                for row in 0..16 {
+                    let address = base.wrapping_add((row * 16) as u16);
+                    let values = (0..16)
+                        .map(|column| {
+                            format!(
+                                "{:02X}",
+                                snapshot.address_space[address.wrapping_add(column) as usize]
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    put_text(cells, x + 2, y + 4 + row, &format!("{address:04X}: {values}"));
+                }
+                let offset = self.debug_address.wrapping_sub(base) as usize;
+                let selected_x = x + 8 + (offset % 16) * 3;
+                let selected_y = y + 4 + offset / 16;
+                inverse[selected_y * COLUMNS + selected_x..selected_y * COLUMNS + selected_x + 2]
+                    .fill(true);
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 22,
+                    &format!(
+                        "SELECTED ${:04X} = ${:02X}{}",
+                        self.debug_address,
+                        snapshot.address_space[self.debug_address as usize],
+                        self.debug_memory_nibble
+                            .map_or(String::new(), |nibble| format!("  NEW ${nibble:X}_"))
+                    ),
+                );
+            }
+            DebugView::Video => self.render_video_debug(cells, inverse, snapshot, x, y, width),
+            DebugView::Stops => {
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 2,
+                    "BREAKPOINTS AND WATCHPOINTS                 DEL = REMOVE",
+                );
+                if snapshot.stops.is_empty() {
+                    put_text(cells, x + 2, y + 4, "NO MANAGED STOPS");
+                }
+                for (row, stop) in snapshot.stops.iter().take(36).enumerate() {
+                    put_text_width(cells, x + 2, y + 4 + row, &format_debug_stop(*stop), width - 4);
+                    if row == self.debug_selected {
+                        inverse[(y + 4 + row) * COLUMNS + x + 1
+                            ..(y + 4 + row) * COLUMNS + x + width - 1]
+                            .fill(true);
+                    }
+                }
+            }
+            DebugView::Symbols => {
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 2,
+                    "SYMBOLS                 ENTER = MEMORY   W = WATCH/UNWATCH",
+                );
+                for (row, (name, symbol)) in self
+                    .debug_symbols
+                    .iter()
+                    .skip(self.debug_selected.saturating_sub(17))
+                    .take(35)
+                    .enumerate()
+                {
+                    let watched = if self.debug_watches.contains(name) { '*' } else { ' ' };
+                    put_text_width(
+                        cells,
+                        x + 2,
+                        y + 4 + row,
+                        &format!(
+                            "{watched} {name:<28} ${:04X}  {}",
+                            symbol.address,
+                            symbol_section_name(symbol.section)
+                        ),
+                        width - 4,
+                    );
+                    if self.debug_symbols.iter().position(|(candidate, _)| candidate == name)
+                        == Some(self.debug_selected)
+                    {
+                        inverse[(y + 4 + row) * COLUMNS + x + 1
+                            ..(y + 4 + row) * COLUMNS + x + width - 1]
+                            .fill(true);
+                    }
+                }
+                if !self.debug_watches.is_empty() {
+                    put_text(cells, x + 2, y + height - 6, "WATCHES");
+                    for (row, name) in self.debug_watches.iter().take(4).enumerate() {
+                        if let Some(symbol) = self.debug_symbols.get(name) {
+                            put_text(
+                                cells,
+                                x + 2,
+                                y + height - 5 + row,
+                                &format!(
+                                    "{name} = ${:02X} @ ${:04X}",
+                                    snapshot.address_space[symbol.address as usize], symbol.address
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
         }
-        put_text(cells, x + 2, y + 30, &format!("MEMORY ${:04X}", snapshot.memory_start));
-        for row in 0..4 {
-            let offset = row * 4;
-            put_text(
-                cells,
-                x + 2,
-                y + 31 + row,
-                &format!(
-                    "{:04X}: {:02X} {:02X} {:02X} {:02X}",
-                    snapshot.memory_start + offset as u16,
-                    snapshot.memory[offset],
-                    snapshot.memory[offset + 1],
-                    snapshot.memory[offset + 2],
-                    snapshot.memory[offset + 3]
-                ),
-            );
+    }
+
+    fn render_video_debug(
+        &self,
+        cells: &mut [u8],
+        inverse: &mut [bool],
+        snapshot: &DebugSnapshot,
+        x: usize,
+        y: usize,
+        width: usize,
+    ) {
+        let pages = ["OVERVIEW", "PALETTE", "TILEMAP", "SPRITES"];
+        put_text(
+            cells,
+            x + 2,
+            y + 2,
+            &format!("VIDEO  < {} >   LEFT/RIGHT CHANGES PAGE", pages[self.debug_video_page]),
+        );
+        match self.debug_video_page {
+            0 => {
+                let video = &snapshot.video;
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 4,
+                    &format!(
+                        "MODE ${:02X}  CONTROL ${:02X}  BACKDROP ${:02X}",
+                        video.mode, video.control, video.backdrop
+                    ),
+                );
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 5,
+                    &format!(
+                        "SCROLL X {:4}  Y {:4}    RASTER IRQ X {:3}  Y {:3}",
+                        video.scroll_x, video.scroll_y, video.raster_x, video.raster_y
+                    ),
+                );
+                put_text(
+                    cells,
+                    x + 2,
+                    y + 6,
+                    &format!(
+                        "BEAM X {:3}  Y {:3}    BITMAP PAL {:X}  SPRITE OVERFLOW {}",
+                        snapshot.raster_dot,
+                        snapshot.raster_line,
+                        video.bitmap_palette,
+                        if video.sprite_overflow { "YES" } else { "NO" }
+                    ),
+                );
+                put_text(cells, x + 2, y + 8, "VRAM LAYOUT");
+                put_text(cells, x + 2, y + 9, "$0000-$1FFF  256 TILE PATTERNS");
+                put_text(cells, x + 2, y + 10, "$2000-$27FF  64X32 TILE MAP");
+                put_text(cells, x + 2, y + 11, "$2800-$2FFF  TILE ATTRIBUTES");
+                put_text(cells, x + 2, y + 12, "$3000-$30FF  32 SPRITES");
+                put_text(cells, x + 2, y + 13, "$4000-$BFFF  BITMAP");
+            }
+            1 => {
+                for row in 0..16 {
+                    let values = (0..16)
+                        .map(|column| format!("{:02X}", snapshot.video.palette[row * 16 + column]))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    put_text(cells, x + 2, y + 4 + row, &format!("{:X}0: {values}", row));
+                }
+            }
+            2 => {
+                put_text(cells, x + 2, y + 4, "TILE MAP (TOP-LEFT 16X16 OF 64X32)");
+                for row in 0..16 {
+                    let values = (0..16)
+                        .map(|column| {
+                            format!("{:02X}", snapshot.video.video_ram[0x2000 + row * 64 + column])
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    put_text_width(
+                        cells,
+                        x + 2,
+                        y + 5 + row,
+                        &format!("{row:02X}: {values}"),
+                        width - 4,
+                    );
+                }
+            }
+            _ => {
+                put_text(cells, x + 2, y + 4, "SPRITE  X    Y   TILE ATTR PAL");
+                for sprite in 0..32 {
+                    let base = 0x3000 + sprite * 8;
+                    let data = &snapshot.video.video_ram[base..base + 8];
+                    put_text(
+                        cells,
+                        x + 2,
+                        y + 5 + sprite,
+                        &format!(
+                            "  {sprite:02}   {:3}  {:3}   {:02X}   {:02X}   {:02X}",
+                            u16::from_le_bytes([data[0], data[1]]),
+                            data[2],
+                            data[3],
+                            data[4],
+                            data[5]
+                        ),
+                    );
+                }
+            }
         }
-        put_text(cells, x + 2, y + height - 6, "F5 CONT  SF5 STOP");
-        put_text(cells, x + 2, y + height - 5, "F10 OVER  F11 INTO");
-        put_text(cells, x + 2, y + height - 4, "SF11 OUT  CF11 CYCLE");
-        put_text(cells, x + 2, y + height - 3, "F9 TOGGLE BREAKPOINT");
+        let selected = y * COLUMNS + x + 2;
+        inverse[selected..selected].fill(true);
     }
 
     pub fn render(&self, video: &mut Video, cursor_visible: bool) {
@@ -2139,6 +2622,7 @@ impl TextEditor {
 
         if cursor_visible
             && !self.project_focused
+            && self.debug_snapshot.is_none()
             && matches!(self.overlay, Overlay::None)
             && (!self.graphics_active() || self.graphics_source_active())
             && (!self.music_active() || self.music_source_active())
@@ -3002,6 +3486,7 @@ impl TextEditor {
                     let title = launch.cartridge.title.clone();
                     launch.breakpoints = self.resolved_source_breakpoints(&launch.source_map);
                     self.debug_source_map = launch.source_map.clone();
+                    self.debug_symbols = launch.symbols.clone();
                     self.debug_snapshot = None;
                     self.debug_active = true;
                     self.show_build_message("BUILD SUCCESSFUL", &[format!("RUNNING: {title}")]);
@@ -4575,6 +5060,25 @@ fn bank_kind_name(kind: u8) -> &'static str {
     }
 }
 
+fn symbol_section_name(section: SymbolSection) -> String {
+    match section {
+        SymbolSection::Fixed => "FIXED".to_owned(),
+        SymbolSection::Bank(bank) => format!("BANK {bank:02X}"),
+    }
+}
+
+fn format_debug_stop(stop: DebugStop) -> String {
+    match stop {
+        DebugStop::Instruction(address) => format!("EXECUTION BREAKPOINT   ${address:04X}"),
+        DebugStop::Source { section, address } => {
+            format!("SOURCE BREAKPOINT      ${address:04X}  {}", symbol_section_name(section))
+        }
+        DebugStop::MemoryRead(address) => format!("READ WATCHPOINT        ${address:04X}"),
+        DebugStop::MemoryWrite(address) => format!("WRITE WATCHPOINT       ${address:04X}"),
+        DebugStop::Raster { dot, line } => format!("RASTER BREAKPOINT      LINE {line} DOT {dot}"),
+    }
+}
+
 fn normalized_lines(text: &str) -> Vec<String> {
     let mut lines = text
         .replace("\r\n", "\n")
@@ -5606,6 +6110,32 @@ mod tests {
 
         assert_eq!(editor.filename.as_deref(), Some("main.asm"));
         assert_eq!(editor.debug_location, Some(("main.asm".to_owned(), 0)));
+        assert_eq!(editor.debug_snapshot.as_ref().unwrap().address_space[0xc100], 0xea);
+        assert_eq!(
+            editor.handle_key(
+                &Key::Character("3".into()),
+                PhysicalKey::Code(KeyCode::Digit3),
+                ModifiersState::CONTROL,
+            ),
+            EditorAction::None
+        );
+        assert_eq!(editor.debug_view, DebugView::Memory);
+        editor.handle_key(
+            &Key::Character("A".into()),
+            PhysicalKey::Code(KeyCode::KeyA),
+            ModifiersState::empty(),
+        );
+        assert_eq!(
+            editor.handle_key(
+                &Key::Character("5".into()),
+                PhysicalKey::Code(KeyCode::Digit5),
+                ModifiersState::empty(),
+            ),
+            EditorAction::Debug(DebugCommand::WriteMemory {
+                address: 0xc100,
+                value: 0xa5,
+            })
+        );
         assert_eq!(
             editor.handle_key(
                 &Key::Named(NamedKey::F10),

@@ -488,6 +488,14 @@ impl FanticonApp {
             DebugCommand::AddRasterBreakpoint { dot, line } => {
                 game.debugger.add_raster_breakpoint(dot, line);
             }
+            DebugCommand::WriteMemory { address, value } => {
+                if let Err(error) = game.debugger.write_memory(address, value)
+                    && let Some(editor) = &mut self.text_editor
+                {
+                    editor.show_debug_error(error);
+                }
+            }
+            DebugCommand::RemoveStop(stop) => game.debugger.remove_stop(stop),
             DebugCommand::ClearBreakpoints => game.debugger.clear_breakpoints(),
             DebugCommand::Stop => unreachable!(),
         }

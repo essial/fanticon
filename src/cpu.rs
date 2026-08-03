@@ -477,6 +477,23 @@ pub fn disassemble_instruction(pc: u16, bytes: [u8; 3]) -> String {
     )
 }
 
+/// Encoded byte length of an NMOS 6502 instruction, including undocumented opcodes.
+pub fn instruction_length(opcode: u8) -> u8 {
+    let mode = match decode(opcode) {
+        Action::Read(_, mode)
+        | Action::Write(_, mode)
+        | Action::Rmw(_, mode)
+        | Action::Nop(mode) => Some(mode),
+        Action::Branch(_, _) => return 2,
+        Action::Jsr | Action::JmpAbs | Action::JmpInd => return 3,
+        _ => return 1,
+    };
+    match mode.expect("memory action has an addressing mode") {
+        Mode::Imm | Mode::Zp | Mode::ZpX | Mode::ZpY | Mode::IndX | Mode::IndY => 2,
+        Mode::Abs | Mode::AbsX | Mode::AbsY => 3,
+    }
+}
+
 #[derive(Clone, Copy)]
 enum DisassemblyMode {
     Accumulator,
@@ -2009,7 +2026,7 @@ impl Cpu {
 
 #[cfg(test)]
 mod disassembly_tests {
-    use super::disassemble_instruction;
+    use super::{disassemble_instruction, instruction_length};
 
     #[test]
     fn disassembler_formats_official_undocumented_and_relative_instructions() {
@@ -2017,5 +2034,14 @@ mod disassembly_tests {
         assert_eq!(disassemble_instruction(0xc100, [0x0f, 0x34, 0x12]), "SLO $1234");
         assert_eq!(disassemble_instruction(0xc100, [0xd0, 0xfc, 0]), "BNE $C0FE");
         assert_eq!(disassemble_instruction(0xc100, [0x6c, 0x00, 0x80]), "JMP ($8000)");
+    }
+
+    #[test]
+    fn instruction_lengths_cover_all_addressing_widths() {
+        assert_eq!(instruction_length(0xea), 1);
+        assert_eq!(instruction_length(0xa9), 2);
+        assert_eq!(instruction_length(0xd0), 2);
+        assert_eq!(instruction_length(0x0f), 3);
+        assert_eq!(instruction_length(0x6c), 3);
     }
 }

@@ -42,6 +42,23 @@ pub struct ApuDebugState {
     pub sample: u16,
 }
 
+/// A side-effect-free copy of the video state exposed to the IDE debugger.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VideoDebugState {
+    pub mode: u8,
+    pub control: u8,
+    pub backdrop: u8,
+    pub scroll_x: u16,
+    pub scroll_y: u16,
+    pub raster_x: u16,
+    pub raster_y: u16,
+    pub palette_index: u8,
+    pub palette: [u8; 256],
+    pub bitmap_palette: u8,
+    pub sprite_overflow: bool,
+    pub video_ram: Box<[u8; VIDEO_RAM_SIZE]>,
+}
+
 impl ControllerState {
     pub const UP: u8 = 1 << 0;
     pub const DOWN: u8 = 1 << 1;
@@ -442,7 +459,102 @@ impl FanticonBus {
         match address {
             0x0000..=0x7fff => self.main_ram[address as usize],
             0x8000..=0xbfff => self.read_bank(address),
+            0xc000..=0xc0ff => self.peek_io(address),
             0xc100..=0xffff => self.cartridge.fixed_rom[address as usize - 0xc000],
+        }
+    }
+
+    /// Writes memory while the machine is paused, without advancing a CPU cycle.
+    pub fn debug_poke(&mut self, address: u16, value: u8) -> Result<(), String> {
+        match address {
+            0x0000..=0x7fff => self.main_ram[address as usize] = value,
+            0x8000..=0xbfff => {
+                let writable = match self.bank_kind {
+                    bank_kind::WORK_RAM => usize::from(self.bank_number) < WORK_RAM_BANKS,
+                    bank_kind::VIDEO_RAM => self.bank_number < 3,
+                    bank_kind::SAVE_RAM => {
+                        self.save_writable && self.bank_number < self.cartridge.save_banks
+                    }
+                    _ => false,
+                };
+                if !writable {
+                    return Err(format!("${address:04X} IS READ-ONLY OR UNMAPPED"));
+                }
+                self.write_bank(address, value);
+            }
+            0xc000..=0xc0ff => self.write_io(address, value),
+            _ => return Err(format!("${address:04X} IS READ-ONLY")),
+        }
+        Ok(())
+    }
+
+    pub fn video_debug_state(&self) -> VideoDebugState {
+        VideoDebugState {
+            mode: self.video_mode,
+            control: self.video_control,
+            backdrop: self.backdrop,
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+            raster_x: self.raster_x,
+            raster_y: self.raster_y,
+            palette_index: self.palette_index,
+            palette: self.palette,
+            bitmap_palette: self.bitmap_palette,
+            sprite_overflow: self.sprite_overflow,
+            video_ram: self.video_ram.clone(),
+        }
+    }
+
+    fn peek_io(&self, address: u16) -> u8 {
+        match address {
+            register::BANK_KIND => self.bank_kind,
+            register::BANK_NUMBER => self.bank_number,
+            register::IRQ_PENDING => self.irq_pending,
+            register::IRQ_ENABLE => self.irq_enable,
+            register::FRAME_LOW => self.frame_counter as u8,
+            register::FRAME_HIGH => (self.frame_counter >> 8) as u8,
+            register::MACHINE_MAJOR => 1,
+            register::MACHINE_MINOR => 0,
+            register::VIDEO_MODE => self.video_mode,
+            register::VIDEO_CONTROL => self.video_control,
+            register::BACKDROP_COLOR => self.backdrop,
+            register::SCROLL_X_LOW => self.scroll_x as u8,
+            register::SCROLL_X_HIGH => (self.scroll_x >> 8) as u8,
+            register::SCROLL_Y_LOW => self.scroll_y as u8,
+            register::SCROLL_Y_HIGH => (self.scroll_y >> 8) as u8,
+            register::RASTER_X_LOW => self.raster_x as u8,
+            register::RASTER_X_HIGH => ((self.raster_x >> 8) & 1) as u8,
+            register::RASTER_Y_LOW => self.raster_y as u8,
+            register::RASTER_Y_HIGH => ((self.raster_y >> 8) & 1) as u8,
+            register::PALETTE_INDEX => self.palette_index,
+            register::PALETTE_DATA => self.palette[self.palette_index as usize],
+            register::BITMAP_PALETTE => self.bitmap_palette,
+            register::VIDEO_STATUS => {
+                let (dot, line) = self.raster_position();
+                u8::from(line >= 200)
+                    | (u8::from(dot >= 320) << 1)
+                    | (u8::from(self.sprite_overflow) << 2)
+            }
+            0xc030..=0xc03e | 0xc040 => self.read_audio(address),
+            0xc03f => 0,
+            register::PAD0_STATE => self.controllers[0].state,
+            register::PAD0_PRESSED => self.controllers[0].pressed,
+            register::PAD1_STATE => self.controllers[1].state,
+            register::PAD1_PRESSED => self.controllers[1].pressed,
+            0xc060..=0xc064 => self.peek_timer(0, address - 0xc060),
+            0xc068..=0xc06c => self.peek_timer(1, address - 0xc068),
+            _ => 0xff,
+        }
+    }
+
+    fn peek_timer(&self, timer: usize, offset: u16) -> u8 {
+        let timer = &self.timers[timer];
+        match offset {
+            0 => timer.reload as u8,
+            1 => (timer.reload >> 8) as u8,
+            2 => timer.control(),
+            3 => timer.visible_count() as u8,
+            4 => (timer.visible_count() >> 8) as u8,
             _ => 0xff,
         }
     }
@@ -931,6 +1043,22 @@ mod tests {
         assert_eq!(bus.read(0x8000), 0x5a);
         assert!(!bus.save_dirty());
         assert_eq!(bus.save_generation(), 0);
+    }
+
+    #[test]
+    fn debugger_access_is_side_effect_free_and_only_edits_writable_regions() {
+        let mut bus = FanticonBus::new(test_cartridge(&[0xea], 1), None);
+        bus.controllers[0].pressed = ControllerState::A;
+        assert_eq!(bus.peek(register::PAD0_PRESSED), ControllerState::A);
+        assert_eq!(bus.peek(register::PAD0_PRESSED), ControllerState::A);
+
+        bus.debug_poke(0x1234, 0x56).unwrap();
+        assert_eq!(bus.peek(0x1234), 0x56);
+        assert!(bus.debug_poke(0xc100, 0).is_err());
+
+        bus.debug_poke(register::SCROLL_X_LOW, 0x34).unwrap();
+        bus.debug_poke(register::SCROLL_X_HIGH, 0x12).unwrap();
+        assert_eq!(bus.video_debug_state().scroll_x, 0x1234);
     }
 
     #[test]

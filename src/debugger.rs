@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, VecDeque};
 use crate::{
     assembler::SymbolSection,
     machine::bank_kind,
-    system::{ApuDebugState, BusAccessKind, FanticonMachine},
+    system::{ApuDebugState, BusAccessKind, FanticonMachine, VideoDebugState},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +15,15 @@ pub enum BreakReason {
     MemoryWrite(u16),
     Raster { dot: u16, line: u16 },
     Jammed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugStop {
+    Instruction(u16),
+    Source { section: SymbolSection, address: u16 },
+    MemoryRead(u16),
+    MemoryWrite(u16),
+    Raster { dot: u16, line: u16 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +49,9 @@ pub struct DebugSnapshot {
     pub memory_start: u16,
     pub memory: [u8; 16],
     pub instruction_bytes: [u8; 3],
+    pub address_space: Box<[u8; 65_536]>,
+    pub video: VideoDebugState,
+    pub stops: Vec<DebugStop>,
     pub trace: Vec<TraceEntry>,
     pub reason: Option<BreakReason>,
 }
@@ -132,6 +144,28 @@ impl Debugger {
         self.write_watchpoints.clear();
         self.raster_breakpoints.clear();
         self.reason = None;
+    }
+
+    pub fn remove_stop(&mut self, stop: DebugStop) {
+        match stop {
+            DebugStop::Instruction(address) => self.remove_instruction_breakpoint(address),
+            DebugStop::Source { section, address } => {
+                self.remove_source_breakpoint(section, address)
+            }
+            DebugStop::MemoryRead(address) => {
+                self.read_watchpoints.remove(&address);
+            }
+            DebugStop::MemoryWrite(address) => {
+                self.write_watchpoints.remove(&address);
+            }
+            DebugStop::Raster { dot, line } => {
+                self.raster_breakpoints.remove(&(dot, line));
+            }
+        }
+    }
+
+    pub fn write_memory(&mut self, address: u16, value: u8) -> Result<(), String> {
+        self.machine.bus.debug_poke(address, value)
     }
 
     pub fn step_cycle(&mut self) {
@@ -239,6 +273,23 @@ impl Debugger {
             core::array::from_fn(|offset| bus.peek(cpu.pc.wrapping_add(offset as u16)));
         let memory_start = cpu.pc & 0xfff0;
         let memory = core::array::from_fn(|offset| bus.peek(memory_start + offset as u16));
+        let address_space = Box::new(core::array::from_fn(|address| bus.peek(address as u16)));
+        let mut stops = Vec::new();
+        stops.extend(self.instruction_breakpoints.iter().copied().map(DebugStop::Instruction));
+        stops.extend(
+            self.source_breakpoints
+                .iter()
+                .copied()
+                .map(|(section, address)| DebugStop::Source { section, address }),
+        );
+        stops.extend(self.read_watchpoints.iter().copied().map(DebugStop::MemoryRead));
+        stops.extend(self.write_watchpoints.iter().copied().map(DebugStop::MemoryWrite));
+        stops.extend(
+            self.raster_breakpoints
+                .iter()
+                .copied()
+                .map(|(dot, line)| DebugStop::Raster { dot, line }),
+        );
         DebugSnapshot {
             pc: cpu.pc,
             instruction_boundary: cpu.instruction_boundary(),
@@ -261,6 +312,9 @@ impl Debugger {
             memory_start,
             memory,
             instruction_bytes,
+            address_space,
+            video: bus.video_debug_state(),
+            stops,
             trace: self.trace.iter().cloned().collect(),
             reason: self.reason,
         }
@@ -464,7 +518,42 @@ mod tests {
         assert_eq!(snapshot.bank_kind, bank_kind::CARTRIDGE_ROM);
         assert_eq!(snapshot.memory_start, 0xc100);
         assert_eq!(snapshot.memory[0..3], [0xa9, 1, 0x85]);
+        assert_eq!(snapshot.address_space[0xc100..0xc103], [0xa9, 1, 0x85]);
+        assert_eq!(snapshot.video.video_ram.len(), crate::machine::VIDEO_RAM_SIZE);
         assert!(!snapshot.trace.is_empty());
         assert_eq!(snapshot.apu.master, 0);
+    }
+
+    #[test]
+    fn snapshots_list_managed_stops_and_the_debugger_can_remove_them() {
+        let mut debugger = Debugger::new(machine());
+        debugger.add_instruction_breakpoint(0xc100);
+        debugger.add_source_breakpoint(SymbolSection::Fixed, 0xc102);
+        debugger.add_read_watchpoint(0x20);
+        debugger.add_write_watchpoint(0x21);
+        debugger.add_raster_breakpoint(12, 34);
+
+        let stops = debugger.snapshot().stops;
+        assert!(stops.contains(&DebugStop::Instruction(0xc100)));
+        assert!(
+            stops.contains(&DebugStop::Source { section: SymbolSection::Fixed, address: 0xc102 })
+        );
+        assert!(stops.contains(&DebugStop::MemoryRead(0x20)));
+        assert!(stops.contains(&DebugStop::MemoryWrite(0x21)));
+        assert!(stops.contains(&DebugStop::Raster { dot: 12, line: 34 }));
+
+        for stop in stops {
+            debugger.remove_stop(stop);
+        }
+        assert!(debugger.snapshot().stops.is_empty());
+    }
+
+    #[test]
+    fn paused_memory_edits_change_ram_and_reject_rom() {
+        let mut debugger = Debugger::new(machine());
+        debugger.write_memory(0x2345, 0xa5).unwrap();
+        assert_eq!(debugger.snapshot().address_space[0x2345], 0xa5);
+        assert!(debugger.write_memory(0xc100, 0).is_err());
+        assert_eq!(debugger.machine.bus.peek(0xc100), 0xa9);
     }
 }

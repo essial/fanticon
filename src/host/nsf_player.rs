@@ -2,8 +2,11 @@ use std::collections::HashMap;
 
 use fanticon::{
     Bus, Cpu, Status,
-    audio::{PULSE_DUTY_TABLE, TRIANGLE_SEQUENCE, mix_sample, step_noise_lfsr},
+    audio::{NOISE_PERIODS, PULSE_DUTY_TABLE, TRIANGLE_SEQUENCE, mix_sample, step_noise_lfsr},
+    machine::{CPU_CLOCK_HZ, CPU_CYCLES_PER_FRAME},
 };
+
+use super::music_editor::MusicEditor;
 
 const NSF_HEADER_SIZE: usize = 0x80;
 const NTSC_CPU_HZ: u32 = 1_789_773;
@@ -21,6 +24,8 @@ const NES_LENGTH_TABLE: [u8; 32] = [
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MusicCommand {
     Load { filename: String, bytes: Vec<u8>, track: u8 },
+    LoadTracker { filename: String, source: String },
+    AuditionTracker { source: String },
     Play,
     Pause,
     Stop,
@@ -39,14 +44,18 @@ pub struct MusicStatus {
     pub tracks: u8,
     pub paused: bool,
     pub looping: bool,
+    pub position: Option<(usize, usize)>,
+    pub channel_levels: [u8; 4],
 }
 
 impl MusicStatus {
     pub fn display_marquee(&self, offset: usize) -> String {
         let state = if self.paused { "||" } else { ">" };
         let passes = if self.looping { "2X" } else { "1X" };
+        let format =
+            if self.filename.to_ascii_lowercase().ends_with(".mus") { "MUS" } else { "NSF" };
         format!(
-            "NSF {state} {}/{} {passes} [{}]",
+            "{format} {state} {}/{} {passes} [{}]",
             self.track,
             self.tracks,
             marquee_text(&self.title, offset, 6)
@@ -59,8 +68,52 @@ pub struct MusicFrame<'a> {
     pub source_rate: u32,
 }
 
+pub struct NsfImport {
+    pub source: String,
+    pub captured_frames: usize,
+    pub dpcm_omitted: bool,
+}
+
+pub fn import_nsf_to_mus(
+    bytes: &[u8],
+    track: u8,
+    output_filename: &str,
+) -> Result<NsfImport, String> {
+    let mut player = NsfPlayer::new(bytes, track)?;
+    player.set_loop_limit(1);
+    let mut frames = Vec::with_capacity(60 * 30);
+    for _ in 0..60 * 600 {
+        player.render_capture_frame();
+        frames.push(player.bus.apu.capture_frame());
+        if player.finished {
+            break;
+        }
+    }
+    if !player.loop_detected {
+        return Err("NSF LOOP WAS NOT DETECTED WITHIN TEN MINUTES".to_owned());
+    }
+    let first_audio = frames
+        .iter()
+        .position(|frame| [frame[0], frame[4], frame[8], frame[12]].iter().any(|value| *value != 0))
+        .ok_or_else(|| "NSF DID NOT PRODUCE SUPPORTED FOUR-CHANNEL AUDIO".to_owned())?;
+    let loop_frame = ((player.loop_start_cycle.saturating_mul(60)
+        + u64::from(player.image.cpu_rate) / 2)
+        / u64::from(player.image.cpu_rate)) as usize;
+    if first_audio != 0 {
+        frames.drain(..first_audio);
+    }
+    let source = MusicEditor::captured_frames_to_source(
+        output_filename,
+        &frames,
+        player.image.cpu_rate,
+        loop_frame.saturating_sub(first_audio),
+    )?;
+    Ok(NsfImport { source, captured_frames: frames.len(), dpcm_omitted: player.bus.apu.dpcm_used })
+}
+
 pub struct MusicRadio {
     player: Option<NsfPlayer>,
+    tracker: Option<TrackerPlayer>,
     filename: String,
     bytes: Vec<u8>,
     paused: bool,
@@ -72,6 +125,7 @@ impl MusicRadio {
     pub fn new() -> Self {
         Self {
             player: None,
+            tracker: None,
             filename: String::new(),
             bytes: Vec::new(),
             paused: false,
@@ -90,45 +144,91 @@ impl MusicRadio {
                 self.paused = false;
                 self.advance_pending = false;
                 self.player = Some(player);
+                self.tracker = None;
                 Ok(self.description("PLAYING"))
             }
+            MusicCommand::LoadTracker { filename, source } => {
+                let song = MusicEditor::compile(&source)?;
+                self.filename = filename;
+                self.bytes.clear();
+                self.paused = false;
+                self.advance_pending = false;
+                self.player = None;
+                self.tracker = Some(TrackerPlayer::new(song, self.looping));
+                Ok(self.description("PLAYING"))
+            }
+            MusicCommand::AuditionTracker { source } => {
+                let song = MusicEditor::compile(&source)?;
+                self.filename = "AUDITION.MUS".to_owned();
+                self.bytes.clear();
+                self.paused = false;
+                self.advance_pending = false;
+                self.player = None;
+                self.tracker = Some(TrackerPlayer::new(song, false));
+                Ok("INSTRUMENT AUDITION".to_owned())
+            }
             MusicCommand::Play => {
-                self.require_player()?;
+                self.require_music()?;
                 self.paused = false;
                 self.advance_pending = false;
                 Ok(self.description("PLAYING"))
             }
             MusicCommand::Pause => {
-                self.require_player()?;
+                self.require_music()?;
                 self.paused = true;
                 Ok(self.description("PAUSED"))
             }
             MusicCommand::Stop => {
-                self.require_player()?;
+                self.require_music()?;
+                let tracker = self.tracker.is_some();
                 self.player = None;
+                self.tracker = None;
                 self.bytes.clear();
                 self.filename.clear();
                 self.paused = false;
-                Ok("NSF STOPPED".to_owned())
+                Ok(format!("{} STOPPED", if tracker { "MUSIC" } else { "NSF" }))
             }
             MusicCommand::Next => self.change_track(true),
             MusicCommand::Previous => self.change_track(false),
             MusicCommand::ToggleLoop => {
-                self.require_player()?;
+                self.require_music()?;
                 self.looping = !self.looping;
                 if let Some(player) = &mut self.player {
                     player.set_loop_limit(if self.looping { 2 } else { 1 });
                 }
+                if let Some(tracker) = &mut self.tracker {
+                    tracker.looping = self.looping;
+                }
                 Ok(format!("NSF LOOP {}", if self.looping { "ON" } else { "OFF" }))
             }
             MusicCommand::Status => {
-                self.require_player()?;
+                self.require_music()?;
                 Ok(self.description(if self.paused { "PAUSED" } else { "PLAYING" }))
             }
         }
     }
 
     pub fn status(&self) -> Option<MusicStatus> {
+        if self.tracker.is_some() {
+            return Some(MusicStatus {
+                filename: self.filename.clone(),
+                title: self.filename.clone(),
+                artist: "FANTICON TRACKER".to_owned(),
+                track: 1,
+                tracks: 1,
+                paused: self.paused,
+                looping: self.looping,
+                position: self
+                    .tracker
+                    .as_ref()
+                    .map(|tracker| (tracker.playing_row, tracker.tracker_rows)),
+                channel_levels: if self.paused {
+                    [0; 4]
+                } else {
+                    self.tracker.as_ref().map_or([0; 4], TrackerPlayer::channel_levels)
+                },
+            });
+        }
         let player = self.player.as_ref()?;
         Some(MusicStatus {
             filename: self.filename.clone(),
@@ -138,10 +238,18 @@ impl MusicRadio {
             tracks: player.image.songs,
             paused: self.paused,
             looping: self.looping,
+            position: None,
+            channel_levels: [0; 4],
         })
     }
 
     pub fn render_frame(&mut self) -> Option<MusicFrame<'_>> {
+        if self.paused {
+            return None;
+        }
+        if self.tracker.is_some() {
+            return self.render_tracker_frame();
+        }
         if self.advance_pending {
             self.advance_automatically();
         }
@@ -154,7 +262,29 @@ impl MusicRadio {
         Some(MusicFrame { samples: &player.samples, source_rate: player.image.cpu_rate })
     }
 
+    fn render_tracker_frame(&mut self) -> Option<MusicFrame<'_>> {
+        let finished = if let Some(tracker) = &mut self.tracker {
+            tracker.render_frame();
+            tracker.finished
+        } else {
+            return None;
+        };
+        if finished {
+            self.tracker = None;
+            self.filename.clear();
+            return None;
+        }
+        self.tracker
+            .as_ref()
+            .map(|tracker| MusicFrame { samples: &tracker.samples, source_rate: CPU_CLOCK_HZ })
+    }
+
     fn change_track(&mut self, forward: bool) -> Result<String, String> {
+        if let Some(tracker) = &mut self.tracker {
+            tracker.restart();
+            self.paused = false;
+            return Ok(self.description("RESTARTED"));
+        }
         let player = self.require_player()?;
         let current = player.track;
         let tracks = player.image.songs;
@@ -207,7 +337,15 @@ impl MusicRadio {
     }
 
     fn require_player(&self) -> Result<&NsfPlayer, String> {
-        self.player.as_ref().ok_or_else(|| "NO NSF IS LOADED".to_owned())
+        self.player.as_ref().ok_or_else(|| "NO MUSIC IS LOADED".to_owned())
+    }
+
+    fn require_music(&self) -> Result<(), String> {
+        if self.player.is_some() || self.tracker.is_some() {
+            Ok(())
+        } else {
+            Err("NO MUSIC IS LOADED".to_owned())
+        }
     }
 
     fn description(&self, state: &str) -> String {
@@ -225,6 +363,182 @@ impl MusicRadio {
                 )
             },
         )
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct TrackerPulse {
+    control: u8,
+    timer: u16,
+    divider: u16,
+    phase: u8,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TrackerTriangle {
+    enabled: bool,
+    timer: u16,
+    divider: u16,
+    phase: u8,
+}
+
+#[derive(Clone, Copy)]
+struct TrackerNoise {
+    control: u8,
+    period: u8,
+    divider: u16,
+    lfsr: u16,
+}
+
+impl Default for TrackerNoise {
+    fn default() -> Self {
+        Self { control: 0, period: 0, divider: 0, lfsr: 1 }
+    }
+}
+
+struct TrackerPlayer {
+    frames: Vec<[u8; 16]>,
+    tracker_rows: usize,
+    ticks_per_row: u8,
+    loop_frame: usize,
+    frame: usize,
+    playing_row: usize,
+    looping: bool,
+    finished: bool,
+    cycle: u64,
+    pulse: [TrackerPulse; 2],
+    triangle: TrackerTriangle,
+    noise: TrackerNoise,
+    samples: Vec<u16>,
+}
+
+impl TrackerPlayer {
+    fn new(song: super::music_editor::CompiledSong, looping: bool) -> Self {
+        Self {
+            frames: song.frames,
+            tracker_rows: song.tracker_rows,
+            ticks_per_row: song.ticks_per_row,
+            loop_frame: song.loop_frame,
+            frame: 0,
+            playing_row: 0,
+            looping,
+            finished: false,
+            cycle: 0,
+            pulse: [TrackerPulse::default(); 2],
+            triangle: TrackerTriangle::default(),
+            noise: TrackerNoise::default(),
+            samples: Vec::with_capacity(CPU_CYCLES_PER_FRAME as usize),
+        }
+    }
+
+    fn restart(&mut self) {
+        self.frame = 0;
+        self.playing_row = 0;
+        self.finished = false;
+        self.pulse = [TrackerPulse::default(); 2];
+        self.triangle = TrackerTriangle::default();
+        self.noise = TrackerNoise::default();
+    }
+
+    fn channel_levels(&self) -> [u8; 4] {
+        [
+            if self.pulse[0].control & 0x80 != 0 { self.pulse[0].control & 15 } else { 0 },
+            if self.pulse[1].control & 0x80 != 0 { self.pulse[1].control & 15 } else { 0 },
+            u8::from(self.triangle.enabled) * 15,
+            if self.noise.control & 0x80 != 0 { self.noise.control & 15 } else { 0 },
+        ]
+    }
+
+    fn render_frame(&mut self) {
+        self.apply_frame();
+        self.samples.clear();
+        for _ in 0..CPU_CYCLES_PER_FRAME {
+            self.tick();
+            let p1 = tracker_pulse_level(self.pulse[0]);
+            let p2 = tracker_pulse_level(self.pulse[1]);
+            let tri = if self.triangle.enabled {
+                TRIANGLE_SEQUENCE[self.triangle.phase as usize]
+            } else {
+                0
+            };
+            let noise = if self.noise.control & 0x80 != 0 && self.noise.lfsr & 1 == 0 {
+                self.noise.control & 15
+            } else {
+                0
+            };
+            self.samples.push(mix_sample(p1, p2, tri, noise, 15));
+        }
+    }
+
+    fn apply_frame(&mut self) {
+        let Some(frame) = self.frames.get(self.frame).copied() else {
+            self.finished = true;
+            return;
+        };
+        self.playing_row = self.frame / usize::from(self.ticks_per_row);
+        for voice in 0..2 {
+            let base = voice * 4;
+            let timer = u16::from_le_bytes([frame[base + 1], frame[base + 2]]);
+            self.pulse[voice].control = frame[base];
+            self.pulse[voice].timer = timer;
+            if frame[base + 3] != 0 {
+                self.pulse[voice].divider = timer;
+                self.pulse[voice].phase = 0;
+            }
+        }
+        let timer = u16::from_le_bytes([frame[9], frame[10]]);
+        self.triangle.enabled = frame[8] != 0;
+        self.triangle.timer = timer;
+        if frame[11] != 0 {
+            self.triangle.divider = timer;
+            self.triangle.phase = 0;
+        }
+        self.noise.control = frame[12];
+        self.noise.period = frame[13] & 15;
+        if frame[15] != 0 {
+            self.noise.divider = 0;
+            self.noise.lfsr = 1;
+        }
+        self.frame += 1;
+        if self.frame == self.frames.len() && self.looping {
+            self.frame = self.loop_frame.min(self.frames.len() - 1);
+        }
+    }
+
+    fn tick(&mut self) {
+        let even = self.cycle.is_multiple_of(2);
+        for pulse in &mut self.pulse {
+            if even {
+                if pulse.divider == 0 {
+                    pulse.phase = (pulse.phase + 1) & 7;
+                    pulse.divider = pulse.timer;
+                } else {
+                    pulse.divider -= 1;
+                }
+            }
+        }
+        if self.triangle.divider == 0 {
+            self.triangle.phase = (self.triangle.phase + 1) & 31;
+            self.triangle.divider = self.triangle.timer;
+        } else {
+            self.triangle.divider -= 1;
+        }
+        if self.noise.divider == 0 {
+            self.noise.lfsr = step_noise_lfsr(self.noise.lfsr, self.noise.control & 0x40 != 0);
+            self.noise.divider = NOISE_PERIODS[self.noise.period as usize] - 1;
+        } else {
+            self.noise.divider -= 1;
+        }
+        self.cycle = self.cycle.wrapping_add(1);
+    }
+}
+
+fn tracker_pulse_level(pulse: TrackerPulse) -> u8 {
+    if pulse.control & 0x80 == 0 {
+        0
+    } else {
+        PULSE_DUTY_TABLE[((pulse.control >> 5) & 3) as usize][pulse.phase as usize]
+            * (pulse.control & 15)
     }
 }
 
@@ -318,7 +632,7 @@ struct NsfPlayer {
     play_period: u64,
     frame_remainder: u32,
     samples: Vec<u16>,
-    seen_play_states: HashMap<u64, u64>,
+    seen_play_states: HashMap<u64, (u64, u64)>,
     loop_fingerprint: Option<u64>,
     loop_period: u64,
     next_loop_call: u64,
@@ -326,6 +640,8 @@ struct NsfPlayer {
     loop_limit: u8,
     play_calls: u64,
     finished: bool,
+    loop_detected: bool,
+    loop_start_cycle: u64,
 }
 
 impl NsfPlayer {
@@ -358,12 +674,15 @@ impl NsfPlayer {
             loop_limit: 2,
             play_calls: 0,
             finished: false,
+            loop_detected: false,
+            loop_start_cycle: 0,
         };
         player.begin_routine(player.image.init_address, track - 1, player.image.region_x, 0);
         Ok(player)
     }
 
     fn render_frame(&mut self) {
+        self.bus.apu.retrigger = [false; 4];
         self.frame_remainder = self.frame_remainder.wrapping_add(self.image.cpu_rate);
         let cycles = self.frame_remainder / 60;
         self.frame_remainder %= 60;
@@ -398,6 +717,47 @@ impl NsfPlayer {
         }
     }
 
+    fn render_capture_frame(&mut self) {
+        self.bus.apu.retrigger = [false; 4];
+        self.frame_remainder = self.frame_remainder.wrapping_add(self.image.cpu_rate);
+        let cycles = self.frame_remainder / 60;
+        self.frame_remainder %= 60;
+        let target_cycle = self.source_cycles.saturating_add(u64::from(cycles));
+        while self.source_cycles < target_cycle && !self.finished {
+            if self.routine_active {
+                self.cpu.status.0 &= !Status::DECIMAL;
+                self.cpu.clock(&mut self.bus);
+                if self.cpu.jammed() {
+                    self.routine_active = false;
+                } else if self.cpu.instruction_boundary() && self.cpu.pc == RETURN_PC {
+                    self.routine_active = false;
+                    if !self.init_complete {
+                        self.init_complete = true;
+                        self.next_play_cycle = self.source_cycles + self.play_period;
+                    }
+                }
+                self.bus.apu.advance_capture_cycles(1);
+                self.source_cycles = self.source_cycles.wrapping_add(1);
+            } else if self.init_complete && self.source_cycles >= self.next_play_cycle {
+                if self.detect_completed_loop() {
+                    self.finished = true;
+                } else {
+                    self.begin_routine(self.image.play_address, self.cpu.a, self.cpu.x, self.cpu.y);
+                    self.next_play_cycle = self.next_play_cycle.saturating_add(self.play_period);
+                }
+            } else {
+                let next_event = if self.init_complete {
+                    self.next_play_cycle.min(target_cycle)
+                } else {
+                    target_cycle
+                };
+                let skipped = next_event.saturating_sub(self.source_cycles);
+                self.bus.apu.advance_capture_cycles(skipped);
+                self.source_cycles = next_event;
+            }
+        }
+    }
+
     fn begin_routine(&mut self, address: u16, a: u8, x: u8, y: u8) {
         let return_address = RETURN_PC.wrapping_sub(1).to_le_bytes();
         self.bus.write_ram(0x01fe, return_address[0]);
@@ -425,23 +785,29 @@ impl NsfPlayer {
             if fingerprint == loop_fingerprint {
                 self.loops_completed = self.loops_completed.saturating_add(1);
                 self.next_loop_call = self.next_loop_call.saturating_add(self.loop_period);
-                return self.loops_completed >= self.loop_limit;
+                let complete = self.loops_completed >= self.loop_limit;
+                self.loop_detected |= complete;
+                return complete;
             }
             self.loop_fingerprint = None;
             self.loop_period = 0;
             self.next_loop_call = 0;
             self.loops_completed = 0;
         }
-        if let Some(previous) = self.seen_play_states.get(&fingerprint).copied()
-            && self.play_calls.saturating_sub(previous) >= 30
+        if let Some((previous_call, previous_cycle)) =
+            self.seen_play_states.get(&fingerprint).copied()
+            && self.play_calls.saturating_sub(previous_call) >= 30
         {
-            self.loop_period = self.play_calls - previous;
+            self.loop_period = self.play_calls - previous_call;
             self.loop_fingerprint = Some(fingerprint);
             self.next_loop_call = self.play_calls.saturating_add(self.loop_period);
             self.loops_completed = 1;
-            return self.loop_limit == 1;
+            self.loop_start_cycle = previous_cycle;
+            let complete = self.loop_limit == 1;
+            self.loop_detected |= complete;
+            return complete;
         }
-        self.seen_play_states.entry(fingerprint).or_insert(self.play_calls);
+        self.seen_play_states.entry(fingerprint).or_insert((self.play_calls, self.source_cycles));
         // Classic NSF has no duration metadata. This ten-minute guard prevents
         // a monotonic driver state from defeating exact repeat detection forever.
         self.play_calls >= 36_000
@@ -685,6 +1051,8 @@ struct NsfApu {
     declick_correction: i32,
     declick_remaining: u32,
     declick_cycles: u32,
+    retrigger: [bool; 4],
+    dpcm_used: bool,
 }
 
 impl NsfApu {
@@ -705,6 +1073,8 @@ impl NsfApu {
             declick_correction: 0,
             declick_remaining: 0,
             declick_cycles: (cpu_rate / 1_000).max(1),
+            retrigger: [false; 4],
+            dpcm_used: false,
         }
     }
 
@@ -757,6 +1127,21 @@ impl NsfApu {
         }
     }
 
+    fn advance_capture_cycles(&mut self, cycles: u64) {
+        let accumulated =
+            u64::from(self.frame_phase) + cycles.saturating_mul(u64::from(self.frame_rate));
+        let clocks = accumulated / u64::from(self.cpu_rate);
+        self.frame_phase = (accumulated % u64::from(self.cpu_rate)) as u32;
+        for _ in 0..clocks {
+            self.clock_quarter_frame();
+            if self.frame_step & 1 != 0 {
+                self.clock_half_frame();
+            }
+            self.frame_step = (self.frame_step + 1) & 3;
+        }
+        self.cycle = self.cycle.wrapping_add(cycles);
+    }
+
     fn clock_quarter_frame(&mut self) {
         self.pulse[0].envelope.clock(self.pulse[0].control);
         self.pulse[1].envelope.clock(self.pulse[1].control);
@@ -794,6 +1179,39 @@ impl NsfApu {
             | (u8::from(self.noise.length != 0) << 3)
     }
 
+    fn capture_frame(&self) -> [u8; 16] {
+        let mut frame = [0_u8; 16];
+        for voice in 0..2 {
+            let pulse = self.pulse[voice];
+            let active = pulse.length != 0 && pulse.timer >= 8;
+            let base = voice * 4;
+            if active {
+                frame[base] =
+                    0x80 | ((pulse.control >> 6) & 3) << 5 | pulse.envelope.volume(pulse.control);
+                frame[base + 1] = pulse.timer as u8;
+                frame[base + 2] = (pulse.timer >> 8) as u8;
+                frame[base + 3] = u8::from(self.retrigger[voice]);
+            }
+        }
+        if self.triangle.length != 0
+            && self.triangle.linear_counter != 0
+            && self.triangle.timer >= 2
+        {
+            frame[8] = 1;
+            frame[9] = self.triangle.timer as u8;
+            frame[10] = (self.triangle.timer >> 8) as u8;
+            frame[11] = u8::from(self.retrigger[2]);
+        }
+        if self.noise.length != 0 {
+            frame[12] = 0x80
+                | (u8::from(self.noise.mode) << 6)
+                | self.noise.envelope.volume(self.noise.control);
+            frame[13] = self.noise.period;
+            frame[15] = u8::from(self.retrigger[3]);
+        }
+        frame
+    }
+
     fn write(&mut self, address: u16, value: u8) {
         let offset = usize::from(address - 0x4000);
         if let Some(register) = self.registers.get_mut(offset) {
@@ -810,6 +1228,7 @@ impl NsfApu {
             }
             0x4003 | 0x4007 => {
                 let channel = usize::from((address - 0x4003) / 4);
+                self.retrigger[channel] = true;
                 self.refresh_pulse_timer(channel);
                 self.pulse[channel].phase = 0;
                 self.pulse[channel].divider = self.pulse[channel].timer;
@@ -821,6 +1240,7 @@ impl NsfApu {
             0x4008 => {}
             0x400a => self.refresh_triangle_timer(),
             0x400b => {
+                self.retrigger[2] = true;
                 self.refresh_triangle_timer();
                 if self.status & 4 != 0 {
                     self.triangle.length = NES_LENGTH_TABLE[usize::from(value >> 3)];
@@ -833,12 +1253,14 @@ impl NsfApu {
                 self.noise.mode = value & 0x80 != 0;
             }
             0x400f => {
+                self.retrigger[3] = true;
                 if self.status & 8 != 0 {
                     self.noise.length = NES_LENGTH_TABLE[usize::from(value >> 3)];
                 }
                 self.noise.envelope.start = true;
             }
             0x4015 => {
+                self.dpcm_used |= value & 0x10 != 0;
                 self.status = value & 0x1f;
                 if value & 1 == 0 {
                     self.pulse[0].length = 0;
@@ -861,6 +1283,7 @@ impl NsfApu {
                     self.clock_half_frame();
                 }
             }
+            0x4010..=0x4013 => self.dpcm_used = true,
             _ => {}
         }
     }
@@ -935,6 +1358,8 @@ mod tests {
             tracks: 9,
             paused: false,
             looping: true,
+            position: None,
+            channel_levels: [0; 4],
         };
         assert!(status.display_marquee(0).ends_with("[ABCDEF]"));
         assert!(status.display_marquee(2).ends_with("[CDEFG ]"));
@@ -952,6 +1377,25 @@ mod tests {
         let mut player = NsfPlayer::new(&nsf(&program, 1, 1), 1).unwrap();
         player.render_frame();
         assert!(player.samples.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    fn nsf_import_captures_an_editable_v2_tracker_song() {
+        let mut program = vec![0xea; 0x40];
+        program[..19].copy_from_slice(&[
+            0xa9, 0x01, 0x8d, 0x15, 0x40, 0xa9, 0x9f, 0x8d, 0x00, 0x40, 0xa9, 0x20, 0x8d, 0x02,
+            0x40, 0x8d, 0x03, 0x40, 0x60,
+        ]);
+        program[0x20] = 0x60;
+        let imported = import_nsf_to_mus(&nsf(&program, 1, 1), 1, "IMPORT.MUS").unwrap();
+        assert!((1..=60).contains(&imported.captured_frames));
+        assert!(!imported.dpcm_omitted);
+        assert!(imported.source.contains(";@FANTICON-MUSIC 2"));
+        let tracker = MusicEditor::compile(&imported.source).unwrap();
+        assert_eq!(tracker.ticks_per_row, 1);
+        assert_eq!(tracker.tracker_rows, imported.captured_frames.div_ceil(16) * 16);
+        assert!(tracker.loop_frame < tracker.frames.len());
+        assert!(tracker.frames.iter().any(|frame| frame[0] != 0));
     }
 
     #[test]
@@ -1041,6 +1485,26 @@ mod tests {
         assert!(radio.render_frame().is_none());
         radio.apply(MusicCommand::Stop).unwrap();
         assert!(radio.status().is_none());
+    }
+
+    #[test]
+    fn tracker_radio_renders_the_four_voice_asset_at_vm_rate() {
+        let source = crate::host::music_editor::MusicEditor::default().serialize("theme.mus");
+        let mut radio = MusicRadio::new();
+        radio
+            .apply(MusicCommand::LoadTracker { filename: "theme.mus".to_owned(), source })
+            .unwrap();
+        let status = radio.status().unwrap();
+        assert_eq!(status.title, "theme.mus");
+        assert_eq!(status.position, Some((0, 64)));
+        assert!(status.display_marquee(0).starts_with("MUS >"));
+        let frame = radio.render_frame().unwrap();
+        assert_eq!(frame.source_rate, CPU_CLOCK_HZ);
+        assert_eq!(frame.samples.len(), CPU_CYCLES_PER_FRAME as usize);
+        assert!(frame.samples.iter().any(|sample| *sample != 0));
+        assert_eq!(radio.status().unwrap().channel_levels, [15; 4]);
+        radio.apply(MusicCommand::Pause).unwrap();
+        assert_eq!(radio.status().unwrap().channel_levels, [0; 4]);
     }
 
     #[test]

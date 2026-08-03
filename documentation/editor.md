@@ -81,6 +81,7 @@ syntax colors from bleeding through the overlay.
 | `CD [path]` | Change directory, or print the current directory with no path |
 | `MKDIR path` | Create one directory |
 | `RMDIR path` | Remove an empty directory |
+| `RM file` or `DEL file` | Remove one file |
 | `DIR [path]` or `LS [path]` | List a directory |
 | `BUILD source [output]` or `ASM source [output]` | Assemble ASM/INC source to a raw BIN file |
 | `DUMP file [offset [length]]` | Display file bytes as hexadecimal and printable ASCII |
@@ -197,6 +198,14 @@ white text on blue; build errors are white on red. Errors move the cursor to the
 source location, tint affected lines Catppuccin red, and remain navigable until
 the document changes. The complete syntax, directive, macro, and output reference
 is in [Fanticon 6502 Macro Assembler](assembler.md).
+
+## Music tracker
+
+Choose **File > New Music** to create a `.MUS` four-voice tracker resource.
+Opening an existing `.MUS` file selects the same visual editor automatically.
+The saved file is valid assembler source and can be included in a cartridge.
+See the [Music Editor and Playback Guide](music-editor.md) for tracker controls,
+the byte format, and the supplied VBlank player API.
 
 ## NSF music radio
 

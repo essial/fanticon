@@ -190,6 +190,11 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                     // even though other input now belongs to the editor/debugger.
                     if event.state == ElementState::Released {
                         self.update_game_controller_key(event.state, event.physical_key);
+                        let action =
+                            self.text_editor.as_mut().map_or(EditorAction::None, |editor| {
+                                editor.handle_key_release(event.physical_key)
+                            });
+                        self.apply_editor_action(action);
                     }
                     if should_process_keyboard_input(event.state, event.repeat) {
                         self.handle_key(&event.logical_key, event.physical_key);
@@ -201,6 +206,11 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 self.input_focused = focused;
                 if !focused {
                     self.clear_game_inputs();
+                    let action = self
+                        .text_editor
+                        .as_mut()
+                        .map_or(EditorAction::None, TextEditor::cancel_music_audition);
+                    self.apply_editor_action(action);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -430,6 +440,8 @@ impl FanticonApp {
         if matches!(
             command,
             MusicCommand::Load { .. }
+                | MusicCommand::LoadTracker { .. }
+                | MusicCommand::AuditionTracker { .. }
                 | MusicCommand::Stop
                 | MusicCommand::Next
                 | MusicCommand::Previous

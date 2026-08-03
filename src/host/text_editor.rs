@@ -23,6 +23,7 @@ use super::{
     },
     filesystem::{ConsoleFilesystem, SharedFilesystem},
     graphics_editor::{DEFAULT_PALETTE_FILE, GraphicsEditor},
+    music_editor::MusicEditor,
     ui_colors::SharedUiColors,
 };
 
@@ -308,6 +309,9 @@ pub struct TextEditor {
     music_marquee_offset: usize,
     graphics_tabs: BTreeMap<u32, GraphicsEditor>,
     graphics_source_views: BTreeSet<u32>,
+    music_tabs: BTreeMap<u32, MusicEditor>,
+    music_source_views: BTreeSet<u32>,
+    music_audition_key: Option<PhysicalKey>,
 }
 
 impl TextEditor {
@@ -361,6 +365,9 @@ impl TextEditor {
             music_marquee_offset: 0,
             graphics_tabs: BTreeMap::new(),
             graphics_source_views: BTreeSet::new(),
+            music_tabs: BTreeMap::new(),
+            music_source_views: BTreeSet::new(),
+            music_audition_key: None,
         };
         if let Some(filename) = filename
             && let Err(error) = editor.load(&filename)
@@ -393,7 +400,36 @@ impl TextEditor {
         if (modifiers.control_key() || modifiers.super_key())
             && let Key::Character(text) = key
         {
-            if self.graphics_active() && !self.graphics_source_active() {
+            if self.music_active() && !self.music_source_active() {
+                match text.to_ascii_lowercase().as_str() {
+                    "z" => {
+                        if self.music_tabs.get_mut(&self.document_id).unwrap().undo() {
+                            self.dirty = true;
+                        }
+                        return EditorAction::None;
+                    }
+                    "m" => {
+                        self.toggle_music_source_view();
+                        return EditorAction::None;
+                    }
+                    "s" => {
+                        if modifiers.shift_key() {
+                            self.save_all();
+                        } else {
+                            self.save_or_prompt();
+                        }
+                        return EditorAction::None;
+                    }
+                    "w" => {
+                        self.request_close_tab(self.active_tab);
+                        return EditorAction::None;
+                    }
+                    _ => return EditorAction::None,
+                }
+            } else if text.eq_ignore_ascii_case("m") && self.music_active() {
+                self.toggle_music_source_view();
+                return EditorAction::None;
+            } else if self.graphics_active() && !self.graphics_source_active() {
                 match text.to_ascii_lowercase().as_str() {
                     "c" => {
                         self.graphics_tabs.get_mut(&self.document_id).unwrap().copy();
@@ -523,6 +559,34 @@ impl TextEditor {
             self.start_build(true);
             return EditorAction::None;
         }
+        if matches!(key, Key::Named(NamedKey::F7))
+            && self.music_active()
+            && !self.music_source_active()
+        {
+            if modifiers.shift_key() && self.music_status.is_some() {
+                return EditorAction::Music(MusicCommand::Stop);
+            }
+            let filename = self.filename.clone().unwrap_or_else(|| "UNTITLED.MUS".to_owned());
+            if let Some(status) = &self.music_status
+                && status.filename.eq_ignore_ascii_case(&filename)
+            {
+                return EditorAction::Music(if status.paused {
+                    MusicCommand::Play
+                } else {
+                    MusicCommand::Pause
+                });
+            }
+            let source = self.music_tabs[&self.document_id].serialize(&filename);
+            return EditorAction::Music(MusicCommand::LoadTracker { filename, source });
+        }
+        if matches!(key, Key::Named(NamedKey::F8))
+            && self.music_active()
+            && !self.music_source_active()
+        {
+            let filename = self.filename.clone().unwrap_or_else(|| "UNTITLED.MUS".to_owned());
+            let source = self.music_tabs[&self.document_id].serialize(&filename);
+            return EditorAction::Music(MusicCommand::LoadTracker { filename, source });
+        }
         if matches!(key, Key::Named(NamedKey::F7)) {
             let Some(status) = &self.music_status else { return EditorAction::None };
             if modifiers.shift_key() {
@@ -605,6 +669,34 @@ impl TextEditor {
             }
             return EditorAction::None;
         }
+        if self.music_active() && !self.music_source_active() {
+            if let Some(source) = self.music_tabs[&self.document_id].instrument_audition_source(key)
+            {
+                if self.music_audition_key == Some(physical_key) {
+                    return EditorAction::None;
+                }
+                self.music_audition_key = Some(physical_key);
+                return EditorAction::Music(MusicCommand::AuditionTracker { source });
+            }
+            match key {
+                Key::Named(NamedKey::F10) => self.open_menu(MenuKind::File),
+                Key::Named(NamedKey::F2) => self.save_or_prompt(),
+                Key::Named(NamedKey::Space) => {
+                    return EditorAction::Music(self.tracker_play_stop_command());
+                }
+                _ => {
+                    if self
+                        .music_tabs
+                        .get_mut(&self.document_id)
+                        .expect("active music tab")
+                        .handle_key(key, modifiers)
+                    {
+                        self.dirty = true;
+                    }
+                }
+            }
+            return EditorAction::None;
+        }
 
         match key {
             Key::Named(NamedKey::F10) => self.open_menu(MenuKind::File),
@@ -658,6 +750,23 @@ impl TextEditor {
         }
         self.ensure_cursor_visible();
         EditorAction::None
+    }
+
+    pub fn handle_key_release(&mut self, physical_key: PhysicalKey) -> EditorAction {
+        if self.music_audition_key == Some(physical_key) {
+            self.music_audition_key = None;
+            EditorAction::Music(MusicCommand::Stop)
+        } else {
+            EditorAction::None
+        }
+    }
+
+    pub fn cancel_music_audition(&mut self) -> EditorAction {
+        if self.music_audition_key.take().is_some() {
+            EditorAction::Music(MusicCommand::Stop)
+        } else {
+            EditorAction::None
+        }
     }
 
     pub fn update(&mut self) -> EditorAction {
@@ -734,6 +843,20 @@ impl TextEditor {
         if changed {
             self.music_marquee_frame = 0;
             self.music_marquee_offset = 0;
+        }
+        let playback = status.as_ref().and_then(|current| {
+            self.filename
+                .as_deref()
+                .is_some_and(|filename| filename.eq_ignore_ascii_case(&current.filename))
+                .then_some(current.position)
+                .flatten()
+                .map(|(row, _)| (row, current.channel_levels))
+        });
+        if let Some(music) = self.music_tabs.get_mut(&self.document_id) {
+            music.follow_playback(
+                playback.map(|(row, _)| row),
+                playback.map_or([0; 4], |(_, levels)| levels),
+            );
         }
         self.music_status = status;
     }
@@ -1208,6 +1331,8 @@ impl TextEditor {
         let removed = self.tabs.remove(tab);
         self.graphics_tabs.remove(&removed.id);
         self.graphics_source_views.remove(&removed.id);
+        self.music_tabs.remove(&removed.id);
+        self.music_source_views.remove(&removed.id);
         if self.tabs.is_empty() {
             let document = self.blank_document();
             self.tabs.push(document);
@@ -1363,6 +1488,20 @@ impl TextEditor {
             }
             return EditorAction::None;
         }
+        if self.music_active() && !self.music_source_active() {
+            if self.music_tabs[&self.document_id].play_button_hit(x, y) {
+                return EditorAction::Music(self.tracker_play_stop_command());
+            }
+            if self
+                .music_tabs
+                .get_mut(&self.document_id)
+                .expect("active music tab")
+                .handle_mouse_press(x, y)
+            {
+                self.dirty = true;
+            }
+            return EditorAction::None;
+        }
 
         if !(EDITOR_FIRST_ROW..ROWS - 1).contains(&cell_y) {
             return EditorAction::None;
@@ -1424,11 +1563,24 @@ impl TextEditor {
             self.dirty = true;
             self.propagate_active_palette();
         }
+        if self.music_active()
+            && !self.music_source_active()
+            && self
+                .music_tabs
+                .get_mut(&self.document_id)
+                .expect("active music tab")
+                .handle_mouse_move(x, y)
+        {
+            self.dirty = true;
+        }
     }
 
     pub fn handle_mouse_release(&mut self) {
         if let Some(graphics) = self.graphics_tabs.get_mut(&self.document_id) {
             graphics.handle_mouse_release();
+        }
+        if let Some(music) = self.music_tabs.get_mut(&self.document_id) {
+            music.handle_mouse_release();
         }
         self.mouse_selecting = false;
         if self.selection_anchor == Some(self.cursor) {
@@ -1446,6 +1598,10 @@ impl TextEditor {
         let vertical = self.wheel_remainder.1.trunc() as isize;
         self.wheel_remainder.0 -= horizontal as f64;
         self.wheel_remainder.1 -= vertical as f64;
+        if let Some(music) = self.music_tabs.get_mut(&self.document_id) {
+            music.handle_mouse_wheel(vertical);
+            return;
+        }
         let max_line = self.lines.len().saturating_sub(TEXT_ROWS);
         let max_column =
             self.lines.iter().map(String::len).max().unwrap_or(0).saturating_sub(EDITOR_COLUMNS);
@@ -1822,7 +1978,9 @@ impl TextEditor {
         foregrounds[..COLUMNS].fill(UI_WHITE_COLOR);
         background_gradients[..COLUMNS].fill(true);
 
-        if !self.graphics_active() || self.graphics_source_active() {
+        if (!self.graphics_active() || self.graphics_source_active())
+            && (!self.music_active() || self.music_source_active())
+        {
             for screen_y in 0..TEXT_ROWS {
                 let line_index = self.scroll_line + screen_y;
                 let Some(line) = self.lines.get(line_index) else { break };
@@ -1895,6 +2053,9 @@ impl TextEditor {
                 if self.graphics_active() && !self.graphics_source_active() {
                     return self.graphics_tabs[&self.document_id].status();
                 }
+                if self.music_active() && !self.music_source_active() {
+                    return self.music_tabs[&self.document_id].status();
+                }
                 format!(
                     " {name}{dirty}  LN {} COL {}",
                     self.cursor.line + 1,
@@ -1936,8 +2097,14 @@ impl TextEditor {
             CellStyle { foreground, background },
         );
 
-        if self.graphics_active() && !self.graphics_source_active() {
-            self.graphics_tabs[&self.document_id].render(video);
+        let native_resource = (self.graphics_active() && !self.graphics_source_active())
+            || (self.music_active() && !self.music_source_active());
+        if native_resource {
+            if self.graphics_active() {
+                self.graphics_tabs[&self.document_id].render(video);
+            } else {
+                self.music_tabs[&self.document_id].render(video);
+            }
             if !matches!(self.overlay, Overlay::None) {
                 let mut mask_cells = [u8::MAX; COLUMNS * ROWS];
                 let mut mask_foregrounds = [u8::MAX; COLUMNS * ROWS];
@@ -1974,6 +2141,7 @@ impl TextEditor {
             && !self.project_focused
             && matches!(self.overlay, Overlay::None)
             && (!self.graphics_active() || self.graphics_source_active())
+            && (!self.music_active() || self.music_source_active())
             && let Some(screen_line) = self.cursor.line.checked_sub(self.scroll_line)
             && screen_line < TEXT_ROWS
             && let Some(screen_column) = self.cursor.column.checked_sub(self.scroll_column)
@@ -2221,6 +2389,30 @@ impl TextEditor {
     }
 
     fn activate_menu(&mut self, menu: MenuKind, selected: usize) -> EditorAction {
+        if menu == MenuKind::Music
+            && selected == 0
+            && self.music_active()
+            && !self.music_source_active()
+        {
+            let filename = self.filename.clone().unwrap_or_else(|| "UNTITLED.MUS".to_owned());
+            if let Some(status) = &self.music_status
+                && status.filename.eq_ignore_ascii_case(&filename)
+            {
+                return EditorAction::Music(if status.paused {
+                    MusicCommand::Play
+                } else {
+                    MusicCommand::Pause
+                });
+            }
+            let source = self.music_tabs[&self.document_id].serialize(&filename);
+            return EditorAction::Music(MusicCommand::LoadTracker { filename, source });
+        }
+        if menu == MenuKind::Edit && self.music_active() && !self.music_source_active() {
+            if selected == 0 && self.music_tabs.get_mut(&self.document_id).unwrap().undo() {
+                self.dirty = true;
+            }
+            return EditorAction::None;
+        }
         if menu == MenuKind::Edit && self.graphics_active() && !self.graphics_source_active() {
             match selected {
                 0 => {
@@ -2252,12 +2444,13 @@ impl TextEditor {
             (MenuKind::File, 0) => self.new_document(),
             (MenuKind::File, 1) => self.new_graphics_document(),
             (MenuKind::File, 2) => self.new_palette_document(),
-            (MenuKind::File, 3) => self.open_dialog(DialogKind::Open),
-            (MenuKind::File, 5) => self.save_or_prompt(),
-            (MenuKind::File, 6) => self.open_dialog(DialogKind::SaveAs),
-            (MenuKind::File, 7) => self.save_all(),
-            (MenuKind::File, 9) => self.request_close_tab(self.active_tab),
-            (MenuKind::File, 11) => {
+            (MenuKind::File, 3) => self.new_music_document(),
+            (MenuKind::File, 4) => self.open_dialog(DialogKind::Open),
+            (MenuKind::File, 6) => self.save_or_prompt(),
+            (MenuKind::File, 7) => self.open_dialog(DialogKind::SaveAs),
+            (MenuKind::File, 8) => self.save_all(),
+            (MenuKind::File, 10) => self.request_close_tab(self.active_tab),
+            (MenuKind::File, 12) => {
                 if self.any_dirty_tabs() {
                     self.show_build_message(
                         "UNSAVED TABS",
@@ -2719,6 +2912,19 @@ impl TextEditor {
                     break;
                 }
                 lines = normalized_lines(&self.graphics_tabs[&document_id].serialize(&filename));
+            } else if self.music_tabs.contains_key(&document_id) {
+                if self.music_source_views.contains(&document_id) {
+                    match MusicEditor::parse(&lines.join("\n")) {
+                        Ok(music) => {
+                            self.music_tabs.insert(document_id, music);
+                        }
+                        Err(error) => {
+                            failure = Some(format!("{filename}: {error}"));
+                            break;
+                        }
+                    }
+                }
+                lines = normalized_lines(&self.music_tabs[&document_id].serialize(&filename));
             } else if assembly_filename(&filename) {
                 format_assembly_lines(&mut lines);
             }
@@ -2755,6 +2961,12 @@ impl TextEditor {
             }
             self.save_graphics_palette(document_id, &filename)?;
             lines = normalized_lines(&self.graphics_tabs[&document_id].serialize(&filename));
+        } else if self.music_tabs.contains_key(&document_id) {
+            if self.music_source_views.contains(&document_id) {
+                let music = MusicEditor::parse(&lines.join("\n"))?;
+                self.music_tabs.insert(document_id, music);
+            }
+            lines = normalized_lines(&self.music_tabs[&document_id].serialize(&filename));
         } else if assembly_filename(&filename) {
             format_assembly_lines(&mut lines);
         }
@@ -2985,6 +3197,26 @@ impl TextEditor {
             }
             return Ok(());
         }
+        if self.music_active() {
+            if !music_filename(filename) {
+                return Err("MUSIC DOCUMENTS REQUIRE A .MUS NAME".to_owned());
+            }
+            if self.music_source_active() {
+                let parsed = MusicEditor::parse(&self.lines.join("\n"))?;
+                self.music_tabs.insert(self.document_id, parsed);
+            }
+            let text = self.music_tabs[&self.document_id].serialize(filename);
+            self.filesystem.borrow_mut().write_text(filename, &text)?;
+            self.lines = normalized_lines(&text);
+            self.filename = Some(filename.to_ascii_lowercase());
+            self.dirty = false;
+            self.sync_active_document();
+            self.refresh_project_browser();
+            if self.close_after_save.take() == Some(self.document_id) {
+                self.close_tab(self.active_tab);
+            }
+            return Ok(());
+        }
         let mut lines = self.lines.clone();
         if assembly_filename(filename) {
             format_assembly_lines(&mut lines);
@@ -3019,6 +3251,7 @@ impl TextEditor {
         let graphics = graphics_asset_filename(filename)
             .then(|| self.parse_graphics_asset(filename, &text))
             .transpose()?;
+        let music = music_filename(filename).then(|| MusicEditor::parse(&text)).transpose()?;
         let mut lines = text
             .replace("\r\n", "\n")
             .replace('\r', "\n")
@@ -3044,9 +3277,14 @@ impl TextEditor {
             if let Some(graphics) = graphics {
                 self.graphics_tabs.insert(self.document_id, graphics);
             }
+            if let Some(music) = music {
+                self.music_tabs.insert(self.document_id, music);
+            }
         } else if self.active_tab_is_disposable() {
             self.graphics_tabs.remove(&self.document_id);
             self.graphics_source_views.remove(&self.document_id);
+            self.music_tabs.remove(&self.document_id);
+            self.music_source_views.remove(&self.document_id);
             let document = DocumentState {
                 id: self.document_id,
                 lines,
@@ -3062,6 +3300,9 @@ impl TextEditor {
             self.restore_document(document);
             if let Some(graphics) = graphics {
                 self.graphics_tabs.insert(self.document_id, graphics);
+            }
+            if let Some(music) = music {
+                self.music_tabs.insert(self.document_id, music);
             }
         } else {
             self.sync_active_document();
@@ -3084,6 +3325,9 @@ impl TextEditor {
             self.ensure_active_tab_visible();
             if let Some(graphics) = graphics {
                 self.graphics_tabs.insert(self.document_id, graphics);
+            }
+            if let Some(music) = music {
+                self.music_tabs.insert(self.document_id, music);
             }
         }
         self.invalidate_build();
@@ -3114,6 +3358,19 @@ impl TextEditor {
         let _ = graphics.replace_palette(palette.palette());
         document.lines = normalized_lines(&graphics.serialize("UNTITLED.GFX"));
         self.graphics_tabs.insert(document.id, graphics);
+        self.tabs.push(document.clone());
+        self.active_tab = self.tabs.len() - 1;
+        self.restore_document(document);
+        self.ensure_active_tab_visible();
+        self.invalidate_build();
+    }
+
+    fn new_music_document(&mut self) {
+        self.sync_active_document();
+        let mut document = self.blank_document();
+        let music = MusicEditor::default();
+        document.lines = normalized_lines(&music.serialize("UNTITLED.MUS"));
+        self.music_tabs.insert(document.id, music);
         self.tabs.push(document.clone());
         self.active_tab = self.tabs.len() - 1;
         self.restore_document(document);
@@ -3421,6 +3678,50 @@ impl TextEditor {
         self.graphics_source_views.contains(&self.document_id)
     }
 
+    fn music_active(&self) -> bool {
+        self.music_tabs.contains_key(&self.document_id)
+    }
+
+    fn music_source_active(&self) -> bool {
+        self.music_source_views.contains(&self.document_id)
+    }
+
+    fn tracker_play_stop_command(&self) -> MusicCommand {
+        let filename = self.filename.clone().unwrap_or_else(|| "UNTITLED.MUS".to_owned());
+        if self
+            .music_status
+            .as_ref()
+            .is_some_and(|status| status.filename.eq_ignore_ascii_case(&filename))
+        {
+            return MusicCommand::Stop;
+        }
+        let source = self.music_tabs[&self.document_id].serialize(&filename);
+        MusicCommand::LoadTracker { filename, source }
+    }
+
+    fn toggle_music_source_view(&mut self) {
+        if self.music_source_views.remove(&self.document_id) {
+            match MusicEditor::parse(&self.lines.join("\n")) {
+                Ok(music) => {
+                    self.music_tabs.insert(self.document_id, music);
+                    self.selection_anchor = None;
+                }
+                Err(error) => {
+                    self.music_source_views.insert(self.document_id);
+                    self.show_build_message("MUSIC SOURCE ERROR", &[error]);
+                }
+            }
+        } else if let Some(music) = self.music_tabs.get(&self.document_id) {
+            let filename = self.filename.as_deref().unwrap_or("UNTITLED.MUS");
+            self.lines = normalized_lines(&music.serialize(filename));
+            self.cursor = Position::default();
+            self.selection_anchor = None;
+            self.scroll_line = 0;
+            self.scroll_column = 0;
+            self.music_source_views.insert(self.document_id);
+        }
+    }
+
     fn toggle_graphics_source_view(&mut self) {
         if self.graphics_source_views.remove(&self.document_id) {
             let filename = self.filename.as_deref().unwrap_or("UNTITLED.GFX");
@@ -3542,6 +3843,10 @@ fn palette_filename(filename: &str) -> bool {
     filename.rsplit_once('.').is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("pal"))
 }
 
+fn music_filename(filename: &str) -> bool {
+    filename.rsplit_once('.').is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("mus"))
+}
+
 fn graphics_asset_filename(filename: &str) -> bool {
     graphics_filename(filename) || palette_filename(filename)
 }
@@ -3609,6 +3914,7 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "NEW TEXT",
             "NEW GRAPHICS",
             "NEW PALETTE",
+            "NEW MUSIC",
             "OPEN...",
             "",
             "SAVE",
@@ -3694,6 +4000,7 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "NEW TEXT  N",
             "NEW GFX   G",
             "NEW PAL   P",
+            "NEW MUSIC M",
             "OPEN      O",
             "",
             "SAVE      S",
@@ -3756,12 +4063,13 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
             (0, "n"),
             (1, "g"),
             (2, "p"),
-            (3, "o"),
-            (5, "s"),
-            (6, "a"),
-            (7, "l"),
-            (9, "w"),
-            (11, "x"),
+            (3, "m"),
+            (4, "o"),
+            (6, "s"),
+            (7, "a"),
+            (8, "l"),
+            (10, "w"),
+            (12, "x"),
         ],
         MenuKind::Edit => &[
             (0, "u"),
@@ -4726,11 +5034,11 @@ mod tests {
         editor.open_menu(MenuKind::File);
 
         editor.handle_overlay_key(&Key::Named(NamedKey::ArrowUp), ModifiersState::empty());
-        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 11 }));
+        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 12 }));
         editor.handle_overlay_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty());
         assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 0 }));
 
-        editor.handle_mouse_press(4 * GLYPH_WIDTH, 6 * GLYPH_HEIGHT, false);
+        editor.handle_mouse_press(4 * GLYPH_WIDTH, 7 * GLYPH_HEIGHT, false);
         assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, .. }));
 
         let mut cells = [b' '; COLUMNS * ROWS];
@@ -4748,7 +5056,28 @@ mod tests {
         assert_eq!(cells[2 * COLUMNS + 2], b'E');
         assert!(inverse[2 * COLUMNS + 1]);
         assert!(
-            cells[6 * COLUMNS + 1..6 * COLUMNS + 15].iter().all(|cell| *cell == BOX_HORIZONTAL)
+            cells[7 * COLUMNS + 1..7 * COLUMNS + 15].iter().all(|cell| *cell == BOX_HORIZONTAL)
+        );
+    }
+
+    #[test]
+    fn every_menu_mouse_row_matches_its_command_and_file_exit_is_clickable() {
+        for menu in [
+            MenuKind::File,
+            MenuKind::Edit,
+            MenuKind::Build,
+            MenuKind::Debug,
+            MenuKind::Music,
+            MenuKind::Help,
+        ] {
+            assert_eq!(menu_labels(menu).len(), menu_items(menu).len(), "{menu:?}");
+        }
+
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.open_menu(MenuKind::File);
+        assert_eq!(
+            editor.handle_mouse_press(4 * GLYPH_WIDTH, 14 * GLYPH_HEIGHT, false),
+            EditorAction::Exit
         );
     }
 
@@ -4772,6 +5101,8 @@ mod tests {
             tracks: 8,
             paused: false,
             looping: true,
+            position: None,
+            channel_levels: [0; 4],
         }));
         assert_eq!(
             editor.handle_key(
@@ -5538,6 +5869,120 @@ mod tests {
         let reopened = TextEditor::new(filesystem, colors, Some("NOTES.TXT".to_owned()));
         assert_eq!(reopened.lines, ["saved text"]);
         assert_eq!(reopened.filename.as_deref(), Some("notes.txt"));
+    }
+
+    #[test]
+    fn music_assets_live_in_tabs_and_save_as_assembler_source() {
+        let filesystem = shared_filesystem();
+        let colors = shared_ui_colors();
+        let mut editor = TextEditor::new(filesystem.clone(), colors.clone(), None);
+        editor.new_music_document();
+        assert!(editor.music_active());
+        assert!(!editor.music_source_active());
+
+        editor.save_as("theme.mus").unwrap();
+        let source = filesystem.borrow().read_text("theme.mus").unwrap();
+        assert!(source.contains(";@FANTICON-MUSIC 2"));
+        assert!(source.contains(";@FRAME 00"));
+        assert!(source.contains("THEME_MUSIC"));
+
+        let reopened = TextEditor::new(filesystem, colors, Some("theme.mus".to_owned()));
+        assert!(reopened.music_active());
+        assert_eq!(reopened.filename.as_deref(), Some("theme.mus"));
+    }
+
+    #[test]
+    fn music_tabs_can_toggle_to_ascii_source_and_back() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.new_music_document();
+        editor.toggle_music_source_view();
+        assert!(editor.music_source_active());
+        assert!(editor.lines.join("\n").contains(";@PATTERN P1 00"));
+        editor.toggle_music_source_view();
+        assert!(!editor.music_source_active());
+    }
+
+    #[test]
+    fn f7_auditions_the_active_tracker_and_f8_restarts_it() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.new_music_document();
+        let play = editor.handle_key(
+            &Key::Named(NamedKey::F7),
+            PhysicalKey::Code(KeyCode::F7),
+            ModifiersState::empty(),
+        );
+        assert!(matches!(play, EditorAction::Music(MusicCommand::LoadTracker { .. })));
+        let restart = editor.handle_key(
+            &Key::Named(NamedKey::F8),
+            PhysicalKey::Code(KeyCode::F8),
+            ModifiersState::empty(),
+        );
+        assert!(matches!(restart, EditorAction::Music(MusicCommand::LoadTracker { .. })));
+    }
+
+    #[test]
+    fn instrument_note_keys_audition_until_the_matching_key_is_released() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.new_music_document();
+        let physical = PhysicalKey::Code(KeyCode::KeyA);
+        for _ in 0..2 {
+            editor
+                .music_tabs
+                .get_mut(&editor.document_id)
+                .unwrap()
+                .handle_key(&Key::Character("v".into()), ModifiersState::empty());
+        }
+
+        let press =
+            editor.handle_key(&Key::Character("a".into()), physical, ModifiersState::empty());
+        assert!(matches!(press, EditorAction::Music(MusicCommand::AuditionTracker { .. })));
+        assert_eq!(
+            editor.handle_key(&Key::Character("a".into()), physical, ModifiersState::empty()),
+            EditorAction::None,
+            "key repeat must not restart the envelope"
+        );
+        assert_eq!(editor.handle_key_release(PhysicalKey::Code(KeyCode::KeyS)), EditorAction::None);
+        assert_eq!(editor.handle_key_release(physical), EditorAction::Music(MusicCommand::Stop));
+        assert_eq!(editor.handle_key_release(physical), EditorAction::None);
+    }
+
+    #[test]
+    fn space_starts_and_stops_tracker_playback_and_follows_the_live_row() {
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.new_music_document();
+        editor.save_as("theme.mus").unwrap();
+        let start = editor.handle_key(
+            &Key::Named(NamedKey::Space),
+            PhysicalKey::Code(KeyCode::Space),
+            ModifiersState::empty(),
+        );
+        assert!(matches!(start, EditorAction::Music(MusicCommand::LoadTracker { .. })));
+
+        editor.set_music_status(Some(MusicStatus {
+            filename: "theme.mus".to_owned(),
+            title: "theme.mus".to_owned(),
+            artist: "FANTICON TRACKER".to_owned(),
+            track: 1,
+            tracks: 1,
+            paused: false,
+            looping: true,
+            position: Some((40, 64)),
+            channel_levels: [15, 8, 4, 2],
+        }));
+        let tracker = &editor.music_tabs[&editor.document_id];
+        let (row, playback_row, visible) = tracker.playback_view();
+        assert_eq!(row, 40);
+        assert_eq!(playback_row, Some(40));
+        assert!(visible.contains(&40));
+
+        assert_eq!(
+            editor.handle_key(
+                &Key::Named(NamedKey::Space),
+                PhysicalKey::Code(KeyCode::Space),
+                ModifiersState::empty(),
+            ),
+            EditorAction::Music(MusicCommand::Stop)
+        );
     }
 
     #[test]

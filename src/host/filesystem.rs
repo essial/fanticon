@@ -141,6 +141,35 @@ impl ConsoleFilesystem {
         Ok(())
     }
 
+    pub fn remove_file(&mut self, path: &str) -> Result<(), String> {
+        let requested = self.normalize_non_root(path)?;
+        match &mut self.backend {
+            #[cfg(not(target_arch = "wasm32"))]
+            Backend::Native { root } => {
+                let parent = canonical_directory(root, &requested[..requested.len() - 1])?;
+                let name = requested.last().expect("non-root file path");
+                let target = case_insensitive_child(&parent, name)?
+                    .ok_or_else(|| "FILE NOT FOUND".to_owned())?;
+                if !target.is_file() {
+                    return Err("NOT A FILE".to_owned());
+                }
+                std::fs::remove_file(target).map_err(|error| io_error("DELETE", error))?;
+            }
+            #[cfg(any(target_arch = "wasm32", test))]
+            Backend::Memory { directories, files } => {
+                if directories.contains(&requested) {
+                    return Err("NOT A FILE".to_owned());
+                }
+                if files.remove(&requested).is_none() {
+                    return Err("FILE NOT FOUND".to_owned());
+                }
+            }
+            #[cfg(all(not(target_arch = "wasm32"), not(test)))]
+            Backend::Unavailable(error) => return Err(error.clone()),
+        }
+        Ok(())
+    }
+
     pub fn list(&self, path: Option<&str>) -> Result<Vec<DirectoryEntry>, String> {
         let requested = self.normalize(path.unwrap_or("."))?;
         match &self.backend {
@@ -526,6 +555,18 @@ mod tests {
             filesystem.list(None).unwrap(),
             vec![DirectoryEntry { name: "notes.txt".to_owned(), is_directory: false }]
         );
+    }
+
+    #[test]
+    fn files_can_be_removed_case_insensitively_without_removing_directories() {
+        let mut filesystem = ConsoleFilesystem::memory();
+        filesystem.write_text("Notes.Txt", "temporary").unwrap();
+        filesystem.remove_file("NOTES.TXT").unwrap();
+        assert_eq!(filesystem.read_text("notes.txt"), Err("FILE NOT FOUND".to_owned()));
+
+        filesystem.create_directory("assets").unwrap();
+        assert_eq!(filesystem.remove_file("ASSETS"), Err("NOT A FILE".to_owned()));
+        assert_eq!(filesystem.remove_file("missing.bin"), Err("FILE NOT FOUND".to_owned()));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -15,6 +15,7 @@ Replace RASTER with one of:
   GRAPHICS Editor-ready PAL/GFX assets
   BITMAP   Packed bitmap and banks
   AUDIO    All four sound voices
+  MUSIC    Ode to Joy tracker song
 
 Each folder is a complete project. BUILD
 creates its FCN file. RUN builds and

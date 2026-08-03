@@ -6,6 +6,7 @@ mod filesystem;
 mod frame_pacer;
 mod gamepad;
 mod graphics_editor;
+mod music_editor;
 mod nsf_player;
 mod renderer;
 mod terminal;

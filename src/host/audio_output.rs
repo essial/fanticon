@@ -89,6 +89,12 @@ struct AudioPresenter {
     right_delay: usize,
     queue: VecDeque<(f32, f32)>,
     queue_limit: usize,
+    startup_frames: usize,
+    buffering: bool,
+    attack_gain: f32,
+    attack_step: f32,
+    release_coefficient: f32,
+    last_output: (f32, f32),
 }
 
 impl AudioPresenter {
@@ -111,6 +117,14 @@ impl AudioPresenter {
             right_delay: (output_rate as f32 * 0.019) as usize,
             queue: VecDeque::with_capacity(output_rate as usize / 10),
             queue_limit: output_rate as usize / 4,
+            // Two video frames absorb ordinary scheduler jitter without making
+            // tracker-key auditioning feel sluggish.
+            startup_frames: (output_rate / 30).max(1) as usize,
+            buffering: true,
+            attack_gain: 0.0,
+            attack_step: 1.0 / (output_rate as f32 * 0.003).max(1.0),
+            release_coefficient: (-1.0 / (output_rate as f32 * 0.004).max(1.0)).exp(),
+            last_output: (0.0, 0.0),
         }
     }
 
@@ -165,6 +179,8 @@ impl AudioPresenter {
         self.reverb.fill(0.0);
         self.reverb_index = 0;
         self.resample_phase = 0;
+        self.buffering = true;
+        self.attack_gain = 0.0;
     }
 
     #[cfg(test)]
@@ -184,7 +200,33 @@ impl AudioPresenter {
     }
 
     fn next_frame(&mut self) -> (f32, f32) {
-        self.queue.pop_front().unwrap_or((0.0, 0.0))
+        if self.buffering {
+            if self.queue.len() < self.startup_frames {
+                return self.release_frame();
+            }
+            self.buffering = false;
+            self.attack_gain = 0.0;
+        }
+        let Some((left, right)) = self.queue.pop_front() else {
+            self.buffering = true;
+            self.attack_gain = 0.0;
+            return self.release_frame();
+        };
+        self.attack_gain = (self.attack_gain + self.attack_step).min(1.0);
+        self.last_output = (left * self.attack_gain, right * self.attack_gain);
+        self.last_output
+    }
+
+    fn release_frame(&mut self) -> (f32, f32) {
+        self.last_output.0 *= self.release_coefficient;
+        self.last_output.1 *= self.release_coefficient;
+        if self.last_output.0.abs() < 1.0e-6 {
+            self.last_output.0 = 0.0;
+        }
+        if self.last_output.1.abs() < 1.0e-6 {
+            self.last_output.1 = 0.0;
+        }
+        self.last_output
     }
 }
 
@@ -254,6 +296,8 @@ mod tests {
         let mut presenter = AudioPresenter::new(48_000, 2);
         presenter.submit(&vec![u16::MAX / 2; 52_400], CPU_CLOCK_HZ);
         assert!((799..=801).contains(&presenter.queue.len()));
+        presenter.buffering = false;
+        presenter.attack_gain = 1.0;
         let mut output = vec![0.0; 1_600];
         presenter.fill(&mut output);
         assert_eq!(presenter.queue.len(), 0);
@@ -275,6 +319,8 @@ mod tests {
         let mut impulse = vec![0; 52_400];
         impulse[..2_000].fill(u16::MAX);
         presenter.submit(&impulse, CPU_CLOCK_HZ);
+        presenter.buffering = false;
+        presenter.attack_gain = 1.0;
         let mut output = vec![0.0; 1_600];
         presenter.fill(&mut output);
         assert!(output.chunks_exact(2).any(|frame| (frame[0] - frame[1]).abs() > 0.0001));
@@ -291,12 +337,43 @@ mod tests {
             .map(|index| if index & 1 == 0 { 0 } else { u16::MAX })
             .collect::<Vec<_>>();
         presenter.submit(&source, 1_789_773);
+        presenter.buffering = false;
+        presenter.attack_gain = 1.0;
         let mut output = vec![0.0; 1_600];
         presenter.fill(&mut output);
         let late_peak = output[800..].iter().copied().map(f32::abs).fold(0.0, f32::max);
         assert!(late_peak < 0.02, "aliased CPU-rate energy was {late_peak}");
         assert!(presenter.high_pass_coefficient > 0.999);
         assert!(presenter.reconstruction_alpha < 0.1);
+    }
+
+    #[test]
+    fn playback_waits_for_jitter_margin_and_underruns_release_smoothly() {
+        let mut presenter = AudioPresenter::new(48_000, 2);
+        let pulse = (0..NTSC_TEST_FRAME)
+            .map(|index| if index % 64 < 32 { u16::MAX } else { 0 })
+            .collect::<Vec<_>>();
+        presenter.submit(&pulse, 1_789_773);
+        assert_eq!(presenter.next_frame(), (0.0, 0.0));
+        assert!(!presenter.queue.is_empty(), "buffering must not consume the safety margin");
+
+        presenter.submit(&pulse, 1_789_773);
+        presenter.submit(&pulse, 1_789_773);
+        let mut last = (0.0, 0.0);
+        for _ in 0..presenter.startup_frames {
+            last = presenter.next_frame();
+        }
+        assert_ne!(last, (0.0, 0.0));
+
+        presenter.clear();
+        let released = presenter.next_frame();
+        assert!(released.0.abs() <= last.0.abs());
+        assert!(released.1.abs() <= last.1.abs());
+        for _ in 0..2_000 {
+            presenter.next_frame();
+        }
+        assert!(presenter.last_output.0.abs() < 1.0e-5);
+        assert!(presenter.last_output.1.abs() < 1.0e-5);
     }
 
     const NTSC_TEST_FRAME: usize = 1_789_773 / 60;

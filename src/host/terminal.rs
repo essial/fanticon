@@ -8,7 +8,7 @@ use super::character_rom::{
     CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, configure_text_gradient, gradient_color,
 };
 use super::filesystem::{DirectoryEntry, SharedFilesystem, shared_filesystem};
-use super::nsf_player::MusicCommand;
+use super::nsf_player::{MusicCommand, import_nsf_to_mus};
 use super::ui_colors::{SharedUiColors, UiColors, parse_palette_index, shared_ui_colors};
 use super::{EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH};
 
@@ -209,9 +209,10 @@ impl Terminal {
             "HELP" => {
                 self.write("HELP CLS MODE EDITOR GAME EDIT NEW\n");
                 self.write("ECHO VERSION COLOR CD MKDIR\n");
-                self.write("RMDIR DIR LS ASM BUILD RUN DUMP\n");
+                self.write("RMDIR RM DEL DIR LS ASM BUILD RUN DUMP\n");
                 self.write("PLAYNSF NSFPLAY NSFPAUSE NSFSTOP\n");
                 self.write("NSFNEXT NSFPREV NSFLOOP NSFINFO\n");
+                self.write("NSF2MUS INPUT.NSF OUTPUT.MUS [TRACK]\n");
                 TerminalAction::None
             }
             "CLS" | "CLEAR" => {
@@ -248,6 +249,10 @@ impl Terminal {
             "BUILD" => self.build(arguments),
             "RUN" => self.run(arguments),
             "PLAYNSF" => self.play_nsf(arguments),
+            "NSF2MUS" => {
+                self.import_nsf(arguments);
+                TerminalAction::None
+            }
             "NSFPLAY" => TerminalAction::Music(MusicCommand::Play),
             "NSFPAUSE" => TerminalAction::Music(MusicCommand::Pause),
             "NSFSTOP" => TerminalAction::Music(MusicCommand::Stop),
@@ -283,6 +288,17 @@ impl Terminal {
                 let result = self.filesystem.borrow_mut().remove_directory(arguments);
                 if let Err(error) = result {
                     self.write_error(&error);
+                }
+                TerminalAction::None
+            }
+            "RM" | "DEL" => {
+                if arguments.is_empty() || arguments.split_ascii_whitespace().count() != 1 {
+                    self.write_error("USAGE: RM FILE");
+                } else {
+                    let result = self.filesystem.borrow_mut().remove_file(arguments);
+                    if let Err(error) = result {
+                        self.write_error(&error);
+                    }
                 }
                 TerminalAction::None
             }
@@ -449,6 +465,47 @@ impl Terminal {
                 self.write_error(&error);
                 TerminalAction::None
             }
+        }
+    }
+
+    fn import_nsf(&mut self, arguments: &str) {
+        let fields = arguments.split_whitespace().collect::<Vec<_>>();
+        if !(2..=3).contains(&fields.len())
+            || !fields[0].to_ascii_lowercase().ends_with(".nsf")
+            || !fields[1].to_ascii_lowercase().ends_with(".mus")
+        {
+            self.write_error("USAGE: NSF2MUS INPUT.NSF OUTPUT.MUS [TRACK]");
+            return;
+        }
+        let track = match fields.get(2) {
+            Some(value) => match value.parse::<u8>() {
+                Ok(value) if value != 0 => value,
+                _ => {
+                    self.write_error("TRACK MUST BE 1-255");
+                    return;
+                }
+            },
+            None => 0,
+        };
+        let bytes = self.filesystem.borrow().read_binary(fields[0]);
+        let result = bytes.and_then(|bytes| import_nsf_to_mus(&bytes, track, fields[1])).and_then(
+            |import| {
+                self.filesystem.borrow_mut().write_text(fields[1], &import.source)?;
+                Ok(import)
+            },
+        );
+        match result {
+            Ok(import) => {
+                self.write(&format!(
+                    "WROTE {} ({} VIDEO FRAMES)\n",
+                    fields[1].to_ascii_uppercase(),
+                    import.captured_frames
+                ));
+                if import.dpcm_omitted {
+                    self.write("WARNING: NSF DPCM CHANNEL WAS OMITTED\n");
+                }
+            }
+            Err(error) => self.write_error(&error),
         }
     }
 
@@ -752,6 +809,34 @@ mod tests {
     }
 
     #[test]
+    fn nsf2mus_command_writes_an_editable_tracker_resource() {
+        let mut program = vec![0xea; 0x40];
+        program[..19].copy_from_slice(&[
+            0xa9, 0x01, 0x8d, 0x15, 0x40, 0xa9, 0x9f, 0x8d, 0x00, 0x40, 0xa9, 0x20, 0x8d, 0x02,
+            0x40, 0x8d, 0x03, 0x40, 0x60,
+        ]);
+        program[0x20] = 0x60;
+        let mut nsf = vec![0; 0x80];
+        nsf[..5].copy_from_slice(b"NESM\x1A");
+        nsf[5] = 1;
+        nsf[6] = 1;
+        nsf[7] = 1;
+        nsf[8..14].copy_from_slice(&[0x00, 0x80, 0x00, 0x80, 0x20, 0x80]);
+        nsf[0x6e..0x70].copy_from_slice(&16_639_u16.to_le_bytes());
+        nsf.extend_from_slice(&program);
+
+        let mut terminal = Terminal::new(AppMode::Editor);
+        terminal.filesystem.borrow_mut().write_binary("song.nsf", &nsf).unwrap();
+        assert_eq!(
+            type_command(&mut terminal, "nsf2mus song.nsf tune.mus 1"),
+            TerminalAction::None
+        );
+        let source = terminal.filesystem.borrow().read_text("tune.mus").unwrap();
+        assert!(source.contains(";@FANTICON-MUSIC 2"));
+        assert!(screen_text(&terminal).contains("WROTE TUNE.MUS"));
+    }
+
+    #[test]
     fn editor_is_the_default_application_mode() {
         assert_eq!(AppMode::default(), AppMode::Editor);
     }
@@ -811,6 +896,21 @@ mod tests {
         type_command(&mut terminal, "cd /");
         type_command(&mut terminal, "rmdir proJECT");
         assert!(terminal.filesystem.borrow().list(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rm_and_del_remove_files_but_not_directories() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        terminal.filesystem.borrow_mut().write_text("one.txt", "one").unwrap();
+        terminal.filesystem.borrow_mut().write_text("two.txt", "two").unwrap();
+        terminal.filesystem.borrow_mut().create_directory("assets").unwrap();
+
+        type_command(&mut terminal, "rm ONE.TXT");
+        type_command(&mut terminal, "del two.txt");
+
+        assert_eq!(terminal.filesystem.borrow().read_text("one.txt"), Err("FILE NOT FOUND".into()));
+        assert_eq!(terminal.filesystem.borrow().read_text("two.txt"), Err("FILE NOT FOUND".into()));
+        assert!(terminal.filesystem.borrow().list(None).unwrap()[0].is_directory);
     }
 
     #[test]

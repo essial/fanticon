@@ -167,6 +167,13 @@ impl Video {
         self.palette[index as usize] = rgba;
     }
 
+    /// Restore the identity RGB332 palette, so every index expands to the color
+    /// its own bits describe. Host tools that draw raw RGB332 data need this
+    /// after any chrome that remapped entries for its own use.
+    pub fn reset_palette(&mut self) {
+        self.palette = rgb332_palette();
+    }
+
     /// Snapshot persistent video state at the leading edge of a new frame.
     pub fn begin_frame(&mut self) {
         self.frame_pixels.copy_from_slice(&self.pixels);

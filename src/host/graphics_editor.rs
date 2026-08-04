@@ -345,6 +345,15 @@ impl GraphicsEditor {
         true
     }
 
+    /// Move to another of the 16 palette banks, wrapping at both ends. Every view
+    /// that draws through a bank re-reads it immediately, so artwork recolors live.
+    fn step_palette_bank(&mut self, step: i16) {
+        let banks = (PALETTE_BYTES / 16) as i16;
+        let bank = (i16::from(self.palette_bank) + step).rem_euclid(banks);
+        self.palette_bank = bank as u8;
+        self.palette_preset = palette_preset_for_bank(&self.asset.palette, self.palette_bank);
+    }
+
     pub fn handle_key(&mut self, key: &Key, modifiers: ModifiersState) -> bool {
         match key {
             Key::Character(text) => match text.to_ascii_lowercase().as_str() {
@@ -368,6 +377,8 @@ impl GraphicsEditor {
                 "." if self.bitmap_asset => {
                     self.bitmap_bank = self.bitmap_bank.saturating_add(1).min(253)
                 }
+                "[" => self.step_palette_bank(-1),
+                "]" => self.step_palette_bank(1),
                 "p" => self.tool = GraphicsTool::Pencil,
                 "f" => self.tool = GraphicsTool::Fill,
                 "i" => self.tool = GraphicsTool::Eyedropper,
@@ -470,6 +481,12 @@ impl GraphicsEditor {
             self.palette_preset = palette_preset_for_bank(&self.asset.palette, self.palette_bank);
             return false;
         }
+        if let Some((origin_x, origin_y)) = bank_button_origin(self.view)
+            && let Some(step) = bank_button_at(x, y, origin_x, origin_y)
+        {
+            self.step_palette_bank(step);
+            return false;
+        }
         let strip = match self.view {
             GraphicsView::Tiles | GraphicsView::Sprite => {
                 palette_strip_at(x, y, PANE_LEFT + 12, PANE_TOP + 318)
@@ -520,11 +537,11 @@ impl GraphicsEditor {
             "SHARED PALETTE RESOURCE - 16 BANKS X 16 COLORS"
         } else {
             match self.view {
-                GraphicsView::Tiles => "GRAPHICS - SHARED 8X8 PATTERN",
-                GraphicsView::Map => "GRAPHICS - BACKGROUND MAP",
+                GraphicsView::Tiles => "GRAPHICS - SHARED 8X8 PATTERN (MAP + SPRITES)",
+                GraphicsView::Map => "GRAPHICS - BACKGROUND MAP (TILEMAP MODE)",
                 GraphicsView::Sprite => "GRAPHICS - 16X16 SPRITE COMPOSITE",
                 GraphicsView::Palette => "GRAPHICS - COLOR PALETTE",
-                GraphicsView::Bitmap => "GRAPHICS - FULL-SCREEN BITMAP",
+                GraphicsView::Bitmap => "GRAPHICS - FULL-SCREEN BITMAP (BITMAP MODE)",
             }
         };
         draw_group_box(
@@ -551,7 +568,7 @@ impl GraphicsEditor {
                 UI_GRAY,
             );
         } else {
-            draw_toolbar(video, self.view, self.tool);
+            draw_toolbar(video, self.view, self.tool, self.bitmap_asset);
         }
         match self.view {
             GraphicsView::Tiles => self.render_tiles(video, false),
@@ -702,6 +719,17 @@ impl GraphicsEditor {
                 stroke_rect(video, x + color * 24, y, 22, 20, UI_WHITE);
             }
         }
+        self.render_bank_buttons(video);
+    }
+
+    /// `<` and `>` step the palette bank from any view that draws through one.
+    fn render_bank_buttons(&self, video: &mut Video) {
+        let Some((x, y)) = bank_button_origin(self.view) else { return };
+        for (offset, label) in [(0, "<"), (26, ">")] {
+            fill_rect(video, x + offset, y, 22, 20, UI_BLACK);
+            stroke_rect(video, x + offset, y, 22, 20, UI_WHITE);
+            draw_text(video, x + offset + 7, y + 6, label, UI_WHITE);
+        }
     }
 
     fn render_map(&self, video: &mut Video) {
@@ -797,7 +825,7 @@ impl GraphicsEditor {
     fn render_bitmap(&self, video: &mut Video) {
         let origin = (PANE_LEFT + 4, PANE_TOP + 38);
         draw_group_box(video, PANE_LEFT + 2, PANE_TOP + 32, 326, 210, "320 X 200 BITMAP");
-        draw_group_box(video, PANE_LEFT + 332, PANE_TOP + 32, 136, 166, "BITMAP SETTINGS");
+        draw_group_box(video, PANE_LEFT + 332, PANE_TOP + 32, 136, 190, "BITMAP SETTINGS");
         for y in 0..200 {
             for x in 0..320 {
                 let color = self.bitmap_pixel(x, y);
@@ -813,7 +841,7 @@ impl GraphicsEditor {
             UI_WHITE,
         );
         draw_text(video, PANE_LEFT + 332, PANE_TOP + 58, "BM+BM+CHR", UI_GRAY);
-        draw_text(video, PANE_LEFT + 332, PANE_TOP + 72, ",/. BANK", UI_GRAY);
+        draw_text(video, PANE_LEFT + 332, PANE_TOP + 72, ",/. ROM BANK", UI_GRAY);
         for color in 0..16 {
             let index = usize::from(self.palette_bank) * 16 + color;
             fill_rect(
@@ -825,6 +853,14 @@ impl GraphicsEditor {
                 self.asset.palette[index],
             );
         }
+        draw_text(
+            video,
+            PANE_LEFT + 332,
+            PANE_TOP + 188,
+            &format!("PAL BANK {}", self.palette_bank),
+            UI_WHITE,
+        );
+        self.render_bank_buttons(video);
     }
 
     fn apply_at(&mut self, x: usize, y: usize) -> bool {
@@ -1193,7 +1229,7 @@ fn write_hex_line(output: &mut String, bytes: &[u8]) {
     output.push('\n');
 }
 
-fn draw_toolbar(video: &mut Video, view: GraphicsView, tool: GraphicsTool) {
+fn draw_toolbar(video: &mut Video, view: GraphicsView, tool: GraphicsTool, bitmap_asset: bool) {
     draw_text(
         video,
         PANE_LEFT + 4,
@@ -1202,14 +1238,18 @@ fn draw_toolbar(video: &mut Video, view: GraphicsView, tool: GraphicsTool) {
         UI_WHITE,
     );
     draw_text(video, PANE_LEFT + 4, PANE_TOP + 18, "P PENCIL  F FILL  I PICK", UI_GRAY);
-    let guide = match view {
-        GraphicsView::Tiles => "SHARED BY MAP+SPRITES",
-        GraphicsView::Map => "PLACE 8X8 PATTERNS",
-        GraphicsView::Sprite => "4-PATTERN COMPOSITE",
-        GraphicsView::Palette => "EDIT ONE 16-COLOR BANK",
-        GraphicsView::Bitmap => "FULL-SCREEN PIXELS",
-    };
-    draw_text(video, PANE_LEFT + 220, PANE_TOP + 18, guide, UI_GRAY);
+    // Map and Bitmap are the same slot, not two places to be. Name the mode the
+    // asset is actually in, and bar the tab that owns it, so opening the other
+    // one reads as changing the asset rather than changing the view.
+    draw_text(
+        video,
+        PANE_LEFT + 208,
+        PANE_TOP + 18,
+        if bitmap_asset { "BACKGROUND: BITMAP" } else { "BACKGROUND: TILEMAP" },
+        UI_WHITE,
+    );
+    let (mode_x, mode_width) = if bitmap_asset { (364, 64) } else { (92, 40) };
+    fill_rect(video, PANE_LEFT + mode_x, PANE_TOP + 14, mode_width, 2, UI_WHITE);
     let view_x = match view {
         GraphicsView::Tiles => 4,
         GraphicsView::Map => 92,
@@ -1292,6 +1332,28 @@ fn palette_swatch_at(x: usize, y: usize) -> Option<usize> {
 fn palette_strip_at(x: usize, y: usize, origin_x: usize, origin_y: usize) -> Option<usize> {
     let color = x.checked_sub(origin_x)? / 24;
     (color < 16 && (origin_y..origin_y + 20).contains(&y)).then_some(color)
+}
+
+/// Step for the `<` and `>` buttons that sit to the right of a palette strip.
+fn bank_button_at(x: usize, y: usize, origin_x: usize, origin_y: usize) -> Option<i16> {
+    if !(origin_y..origin_y + 20).contains(&y) {
+        return None;
+    }
+    match x.checked_sub(origin_x)? {
+        0..=21 => Some(-1),
+        26..=47 => Some(1),
+        _ => None,
+    }
+}
+
+/// Where the bank stepper lives in each view that shows a palette bank.
+fn bank_button_origin(view: GraphicsView) -> Option<(usize, usize)> {
+    match view {
+        GraphicsView::Tiles | GraphicsView::Sprite => Some((PANE_LEFT + 402, PANE_TOP + 318)),
+        GraphicsView::Map => Some((PANE_LEFT + 394, PANE_TOP + 278)),
+        GraphicsView::Bitmap => Some((PANE_LEFT + 336, PANE_TOP + 200)),
+        GraphicsView::Palette => None,
+    }
 }
 
 fn bitmap_palette_at(x: usize, y: usize) -> Option<usize> {
@@ -1525,6 +1587,29 @@ mod tests {
     }
 
     #[test]
+    fn the_toolbar_names_the_background_mode_the_asset_is_actually_in() {
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, 400);
+        let bar_row = PANE_TOP + 14;
+        let bar_at = |video: &Video, x: usize| video.pixels()[bar_row * EDITOR_DISPLAY_WIDTH + x];
+
+        // A tilemap asset bars the MAP tab, wherever you happen to be looking.
+        let tilemap = GraphicsEditor { view: GraphicsView::Tiles, ..GraphicsEditor::default() };
+        tilemap.render(&mut video);
+        assert_eq!(bar_at(&video, PANE_LEFT + 100), UI_WHITE, "MAP should carry the mode bar");
+        assert_ne!(bar_at(&video, PANE_LEFT + 380), UI_WHITE, "BITMAP should not");
+
+        // Choosing bitmap moves the bar, so the pair reads as one exclusive slot.
+        let bitmap = GraphicsEditor {
+            view: GraphicsView::Sprite,
+            bitmap_asset: true,
+            ..GraphicsEditor::default()
+        };
+        bitmap.render(&mut video);
+        assert_eq!(bar_at(&video, PANE_LEFT + 380), UI_WHITE, "BITMAP should carry the mode bar");
+        assert_ne!(bar_at(&video, PANE_LEFT + 100), UI_WHITE, "MAP should not");
+    }
+
+    #[test]
     fn editor_view_does_not_accidentally_change_bitmap_background_mode() {
         let mut editor = GraphicsEditor {
             bitmap_asset: true,
@@ -1555,6 +1640,42 @@ mod tests {
         editor.handle_mouse_press(PANE_LEFT + 160, PANE_TOP + 6);
         assert_eq!(editor.view, GraphicsView::Palette);
         assert!(editor.status().contains("SHARED PALETTE RESOURCE"));
+    }
+
+    #[test]
+    fn palette_bank_steppers_switch_banks_from_every_view_that_shows_one() {
+        for view in
+            [GraphicsView::Tiles, GraphicsView::Sprite, GraphicsView::Map, GraphicsView::Bitmap]
+        {
+            let mut editor = GraphicsEditor { view, ..GraphicsEditor::default() };
+            let (x, y) = bank_button_origin(view).expect("view shows a palette bank");
+            assert_eq!(editor.palette_bank, 0);
+
+            editor.handle_mouse_press(x + 30, y + 8);
+            assert_eq!(editor.palette_bank, 1, "{view:?} should step forward");
+            editor.handle_mouse_press(x + 4, y + 8);
+            assert_eq!(editor.palette_bank, 0, "{view:?} should step back");
+
+            // Both ends wrap across the 16 banks rather than sticking.
+            editor.handle_mouse_press(x + 4, y + 8);
+            assert_eq!(editor.palette_bank, 15, "{view:?} should wrap below zero");
+            editor.handle_mouse_press(x + 30, y + 8);
+            assert_eq!(editor.palette_bank, 0, "{view:?} should wrap past the last bank");
+
+            // Clicking a stepper only changes the bank; it never paints.
+            assert!(!editor.handle_mouse_press(x + 30, y + 8));
+            assert_eq!(editor.palette_bank, 1);
+        }
+
+        // The all-banks palette view has nothing to step through.
+        assert!(bank_button_origin(GraphicsView::Palette).is_none());
+
+        // Keyboard reaches the same control.
+        let mut editor = GraphicsEditor::default();
+        editor.handle_key(&Key::Character("]".into()), ModifiersState::empty());
+        assert_eq!(editor.palette_bank, 1);
+        editor.handle_key(&Key::Character("[".into()), ModifiersState::empty());
+        assert_eq!(editor.palette_bank, 0);
     }
 
     #[test]

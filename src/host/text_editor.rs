@@ -55,6 +55,10 @@ const UI_ERROR_BACKGROUND: u8 = 249;
 const UI_SUCCESS_BACKGROUND: u8 = 250;
 const UI_DEBUG_CURRENT_BACKGROUND: u8 = 251;
 const UI_BREAKPOINT_BACKGROUND: u8 = 252;
+const UI_CURRENT_LINE_BACKGROUND: u8 = 253;
+/// Frames the caret stays lit, then dark. Moving the caret restarts this phase
+/// so it is always solid at the moment it lands somewhere new.
+const CURSOR_BLINK_FRAMES: u32 = 30;
 const BUILD_PROGRESS_FRAMES: u8 = 8;
 const ABOUT_WIDTH: usize = 42;
 const ABOUT_HEIGHT: usize = 24;
@@ -328,6 +332,10 @@ pub struct TextEditor {
     /// Whether the register/memory/video detail panel covers the editor. Stopping
     /// at a breakpoint leaves this hidden so the caret stays in the source file.
     debug_panel_visible: bool,
+    /// Frames elapsed in the current caret blink phase, and the position that
+    /// phase belongs to, so any movement can restart it.
+    blink_frame: u32,
+    blink_cursor: Position,
     debug_address: u16,
     debug_selected: usize,
     debug_video_page: usize,
@@ -392,6 +400,8 @@ impl TextEditor {
             debug_symbols: BTreeMap::new(),
             debug_view: DebugView::State,
             debug_panel_visible: false,
+            blink_frame: 0,
+            blink_cursor: Position::default(),
             debug_address: 0,
             debug_selected: 0,
             debug_video_page: 0,
@@ -839,7 +849,19 @@ impl TextEditor {
         }
     }
 
+    /// Whether the caret is lit this frame. Restarting the phase on movement keeps
+    /// the caret solid while arrowing or typing instead of blinking out mid-motion.
+    pub fn cursor_blink_visible(&self) -> bool {
+        (self.blink_frame / CURSOR_BLINK_FRAMES).is_multiple_of(2)
+    }
+
     pub fn update(&mut self) -> EditorAction {
+        if self.cursor == self.blink_cursor {
+            self.blink_frame = self.blink_frame.wrapping_add(1);
+        } else {
+            self.blink_cursor = self.cursor;
+            self.blink_frame = 0;
+        }
         if self.music_status.is_some() {
             self.music_marquee_frame += 1;
             if self.music_marquee_frame >= 20 {
@@ -2464,9 +2486,17 @@ impl TextEditor {
         debug_assert_eq!(video.dimensions(), (EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT));
         let colors = self.colors.get();
         let assembly_mode = self.assembly_mode();
-        configure_ui_palette(video);
-        if assembly_mode {
-            configure_assembly_palette(video);
+        // The graphics editor paints raw RGB332 asset data, which is only correct
+        // under the identity palette. Chrome therefore gives up its remapped
+        // entries and its gradient shading for as long as that view is open.
+        let graphics_resource = self.graphics_active() && !self.graphics_source_active();
+        if graphics_resource {
+            video.reset_palette();
+        } else {
+            configure_ui_palette(video);
+            if assembly_mode {
+                configure_assembly_palette(video);
+            }
         }
         let background = if assembly_mode { 0 } else { colors.background };
         let foreground = if assembly_mode { ASM_TEXT_COLOR } else { colors.foreground };
@@ -2543,6 +2573,13 @@ impl TextEditor {
                     if executing && breakpoint {
                         backgrounds[start] = UI_BREAKPOINT_BACKGROUND;
                     }
+                } else if line_index == self.cursor.line && !self.debug_read_only() {
+                    // Editable buffers mark the caret's line; the debugger's own
+                    // blue and red rows above always win when a session is live.
+                    let start = row * COLUMNS + EDITOR_START;
+                    let end = row * COLUMNS + COLUMNS;
+                    backgrounds[start..end].fill(UI_CURRENT_LINE_BACKGROUND);
+                    background_gradients[start..end].fill(true);
                 }
             }
         }
@@ -2604,6 +2641,19 @@ impl TextEditor {
             &mut inverse,
             CellStyle { foreground: UI_WHITE_COLOR, background },
         );
+        let style = if graphics_resource {
+            // Chrome indexes now mean their own RGB332 colors, so swap in the
+            // nearest true-RGB332 equivalents before anything is drawn.
+            for color in foregrounds.iter_mut().chain(backgrounds.iter_mut()) {
+                *color = identity_chrome_color(*color);
+            }
+            CellStyle {
+                foreground: identity_chrome_color(foreground),
+                background: identity_chrome_color(background),
+            }
+        } else {
+            CellStyle { foreground, background }
+        };
         render_cells(
             video,
             &cells,
@@ -2611,10 +2661,11 @@ impl TextEditor {
             &backgrounds,
             &inverse,
             &background_gradients,
-            CellStyle { foreground, background },
+            style,
+            !graphics_resource,
         );
 
-        let native_resource = (self.graphics_active() && !self.graphics_source_active())
+        let native_resource = graphics_resource
             || (self.music_active() && !self.music_source_active());
         if native_resource {
             if self.graphics_active() {
@@ -2634,6 +2685,9 @@ impl TextEditor {
                     &mut mask_inverse,
                     CellStyle { foreground: UI_WHITE_COLOR, background },
                 );
+                // The mask arrays are coverage sentinels rather than colors, so
+                // they keep their u8::MAX markers; the real colors were already
+                // remapped above and are what this actually draws.
                 render_masked_cells(
                     video,
                     &cells,
@@ -2645,7 +2699,8 @@ impl TextEditor {
                     &mask_foregrounds,
                     &mask_backgrounds,
                     &mask_inverse,
-                    CellStyle { foreground, background },
+                    style,
+                    !graphics_resource,
                 );
             }
         }
@@ -4813,16 +4868,24 @@ fn render_cells(
     inverse: &[bool],
     background_gradients: &[bool],
     style: CellStyle,
+    shade_text: bool,
 ) {
     let CellStyle { foreground, background } = style;
-    let gradient = configure_text_gradient(
-        video,
-        foregrounds
-            .iter()
-            .copied()
-            .chain(backgrounds.iter().copied())
-            .chain([foreground, background]),
-    );
+    // Shading claims spare palette entries for its per-scanline levels. Tools
+    // that draw raw RGB332 data need every entry to keep its own color, so they
+    // render flat instead of letting the gradient reassign indexes underneath.
+    let gradient = if shade_text {
+        configure_text_gradient(
+            video,
+            foregrounds
+                .iter()
+                .copied()
+                .chain(backgrounds.iter().copied())
+                .chain([foreground, background]),
+        )
+    } else {
+        core::array::from_fn(|index| [index as u8; GLYPH_HEIGHT])
+    };
     let pixels = video.pixels_mut();
     pixels.fill(background);
     for cell_y in 0..ROWS {
@@ -4879,16 +4942,21 @@ fn render_masked_cells(
     mask_backgrounds: &[u8],
     mask_inverse: &[bool],
     style: CellStyle,
+    shade_text: bool,
 ) {
     let CellStyle { foreground, background } = style;
-    let gradient = configure_text_gradient(
-        video,
-        foregrounds
-            .iter()
-            .copied()
-            .chain(backgrounds.iter().copied())
-            .chain([foreground, background]),
-    );
+    let gradient = if shade_text {
+        configure_text_gradient(
+            video,
+            foregrounds
+                .iter()
+                .copied()
+                .chain(backgrounds.iter().copied())
+                .chain([foreground, background]),
+        )
+    } else {
+        core::array::from_fn(|index| [index as u8; GLYPH_HEIGHT])
+    };
     let pixels = video.pixels_mut();
     for cell_y in 0..ROWS {
         for cell_x in 0..COLUMNS {
@@ -5234,6 +5302,29 @@ fn search_preview(line: &str) -> String {
     line.trim().chars().take(48).collect()
 }
 
+/// Nearest true-RGB332 index for a chrome color that normally lives in a remapped
+/// palette entry. Used while the graphics editor holds the identity palette, so
+/// chrome keeps its intended color without reserving an entry from the artwork.
+const fn identity_chrome_color(color: u8) -> u8 {
+    match color {
+        UI_WHITE_COLOR => 0xff,
+        UI_ERROR_BACKGROUND => 0xa4,
+        UI_SUCCESS_BACKGROUND => 0x2a,
+        UI_DEBUG_CURRENT_BACKGROUND => 0x29,
+        UI_BREAKPOINT_BACKGROUND => 0x65,
+        UI_CURRENT_LINE_BACKGROUND => 0x25,
+        ASM_TEXT_COLOR => 0xdb,
+        ASM_LABEL_COLOR => 0xb7,
+        ASM_OPCODE_COLOR => 0x97,
+        ASM_DIRECTIVE_COLOR => 0xd7,
+        ASM_NUMBER_COLOR => 0xf6,
+        ASM_COMMENT_COLOR => 0x72,
+        ASM_STRING_COLOR => 0xba,
+        ASM_ERROR_COLOR => 0xf2,
+        other => other,
+    }
+}
+
 fn configure_ui_palette(video: &mut Video) {
     video.set_palette(UI_WHITE_COLOR, [255, 255, 255, 255]);
     video.set_palette(UI_ERROR_BACKGROUND, [192, 32, 40, 255]);
@@ -5242,6 +5333,9 @@ fn configure_ui_palette(video: &mut Video) {
     // two backgrounds receive the same per-scanline vertical shading as glyphs.
     video.set_palette(UI_DEBUG_CURRENT_BACKGROUND, [48, 70, 108, 255]);
     video.set_palette(UI_BREAKPOINT_BACKGROUND, [112, 52, 67, 255]);
+    // Dark gray caret line: visible against true black without competing with
+    // the syntax colors or the debugger's blue and red rows.
+    video.set_palette(UI_CURRENT_LINE_BACKGROUND, [38, 40, 52, 255]);
 }
 
 fn configure_assembly_palette(video: &mut Video) {
@@ -6233,6 +6327,83 @@ mod tests {
     }
 
     #[test]
+    fn caret_blink_restarts_whenever_the_cursor_moves() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("main.asm", " NOP\n RTS").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+
+        assert!(editor.cursor_blink_visible());
+        for _ in 0..CURSOR_BLINK_FRAMES {
+            editor.update();
+        }
+        assert!(!editor.cursor_blink_visible(), "the caret should have blinked dark by now");
+
+        // Arrowing to a new line restarts the phase so the caret is lit on arrival.
+        editor.handle_key(
+            &Key::Named(NamedKey::ArrowDown),
+            PhysicalKey::Code(KeyCode::ArrowDown),
+            ModifiersState::empty(),
+        );
+        editor.update();
+        assert_eq!(editor.cursor.line, 1);
+        assert!(editor.cursor_blink_visible());
+
+        // Typing moves the caret too, and restarts the phase the same way.
+        for _ in 0..CURSOR_BLINK_FRAMES {
+            editor.update();
+        }
+        assert!(!editor.cursor_blink_visible());
+        editor.handle_key(
+            &Key::Character("A".into()),
+            PhysicalKey::Code(KeyCode::KeyA),
+            ModifiersState::empty(),
+        );
+        editor.update();
+        assert!(editor.cursor_blink_visible());
+    }
+
+    #[test]
+    fn caret_line_is_shaded_only_while_the_buffer_is_editable() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("main.asm", " NOP\n RTS").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+
+        let row_has = |video: &Video, row: usize, color: u8| {
+            (0..GLYPH_HEIGHT).any(|glyph_y| {
+                let start = (row * GLYPH_HEIGHT + glyph_y) * EDITOR_DISPLAY_WIDTH;
+                video.pixels()[start + EDITOR_START * GLYPH_WIDTH..start + EDITOR_DISPLAY_WIDTH]
+                    .contains(&color)
+            })
+        };
+
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut video, false);
+        assert!(row_has(&video, EDITOR_FIRST_ROW, UI_CURRENT_LINE_BACKGROUND));
+        assert!(!row_has(&video, EDITOR_FIRST_ROW + 1, UI_CURRENT_LINE_BACKGROUND));
+        assert_ne!(video.palette()[UI_CURRENT_LINE_BACKGROUND as usize], [0, 0, 0, 255]);
+
+        // Following the caret keeps the shade on whichever line it lands on.
+        editor.handle_key(
+            &Key::Named(NamedKey::ArrowDown),
+            PhysicalKey::Code(KeyCode::ArrowDown),
+            ModifiersState::empty(),
+        );
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut video, false);
+        assert!(!row_has(&video, EDITOR_FIRST_ROW, UI_CURRENT_LINE_BACKGROUND));
+        assert!(row_has(&video, EDITOR_FIRST_ROW + 1, UI_CURRENT_LINE_BACKGROUND));
+
+        // A live session makes the buffer read-only, so the editable shade goes away.
+        editor.debug_active = true;
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut video, false);
+        assert!(!row_has(&video, EDITOR_FIRST_ROW, UI_CURRENT_LINE_BACKGROUND));
+        assert!(!row_has(&video, EDITOR_FIRST_ROW + 1, UI_CURRENT_LINE_BACKGROUND));
+    }
+
+    #[test]
     fn breakpoints_stop_in_the_source_editor_and_the_detail_panel_is_opt_in() {
         use fanticon::{
             cartridge::Cartridge, debugger::Debugger, machine::BANK_SIZE, system::FanticonMachine,
@@ -6974,6 +7145,44 @@ mod tests {
         assert_eq!(editor.tabs.len(), 1);
         assert_eq!(filesystem.borrow().read_text("game.pal").unwrap(), "NOT A PALETTE");
         assert!(matches!(editor.overlay, Overlay::Message { .. }));
+    }
+
+    #[test]
+    fn graphics_views_keep_the_identity_palette_so_asset_colors_are_exact() {
+        let filesystem = shared_filesystem();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.new_graphics_document();
+        assert!(editor.graphics_active() && !editor.graphics_source_active());
+
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        // Simulate arriving from a text tab, which leaves chrome entries remapped
+        // and gradient shades scattered through the low indexes.
+        configure_ui_palette(&mut video);
+        configure_assembly_palette(&mut video);
+        video.set_palette(0x25, [1, 2, 3, 255]);
+        editor.render(&mut video, false);
+
+        // Every entry must expand to the color its own RGB332 bits describe,
+        // otherwise raw asset bytes paint the wrong colors.
+        for index in 0..256 {
+            assert_eq!(
+                video.palette()[index],
+                fanticon::video::rgb332_to_rgba(index as u8),
+                "palette entry {index:02X} was remapped out from under the artwork"
+            );
+        }
+
+        // Chrome still renders: it swaps to true-RGB332 equivalents instead of
+        // claiming entries, so the shared white is the real white.
+        assert_eq!(identity_chrome_color(UI_WHITE_COLOR), 0xff);
+        assert_eq!(identity_chrome_color(0x25), 0x25, "asset colors pass through untouched");
+        assert!(video.pixels().contains(&0xff));
+
+        // Switching to the ASCII source view hands the remapped chrome back.
+        editor.toggle_graphics_source_view();
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut video, false);
+        assert_eq!(video.palette()[UI_WHITE_COLOR as usize], [255, 255, 255, 255]);
     }
 
     #[test]

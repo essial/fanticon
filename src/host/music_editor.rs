@@ -19,6 +19,10 @@ const GRAD_WHITE: u8 = 200;
 const PLAYING_BG: u8 = 208;
 const SELECT_BG: u8 = 209;
 const METER_BACKGROUNDS: [u8; VOICES] = [210, 211, 212, 213];
+/// Alternating tint and boundary rule that make each pattern region in the
+/// concatenated row list readable as its own block.
+const REGION_BG: u8 = 214;
+const REGION_RULE: u8 = 215;
 const CHANNEL_GRADIENTS: [u8; VOICES] = [GRAD_P1, GRAD_P2, GRAD_TRI, GRAD_NOISE];
 const CPU_CLOCK_HZ: f64 = 1_789_773.0;
 const NOTE_LEGATO: u8 = 0x80;
@@ -1430,17 +1434,27 @@ impl MusicEditor {
             }
             let y = PANE_TOP + (6 + screen_row) * GLYPH_HEIGHT;
             let playing = self.playback_row == Some(row);
-            if playing {
-                fill(
+            let row_width = EDITOR_DISPLAY_WIDTH - PANE_LEFT - 10;
+            // Rows are one flat list, so shade alternate pattern regions and rule
+            // off each boundary to show where one frame's patterns end.
+            let region = row / self.song.pattern_rows;
+            let region_start = row.is_multiple_of(self.song.pattern_rows);
+            let background = match (playing, region.is_multiple_of(2)) {
+                (true, _) => PLAYING_BG,
+                (false, true) => UI_BLACK,
+                (false, false) => REGION_BG,
+            };
+            fill(video, PANE_LEFT + 1, y, row_width, GLYPH_HEIGHT, background);
+            if region_start {
+                text(
                     video,
-                    PANE_LEFT + 1,
+                    PANE_LEFT + 51 * GLYPH_WIDTH,
                     y,
-                    EDITOR_DISPLAY_WIDTH - PANE_LEFT - 10,
-                    GLYPH_HEIGHT,
-                    PLAYING_BG,
+                    &format!("F{region:02X}"),
+                    GRAD_WHITE,
+                    background,
                 );
             }
-            let background = if playing { PLAYING_BG } else { UI_BLACK };
             text(
                 video,
                 PANE_LEFT + GLYPH_WIDTH,
@@ -1468,6 +1482,10 @@ impl MusicEditor {
                     fg,
                     bg,
                 );
+            }
+            // Drawn last: the glyph cells above would otherwise paint over it.
+            if region_start {
+                fill(video, PANE_LEFT + 1, y, row_width, 1, REGION_RULE);
             }
         }
         text(
@@ -1874,6 +1892,10 @@ fn configure_palette(video: &mut Video) {
     }
     video.set_palette(PLAYING_BG, [30, 55, 92, 255]);
     video.set_palette(SELECT_BG, [49, 50, 68, 255]);
+    // Every other pattern region gets a faint lift off black, and each region
+    // starts on a bright rule, so block boundaries read at a glance.
+    video.set_palette(REGION_BG, [22, 23, 32, 255]);
+    video.set_palette(REGION_RULE, [116, 125, 161, 255]);
     for (index, color) in
         [[61, 48, 58], [51, 42, 62], [42, 57, 40], [62, 56, 44]].into_iter().enumerate()
     {
@@ -2182,6 +2204,37 @@ mod tests {
             editor.song.step(0, 0).volume,
             if volume == 0xff { 15 } else { volume.saturating_add(1).min(15) }
         );
+    }
+
+    #[test]
+    fn pattern_regions_are_marked_by_alternating_shade_and_boundary_rules() {
+        let source = include_str!("../../code-assets/demos/music/song.mus");
+        let editor = MusicEditor::parse(source).unwrap();
+        assert_eq!(editor.song.pattern_rows, 16);
+        assert!(editor.song.frames.len() > 1, "needs several regions to tell them apart");
+
+        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, 400);
+        editor.render(&mut video);
+        let row_y = |row: usize| PANE_TOP + (6 + row) * GLYPH_HEIGHT;
+        // Sample clear of the glyph columns so only the row background is read.
+        let x = EDITOR_DISPLAY_WIDTH - 12;
+        let at = |x: usize, y: usize| video.pixels()[y * EDITOR_DISPLAY_WIDTH + x];
+
+        // Regions alternate: the first sits on black, the second is lifted off it.
+        assert_eq!(at(x, row_y(0) + GLYPH_HEIGHT / 2), UI_BLACK);
+        assert_eq!(at(x, row_y(16) + GLYPH_HEIGHT / 2), REGION_BG);
+        assert_eq!(at(x, row_y(31) + GLYPH_HEIGHT / 2), REGION_BG);
+
+        // Each region opens on a rule, and rows inside one never draw it.
+        assert_eq!(at(x, row_y(0)), REGION_RULE);
+        assert_eq!(at(x, row_y(16)), REGION_RULE);
+        assert_ne!(at(x, row_y(8)), REGION_RULE);
+        assert_ne!(at(x, row_y(17)), REGION_RULE);
+
+        // The boundary row is labelled with the frame that starts there.
+        assert!(video.pixels().contains(&GRAD_WHITE));
+        assert_ne!(video.palette()[REGION_BG as usize], video.palette()[UI_BLACK as usize]);
+        assert_ne!(video.palette()[REGION_RULE as usize], video.palette()[REGION_BG as usize]);
     }
 
     #[test]

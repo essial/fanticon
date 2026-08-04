@@ -391,6 +391,8 @@ impl FanticonApp {
                 self.start_game(launch, true);
                 return;
             }
+            // The editor owns its blink phase so it can restart on caret movement.
+            let cursor_visible = editor.cursor_blink_visible();
             editor.render(&mut self.video, cursor_visible);
         } else {
             self.terminal.render(&mut self.video, cursor_visible);

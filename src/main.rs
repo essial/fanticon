@@ -281,16 +281,19 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Present whatever the frame actually drew into. This has to match
+                // the branch in emulate_frame exactly: a game stopped at a
+                // breakpoint still exists, but the editor is what is on screen and
+                // drawing, so the surface is the live target. Both are settled
+                // before the renderer is borrowed.
+                let splash = self.boot_splash.is_active(Instant::now());
+                let editor_surface =
+                    self.text_editor.is_some() && !splash && !self.game_running();
+                let editor_presentation = !splash
+                    && (editor_surface
+                        || self.video.dimensions()
+                            == (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT));
                 if let Some(renderer) = &mut self.renderer {
-                    let splash = self.boot_splash.is_active(Instant::now());
-                    // The editor is host software drawing in true color; the
-                    // console resolves its own indexed pixels through the
-                    // cartridge palette.
-                    let editor_surface = self.text_editor.is_some() && !splash && self.game.is_none();
-                    let editor_presentation = !splash
-                        && (editor_surface
-                            || self.video.dimensions()
-                                == (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT));
                     let status = if editor_surface {
                         renderer.render_surface(&self.editor_surface, editor_presentation)
                     } else {

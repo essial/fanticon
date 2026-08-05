@@ -3,12 +3,17 @@
 ; Built by CI with:
 ;   makensis /DVERSION=1.2.3 packaging\windows\fanticon.nsi
 ;
-; Expects a "nsis-payload" directory in the current working directory
-; (created by the release workflow) containing:
+; Expects a "nsis-payload" directory at the repository root (created by the
+; release workflow) containing:
 ;   fanticon-app.exe
 ;   README.md
 ;   demos\...
 ;   branding\...
+;
+; NSIS resolves File/Icon source paths relative to this .nsi script's own
+; directory (packaging\windows), not the working directory makensis was
+; invoked from -- so every relative path below walks back up to the repo
+; root with "..\..\" first.
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -23,8 +28,8 @@ SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
 
-!define MUI_ICON "assets\branding\fanticon.ico"
-!define MUI_UNICON "assets\branding\fanticon.ico"
+!define MUI_ICON "..\..\assets\branding\fanticon.ico"
+!define MUI_UNICON "..\..\assets\branding\fanticon.ico"
 !define MUI_ABORTWARNING
 
 !insertmacro MUI_PAGE_WELCOME
@@ -39,12 +44,12 @@ SetCompressor /SOLID lzma
 
 Section "Fanticon" SEC_APP
   SetOutPath "$INSTDIR"
-  File "nsis-payload\fanticon-app.exe"
-  File "nsis-payload\README.md"
+  File "..\..\nsis-payload\fanticon-app.exe"
+  File "..\..\nsis-payload\README.md"
   SetOutPath "$INSTDIR\demos"
-  File /r "nsis-payload\demos\*.*"
+  File /r "..\..\nsis-payload\demos\*.*"
   SetOutPath "$INSTDIR\branding"
-  File /r "nsis-payload\branding\*.*"
+  File /r "..\..\nsis-payload\branding\*.*"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr HKLM "Software\Fanticon" "InstallDir" "$INSTDIR"

@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --release --locked
+      - run: cargo build --profile dist --locked
 
       - name: Package portable zip
         shell: bash
@@ -24,7 +24,7 @@ jobs:
           version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
           stage="fanticon-${version}-windows-x86_64"
           mkdir -p "$stage"
-          cp target/release/fanticon-app.exe "$stage/"
+          cp target/dist/fanticon-app.exe "$stage/"
           cp -r code-assets/demos "$stage/demos"
           cp -r assets/branding "$stage/branding"
           cp README.md "$stage/"
@@ -41,7 +41,7 @@ jobs:
           choco install nsis -y --no-progress | Out-Null
           Remove-Item -Recurse -Force nsis-payload -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path nsis-payload/demos, nsis-payload/branding | Out-Null
-          Copy-Item target/release/fanticon-app.exe nsis-payload/
+          Copy-Item target/dist/fanticon-app.exe nsis-payload/
           Copy-Item README.md nsis-payload/
           Copy-Item -Recurse code-assets/demos/* nsis-payload/demos/
           Copy-Item -Recurse assets/branding/* nsis-payload/branding/
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
-      - run: cargo build --release --locked
+      - run: cargo build --profile dist --locked
 
       - name: Package portable tarball
         run: |
@@ -65,7 +65,7 @@ jobs:
           version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
           stage="fanticon-${version}-linux-x86_64"
           mkdir -p "$stage"
-          cp target/release/fanticon-app "$stage/"
+          cp target/dist/fanticon-app "$stage/"
           chmod +x "$stage/fanticon-app"
           cp -r code-assets/demos "$stage/demos"
           cp -r assets/branding "$stage/branding"
@@ -86,7 +86,7 @@ jobs:
             "$pkgroot/usr/share/fanticon/demos" "$pkgroot/usr/share/fanticon/branding" \
             "$pkgroot/usr/share/doc/fanticon" "$pkgroot/usr/share/applications" \
             "$pkgroot/usr/share/icons/hicolor/256x256/apps"
-          install -m 755 target/release/fanticon-app "$pkgroot/usr/bin/fanticon-app"
+          install -m 755 target/dist/fanticon-app "$pkgroot/usr/bin/fanticon-app"
           cp -r code-assets/demos/. "$pkgroot/usr/share/fanticon/demos/"
           cp -r assets/branding/. "$pkgroot/usr/share/fanticon/branding/"
           cp README.md "$pkgroot/usr/share/doc/fanticon/"
@@ -106,16 +106,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - run: cargo build --release --locked --target aarch64-apple-darwin
-      - run: cargo build --release --locked --target x86_64-apple-darwin
+      - run: cargo build --profile dist --locked --target aarch64-apple-darwin
+      - run: cargo build --profile dist --locked --target x86_64-apple-darwin
 
       - name: Build universal binary
         run: |
           set -euo pipefail
           mkdir -p build
           lipo -create -output build/fanticon-app \
-            target/aarch64-apple-darwin/release/fanticon-app \
-            target/x86_64-apple-darwin/release/fanticon-app
+            target/aarch64-apple-darwin/dist/fanticon-app \
+            target/x86_64-apple-darwin/dist/fanticon-app
           chmod +x build/fanticon-app
 
       - name: Package portable zip

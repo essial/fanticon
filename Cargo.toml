@@ -70,4 +70,11 @@ harness = false
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Used for packaged builds only (see .github/workflows/release.yml). `panic =
+# "abort"` is incompatible with `cargo test`/`cargo bench --no-run`, which
+# both need unwinding to catch panics, so it can't live in [profile.release]
+# itself without breaking `cargo test --release` in CI.
+[profile.dist]
+inherits = "release"
 panic = "abort"

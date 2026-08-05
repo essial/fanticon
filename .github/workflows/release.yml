@@ -16,12 +16,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --release --locked
-      - name: Package
+
+      - name: Package portable zip
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          [ "${{ github.ref_type }}" = "tag" ] || version="dev"
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
           stage="fanticon-${version}-windows-x86_64"
           mkdir -p "$stage"
           cp target/release/fanticon-app.exe "$stage/"
@@ -34,6 +34,23 @@ jobs:
           name: windows-x86_64
           path: fanticon-*-windows-x86_64.zip
 
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          choco install nsis -y --no-progress | Out-Null
+          Remove-Item -Recurse -Force nsis-payload -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path nsis-payload/demos, nsis-payload/branding | Out-Null
+          Copy-Item target/release/fanticon-app.exe nsis-payload/
+          Copy-Item README.md nsis-payload/
+          Copy-Item -Recurse code-assets/demos/* nsis-payload/demos/
+          Copy-Item -Recurse assets/branding/* nsis-payload/branding/
+          & "C:\Program Files (x86)\NSIS\makensis.exe" "/DVERSION=$version" packaging\windows\fanticon.nsi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: Fanticon-Setup-*.exe
+
   linux:
     runs-on: ubuntu-latest
     steps:
@@ -41,11 +58,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
       - run: cargo build --release --locked
-      - name: Package
+
+      - name: Package portable tarball
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          [ "${{ github.ref_type }}" = "tag" ] || version="dev"
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
           stage="fanticon-${version}-linux-x86_64"
           mkdir -p "$stage"
           cp target/release/fanticon-app "$stage/"
@@ -59,6 +76,27 @@ jobs:
           name: linux-x86_64
           path: fanticon-*-linux-x86_64.tar.gz
 
+      - name: Build .deb package
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          pkgroot="deb-root"
+          rm -rf "$pkgroot"
+          mkdir -p "$pkgroot/DEBIAN" "$pkgroot/usr/bin" \
+            "$pkgroot/usr/share/fanticon/demos" "$pkgroot/usr/share/fanticon/branding" \
+            "$pkgroot/usr/share/doc/fanticon" "$pkgroot/usr/share/applications"
+          install -m 755 target/release/fanticon-app "$pkgroot/usr/bin/fanticon-app"
+          cp -r code-assets/demos/. "$pkgroot/usr/share/fanticon/demos/"
+          cp -r assets/branding/. "$pkgroot/usr/share/fanticon/branding/"
+          cp README.md "$pkgroot/usr/share/doc/fanticon/"
+          cp packaging/linux/fanticon.desktop "$pkgroot/usr/share/applications/fanticon.desktop"
+          sed "s/__VERSION__/${version}/" packaging/linux/control.template > "$pkgroot/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$pkgroot" "fanticon_${version}_amd64.deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-installer
+          path: fanticon_*_amd64.deb
+
   macos:
     runs-on: macos-latest
     steps:
@@ -68,17 +106,23 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - run: cargo build --release --locked --target aarch64-apple-darwin
       - run: cargo build --release --locked --target x86_64-apple-darwin
-      - name: Package universal binary
+
+      - name: Build universal binary
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          [ "${{ github.ref_type }}" = "tag" ] || version="dev"
-          stage="fanticon-${version}-macos-universal"
-          mkdir -p "$stage"
-          lipo -create -output "$stage/fanticon-app" \
+          mkdir -p build
+          lipo -create -output build/fanticon-app \
             target/aarch64-apple-darwin/release/fanticon-app \
             target/x86_64-apple-darwin/release/fanticon-app
-          chmod +x "$stage/fanticon-app"
+          chmod +x build/fanticon-app
+
+      - name: Package portable zip
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          stage="fanticon-${version}-macos-universal"
+          mkdir -p "$stage"
+          cp build/fanticon-app "$stage/"
           cp -r code-assets/demos "$stage/demos"
           cp -r assets/branding "$stage/branding"
           cp README.md "$stage/"
@@ -87,6 +131,26 @@ jobs:
         with:
           name: macos-universal
           path: fanticon-*-macos-universal.zip
+
+      - name: Build .app bundle and DMG
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          app="Fanticon.app"
+          rm -rf "$app" dmg-root
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp build/fanticon-app "$app/Contents/MacOS/fanticon-app"
+          chmod +x "$app/Contents/MacOS/fanticon-app"
+          sed "s/__VERSION__/${version}/" packaging/macos/Info.plist.template > "$app/Contents/Info.plist"
+          mkdir -p dmg-root
+          cp -R "$app" dmg-root/
+          cp -r code-assets/demos dmg-root/Demos
+          ln -s /Applications dmg-root/Applications
+          hdiutil create -volname "Fanticon" -srcfolder dmg-root -ov -format UDZO "fanticon-${version}-macos.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: fanticon-*-macos.dmg
 
   release:
     if: github.ref_type == 'tag'
@@ -105,8 +169,11 @@ jobs:
           set -euo pipefail
           gh release create "${{ github.ref_name }}" \
             dist/windows-x86_64/*.zip \
+            dist/windows-installer/*.exe \
             dist/linux-x86_64/*.tar.gz \
+            dist/linux-installer/*.deb \
             dist/macos-universal/*.zip \
+            dist/macos-installer/*.dmg \
             --repo "${{ github.repository }}" \
             --title "Fanticon ${{ github.ref_name }}" \
             --generate-notes

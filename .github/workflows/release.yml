@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [ "${{ github.ref_type }}" = "tag" ] || version="dev"
+          stage="fanticon-${version}-windows-x86_64"
+          mkdir -p "$stage"
+          cp target/release/fanticon-app.exe "$stage/"
+          cp -r code-assets/demos "$stage/demos"
+          cp -r assets/branding "$stage/branding"
+          cp README.md "$stage/"
+          7z a "${stage}.zip" "$stage" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: fanticon-*-windows-x86_64.zip
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      - run: cargo build --release --locked
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [ "${{ github.ref_type }}" = "tag" ] || version="dev"
+          stage="fanticon-${version}-linux-x86_64"
+          mkdir -p "$stage"
+          cp target/release/fanticon-app "$stage/"
+          chmod +x "$stage/fanticon-app"
+          cp -r code-assets/demos "$stage/demos"
+          cp -r assets/branding "$stage/branding"
+          cp README.md "$stage/"
+          tar -czf "${stage}.tar.gz" "$stage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: fanticon-*-linux-x86_64.tar.gz
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: cargo build --release --locked --target aarch64-apple-darwin
+      - run: cargo build --release --locked --target x86_64-apple-darwin
+      - name: Package universal binary
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [ "${{ github.ref_type }}" = "tag" ] || version="dev"
+          stage="fanticon-${version}-macos-universal"
+          mkdir -p "$stage"
+          lipo -create -output "$stage/fanticon-app" \
+            target/aarch64-apple-darwin/release/fanticon-app \
+            target/x86_64-apple-darwin/release/fanticon-app
+          chmod +x "$stage/fanticon-app"
+          cp -r code-assets/demos "$stage/demos"
+          cp -r assets/branding "$stage/branding"
+          cp README.md "$stage/"
+          zip -r "${stage}.zip" "$stage" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: fanticon-*-macos-universal.zip
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ github.ref_name }}" \
+            dist/windows-x86_64/*.zip \
+            dist/linux-x86_64/*.tar.gz \
+            dist/macos-universal/*.zip \
+            --repo "${{ github.repository }}" \
+            --title "Fanticon ${{ github.ref_name }}" \
+            --generate-notes

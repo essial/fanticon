@@ -1,4 +1,4 @@
-use fanticon::video::{Video, rgb332_to_rgba};
+use fanticon::video::Video;
 
 pub const GLYPH_WIDTH: usize = 8;
 pub const GLYPH_HEIGHT: usize = 8;
@@ -82,54 +82,6 @@ pub fn configure_text_gradient(
         }
     }
     gradient
-}
-
-/// Approximate the same top-to-bottom shading as [`configure_text_gradient`]
-/// without claiming any palette entries. Each scanline below the first is
-/// darkened by the same fraction the palette-backed gradient uses, then
-/// matched to its nearest already-existing RGB332 byte. Tools that hold the
-/// identity palette (the graphics editor's canvas view) need every one of the
-/// 256 indexes to keep meaning its own color, so this reuses bytes that are
-/// already the right shade instead of reassigning any of them.
-pub fn identity_text_gradient(colors: impl IntoIterator<Item = u8>) -> TextGradient {
-    let mut gradient = core::array::from_fn(|index| [index as u8; GLYPH_HEIGHT]);
-    let mut seen = [false; 256];
-    for color in colors {
-        if seen[color as usize] {
-            continue;
-        }
-        seen[color as usize] = true;
-        let base = rgb332_to_rgba(color);
-        let denominator = (GLYPH_HEIGHT * 2 - 2) as u16;
-        for (step, gradient_step) in gradient[color as usize].iter_mut().enumerate().skip(1) {
-            let numerator = denominator - step as u16;
-            let target = [
-                (u16::from(base[0]) * numerator / denominator) as u8,
-                (u16::from(base[1]) * numerator / denominator) as u8,
-                (u16::from(base[2]) * numerator / denominator) as u8,
-            ];
-            *gradient_step = nearest_rgb332_byte(target);
-        }
-    }
-    gradient
-}
-
-/// Nearest RGB332 byte to a target color, by squared channel distance.
-fn nearest_rgb332_byte(target: [u8; 3]) -> u8 {
-    let mut best = 0u8;
-    let mut best_distance = u32::MAX;
-    for candidate in 0..=255u8 {
-        let rgba = rgb332_to_rgba(candidate);
-        let dr = i32::from(rgba[0]) - i32::from(target[0]);
-        let dg = i32::from(rgba[1]) - i32::from(target[1]);
-        let db = i32::from(rgba[2]) - i32::from(target[2]);
-        let distance = (dr * dr + dg * dg + db * db) as u32;
-        if distance < best_distance {
-            best_distance = distance;
-            best = candidate;
-        }
-    }
-    best
 }
 
 pub fn gradient_color(gradient: &TextGradient, color: u8, glyph_y: usize) -> u8 {

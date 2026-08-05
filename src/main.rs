@@ -12,8 +12,8 @@ use fanticon::{
 };
 use host::{
     AppMode, AudioOutput, BootSplash, DebugCommand, EditorAction, FramePacer, FrameStatus,
-    GamepadInput, MusicCommand, MusicRadio, Renderer, Terminal, TerminalAction, TextEditor,
-    draw_boot_logo,
+    GamepadInput, MusicCommand, MusicRadio, Renderer, Surface, Terminal, TerminalAction,
+    TextEditor, draw_boot_logo,
 };
 use web_time::Instant;
 use winit::{
@@ -34,6 +34,9 @@ struct FanticonApp {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     video: Video,
+    /// True-color surface for the host's own interface, kept separate from the
+    /// console's indexed output so chrome never competes for cartridge colors.
+    editor_surface: Surface,
     frame_pacer: FramePacer,
     frame_number: u64,
     boot_splash: BootSplash,
@@ -83,6 +86,10 @@ impl FanticonApp {
             window: None,
             renderer: None,
             video,
+            editor_surface: Surface::new(
+                host::EDITOR_DISPLAY_WIDTH,
+                host::EDITOR_DISPLAY_HEIGHT,
+            ),
             frame_pacer: FramePacer::new(now),
             frame_number: 0,
             boot_splash: BootSplash::new(now),
@@ -275,10 +282,21 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
             }
             WindowEvent::RedrawRequested => {
                 if let Some(renderer) = &mut self.renderer {
-                    let editor_presentation = !self.boot_splash.is_active(Instant::now())
-                        && self.video.dimensions()
-                            == (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT);
-                    match renderer.render(&mut self.video, editor_presentation) {
+                    let splash = self.boot_splash.is_active(Instant::now());
+                    // The editor is host software drawing in true color; the
+                    // console resolves its own indexed pixels through the
+                    // cartridge palette.
+                    let editor_surface = self.text_editor.is_some() && !splash && self.game.is_none();
+                    let editor_presentation = !splash
+                        && (editor_surface
+                            || self.video.dimensions()
+                                == (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT));
+                    let status = if editor_surface {
+                        renderer.render_surface(&self.editor_surface, editor_presentation)
+                    } else {
+                        renderer.render(&mut self.video, editor_presentation)
+                    };
+                    match status {
                         FrameStatus::Presented | FrameStatus::Skip => {}
                         FrameStatus::Reconfigure => renderer.resize(window.inner_size()),
                     }
@@ -393,7 +411,8 @@ impl FanticonApp {
             }
             // The editor owns its blink phase so it can restart on caret movement.
             let cursor_visible = editor.cursor_blink_visible();
-            editor.render(&mut self.video, cursor_visible);
+            self.editor_surface.resize(dimensions.0, dimensions.1);
+            editor.render(&mut self.editor_surface, cursor_visible);
         } else {
             self.terminal.render(&mut self.video, cursor_visible);
         }

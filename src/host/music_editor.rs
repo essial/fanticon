@@ -1,7 +1,7 @@
-use fanticon::video::Video;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use super::EDITOR_DISPLAY_WIDTH;
+use super::surface::{Rgba, Surface};
 use super::character_rom::{CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH};
 
 const VOICES: usize = 4;
@@ -1299,41 +1299,41 @@ impl MusicEditor {
         (self.row, self.playback_row, self.scroll..self.scroll + VISIBLE_ROWS)
     }
 
-    pub fn render(&self, video: &mut Video) {
-        configure_palette(video);
-        button(video, 43, 0, " PLAY/STOP ", GRAD_WHITE);
+    pub fn render(&self, surface: &mut Surface) {
+        
+        button(surface, 43, 0, " PLAY/STOP ", GRAD_WHITE);
         button(
-            video,
+            surface,
             2,
             0,
             " PATTERN ",
             if self.view == View::Pattern { GRAD_WHITE } else { GRAD_CHROME },
         );
         button(
-            video,
+            surface,
             12,
             0,
             " FRAMES ",
             if self.view == View::Frames { GRAD_WHITE } else { GRAD_CHROME },
         );
         button(
-            video,
+            surface,
             21,
             0,
             " INSTRUMENT ",
             if self.view == View::Instrument { GRAD_WHITE } else { GRAD_CHROME },
         );
         match self.view {
-            View::Pattern => self.render_patterns(video),
-            View::Frames => self.render_frames(video),
-            View::Instrument => self.render_instrument(video),
+            View::Pattern => self.render_patterns(surface),
+            View::Frames => self.render_frames(surface),
+            View::Instrument => self.render_instrument(surface),
         }
     }
 
-    fn render_patterns(&self, video: &mut Video) {
+    fn render_patterns(&self, surface: &mut Surface) {
         let frame = self.row / self.song.pattern_rows;
         text(
-            video,
+            surface,
             PANE_LEFT + 2 * GLYPH_WIDTH,
             PANE_TOP + 3 * GLYPH_HEIGHT,
             &format!(
@@ -1348,30 +1348,30 @@ impl MusicEditor {
             GRAD_CHROME,
             UI_BLACK,
         );
-        button(video, 2, 4, " < ", GRAD_WHITE);
-        button(video, 6, 4, " > ", GRAD_WHITE);
+        button(surface, 2, 4, " < ", GRAD_WHITE);
+        button(surface, 6, 4, " > ", GRAD_WHITE);
         text(
-            video,
+            surface,
             PANE_LEFT + 11 * GLYPH_WIDTH,
             PANE_TOP + 4 * GLYPH_HEIGHT,
             "SPEED",
             GRAD_CHROME,
             UI_BLACK,
         );
-        button(video, 14, 4, " - ", GRAD_WHITE);
-        button(video, 18, 4, " + ", GRAD_WHITE);
+        button(surface, 14, 4, " - ", GRAD_WHITE);
+        button(surface, 18, 4, " + ", GRAD_WHITE);
         text(
-            video,
+            surface,
             PANE_LEFT + 23 * GLYPH_WIDTH,
             PANE_TOP + 4 * GLYPH_HEIGHT,
             "OCT",
             GRAD_CHROME,
             UI_BLACK,
         );
-        button(video, 27, 4, " - ", GRAD_WHITE);
-        button(video, 31, 4, " + ", GRAD_WHITE);
+        button(surface, 27, 4, " - ", GRAD_WHITE);
+        button(surface, 31, 4, " + ", GRAD_WHITE);
         text(
-            video,
+            surface,
             PANE_LEFT + GLYPH_WIDTH,
             PANE_TOP + 5 * GLYPH_HEIGHT,
             "ROW",
@@ -1380,7 +1380,7 @@ impl MusicEditor {
         );
         for (voice, label) in ["PULSE 1", "PULSE 2", "TRIANGLE", "NOISE"].into_iter().enumerate() {
             channel_meter_header(
-                video,
+                surface,
                 6 + voice * 11,
                 5,
                 10,
@@ -1394,35 +1394,35 @@ impl MusicEditor {
             .enumerate()
         {
             button(
-                video,
+                surface,
                 2 + semitone * 4,
                 43,
                 &format!("{label:^3}"),
                 CHANNEL_GRADIENTS[self.voice],
             );
         }
-        button(video, 2, 44, " OFF  ", GRAD_WHITE);
-        button(video, 10, 44, " HOLD  ", GRAD_WHITE);
+        button(surface, 2, 44, " OFF  ", GRAD_WHITE);
+        button(surface, 10, 44, " HOLD  ", GRAD_WHITE);
         text(
-            video,
+            surface,
             PANE_LEFT + 20 * GLYPH_WIDTH,
             PANE_TOP + 44 * GLYPH_HEIGHT,
             "INST",
             GRAD_CHROME,
             UI_BLACK,
         );
-        button(video, 25, 44, " - ", GRAD_WHITE);
-        button(video, 29, 44, " + ", GRAD_WHITE);
+        button(surface, 25, 44, " - ", GRAD_WHITE);
+        button(surface, 29, 44, " + ", GRAD_WHITE);
         text(
-            video,
+            surface,
             PANE_LEFT + 35 * GLYPH_WIDTH,
             PANE_TOP + 44 * GLYPH_HEIGHT,
             "VOL",
             GRAD_CHROME,
             UI_BLACK,
         );
-        button(video, 39, 44, " - ", GRAD_WHITE);
-        button(video, 43, 44, " + ", GRAD_WHITE);
+        button(surface, 39, 44, " - ", GRAD_WHITE);
+        button(surface, 43, 44, " + ", GRAD_WHITE);
         for screen_row in 0..VISIBLE_ROWS {
             let row = self.display_start() + screen_row as isize;
             if row < 0 {
@@ -1444,10 +1444,10 @@ impl MusicEditor {
                 (false, true) => UI_BLACK,
                 (false, false) => REGION_BG,
             };
-            fill(video, PANE_LEFT + 1, y, row_width, GLYPH_HEIGHT, background);
+            fill(surface, PANE_LEFT + 1, y, row_width, GLYPH_HEIGHT, background);
             if region_start {
                 text(
-                    video,
+                    surface,
                     PANE_LEFT + 51 * GLYPH_WIDTH,
                     y,
                     &format!("F{region:02X}"),
@@ -1456,7 +1456,7 @@ impl MusicEditor {
                 );
             }
             text(
-                video,
+                surface,
                 PANE_LEFT + GLYPH_WIDTH,
                 y,
                 &format!("{row:03X}"),
@@ -1470,7 +1470,7 @@ impl MusicEditor {
                 let bg = if selected { SELECT_BG } else { background };
                 let fg = if playing { GRAD_WHITE } else { channel_gradient };
                 text(
-                    video,
+                    surface,
                     x,
                     y,
                     &format!(
@@ -1486,11 +1486,11 @@ impl MusicEditor {
             // Drawn last: the glyph cells above would otherwise paint over it.
             // The playing row keeps its own highlight unbroken.
             if region_start && !playing {
-                fill(video, PANE_LEFT + 1, y, row_width, 1, REGION_RULE);
+                fill(surface, PANE_LEFT + 1, y, row_width, 1, REGION_RULE);
             }
         }
         text(
-            video,
+            surface,
             PANE_LEFT + 2 * GLYPH_WIDTH,
             PANE_TOP + 40 * GLYPH_HEIGHT,
             "NOTE  INST VOL   V=VIEW  [ ]=FRAME  +/-=SPEED",
@@ -1498,7 +1498,7 @@ impl MusicEditor {
             UI_BLACK,
         );
         text(
-            video,
+            surface,
             PANE_LEFT + 2 * GLYPH_WIDTH,
             PANE_TOP + 41 * GLYPH_HEIGHT,
             "SPACE PLAY/STOP  Z/X OCTAVE  DEL OFF  - HOLD",
@@ -1507,23 +1507,23 @@ impl MusicEditor {
         );
     }
 
-    fn render_frames(&self, video: &mut Video) {
-        button(video, 2, 3, " ADD ", GRAD_WHITE);
-        button(video, 8, 3, " DUP  ", GRAD_WHITE);
-        button(video, 15, 3, " DELETE ", GRAD_WHITE);
+    fn render_frames(&self, surface: &mut Surface) {
+        button(surface, 2, 3, " ADD ", GRAD_WHITE);
+        button(surface, 8, 3, " DUP  ", GRAD_WHITE);
+        button(surface, 15, 3, " DELETE ", GRAD_WHITE);
         text(
-            video,
+            surface,
             PANE_LEFT + 24 * GLYPH_WIDTH,
             PANE_TOP + 3 * GLYPH_HEIGHT,
             "PAT",
             GRAD_CHROME,
             UI_BLACK,
         );
-        button(video, 28, 3, " - ", GRAD_WHITE);
-        button(video, 32, 3, " + ", GRAD_WHITE);
-        button(video, 38, 3, " SET LOOP ", GRAD_WHITE);
+        button(surface, 28, 3, " - ", GRAD_WHITE);
+        button(surface, 32, 3, " + ", GRAD_WHITE);
+        button(surface, 38, 3, " SET LOOP ", GRAD_WHITE);
         text(
-            video,
+            surface,
             PANE_LEFT + 2 * GLYPH_WIDTH,
             PANE_TOP + 4 * GLYPH_HEIGHT,
             "ORDER",
@@ -1532,7 +1532,7 @@ impl MusicEditor {
         );
         for (voice, label) in ["PULSE 1", "PULSE 2", "TRIANGLE", "NOISE"].into_iter().enumerate() {
             channel_meter_header(
-                video,
+                surface,
                 9 + voice * 10,
                 4,
                 9,
@@ -1545,7 +1545,7 @@ impl MusicEditor {
         for (screen, frame) in self.song.frames.iter().enumerate().skip(start).take(30) {
             let y = PANE_TOP + (5 + screen - start) * GLYPH_HEIGHT;
             text(
-                video,
+                surface,
                 PANE_LEFT + 2 * GLYPH_WIDTH,
                 y,
                 &format!("{screen:02X}"),
@@ -1553,12 +1553,12 @@ impl MusicEditor {
                 UI_BLACK,
             );
             if self.song.loop_row / self.song.pattern_rows == screen {
-                text(video, PANE_LEFT + 5 * GLYPH_WIDTH, y, "L", GRAD_WHITE, UI_BLACK);
+                text(surface, PANE_LEFT + 5 * GLYPH_WIDTH, y, "L", GRAD_WHITE, UI_BLACK);
             }
             for voice in 0..VOICES {
                 let selected = screen == self.frame_cursor && voice == self.voice;
                 text(
-                    video,
+                    surface,
                     PANE_LEFT + (10 + voice * 10) * GLYPH_WIDTH,
                     y,
                     &format!("{:02X}", frame[voice]),
@@ -1568,7 +1568,7 @@ impl MusicEditor {
             }
         }
         text(
-            video,
+            surface,
             PANE_LEFT + 2 * GLYPH_WIDTH,
             PANE_TOP + 38 * GLYPH_HEIGHT,
             "EACH FRAME SELECTS ONE PATTERN PER CHANNEL.",
@@ -1576,7 +1576,7 @@ impl MusicEditor {
             UI_BLACK,
         );
         text(
-            video,
+            surface,
             PANE_LEFT + 2 * GLYPH_WIDTH,
             PANE_TOP + 39 * GLYPH_HEIGHT,
             "HEX/+/- PATTERN  INS DUPLICATE  DEL REMOVE",
@@ -1584,7 +1584,7 @@ impl MusicEditor {
             UI_BLACK,
         );
         text(
-            video,
+            surface,
             PANE_LEFT + 2 * GLYPH_WIDTH,
             PANE_TOP + 40 * GLYPH_HEIGHT,
             "V=NEXT VIEW",
@@ -1593,11 +1593,11 @@ impl MusicEditor {
         );
     }
 
-    fn render_instrument(&self, video: &mut Video) {
-        button(video, 2, 4, " < ", GRAD_WHITE);
-        button(video, 6, 4, " > ", GRAD_WHITE);
+    fn render_instrument(&self, surface: &mut Surface) {
+        button(surface, 2, 4, " < ", GRAD_WHITE);
+        button(surface, 6, 4, " > ", GRAD_WHITE);
         text(
-            video,
+            surface,
             PANE_LEFT + 11 * GLYPH_WIDTH,
             PANE_TOP + 4 * GLYPH_HEIGHT,
             &format!("INSTRUMENT {:X}   CLICK/DRAG GRAPHS", self.instrument),
@@ -1617,7 +1617,7 @@ impl MusicEditor {
             let base_line = 6 + line * 7;
             let y = PANE_TOP + base_line * GLYPH_HEIGHT;
             text(
-                video,
+                surface,
                 PANE_LEFT + 2 * GLYPH_WIDTH,
                 y,
                 name,
@@ -1632,10 +1632,10 @@ impl MusicEditor {
             let graph_x = PANE_LEFT + 12 * GLYPH_WIDTH;
             let graph_y = y + GLYPH_HEIGHT;
             let graph_height = 4 * GLYPH_HEIGHT;
-            fill(video, graph_x, graph_y, 36 * GLYPH_WIDTH, graph_height, SELECT_BG);
+            fill(surface, graph_x, graph_y, 36 * GLYPH_WIDTH, graph_height, SELECT_BG);
             let zero_y = graph_y + 15 * (graph_height - 1) / 31;
             if matches!(kind, EnvKind::Arpeggio | EnvKind::Pitch) {
-                fill(video, graph_x, zero_y, 36 * GLYPH_WIDTH, 1, GRAD_CHROME);
+                fill(surface, graph_x, zero_y, 36 * GLYPH_WIDTH, 1, GRAD_CHROME);
             }
             for (slot, (index, value)) in
                 envelope.values.iter().enumerate().skip(start).take(9).enumerate()
@@ -1661,10 +1661,10 @@ impl MusicEditor {
                 let top = value_y.min(bottom);
                 let height = value_y.abs_diff(bottom).max(1);
                 let bar_x = graph_x + slot * 4 * GLYPH_WIDTH + 4;
-                fill(video, bar_x, top, 3 * GLYPH_WIDTH, height, CHANNEL_GRADIENTS[line]);
+                fill(surface, bar_x, top, 3 * GLYPH_WIDTH, height, CHANNEL_GRADIENTS[line]);
                 if kind == self.env_kind && index == self.env_cursor {
                     frame(
-                        video,
+                        surface,
                         graph_x + slot * 4 * GLYPH_WIDTH,
                         graph_y,
                         4 * GLYPH_WIDTH,
@@ -1672,7 +1672,7 @@ impl MusicEditor {
                     );
                 }
                 text(
-                    video,
+                    surface,
                     graph_x + slot * 4 * GLYPH_WIDTH,
                     y + 5 * GLYPH_HEIGHT,
                     &format!(
@@ -1685,13 +1685,13 @@ impl MusicEditor {
                 );
             }
         }
-        button(video, 2, 35, " ADD STEP ", GRAD_WHITE);
-        button(video, 13, 35, " DEL STEP ", GRAD_WHITE);
-        button(video, 24, 35, " LOOP   ", GRAD_WHITE);
-        button(video, 33, 35, " - ", GRAD_WHITE);
-        button(video, 37, 35, " + ", GRAD_WHITE);
+        button(surface, 2, 35, " ADD STEP ", GRAD_WHITE);
+        button(surface, 13, 35, " DEL STEP ", GRAD_WHITE);
+        button(surface, 24, 35, " LOOP   ", GRAD_WHITE);
+        button(surface, 33, 35, " - ", GRAD_WHITE);
+        button(surface, 37, 35, " + ", GRAD_WHITE);
         text(
-            video,
+            surface,
             PANE_LEFT + 2 * GLYPH_WIDTH,
             PANE_TOP + 36 * GLYPH_HEIGHT,
             "CLICK/DRAG GRAPH OR USE BUTTONS  V=NEXT VIEW",
@@ -1699,7 +1699,7 @@ impl MusicEditor {
             UI_BLACK,
         );
         text(
-            video,
+            surface,
             PANE_LEFT + 2 * GLYPH_WIDTH,
             PANE_TOP + 38 * GLYPH_HEIGHT,
             "TONE: PULSE DUTY 0-3 / NOISE MODE 0-1",
@@ -1868,8 +1868,13 @@ fn timer_to_note(timer: u16, triangle: bool, source_rate: u32) -> u8 {
     (12.0 * (frequency / 16.351_597_831_287_414).log2()).round().clamp(1.0, 127.0) as u8
 }
 
-fn configure_palette(video: &mut Video) {
-    let colors = [
+/// Resolve one of the tracker's color indexes to true color.
+///
+/// These used to be written into the console's palette every frame. The values
+/// are unchanged; they are simply computed on demand now, so the interface
+/// stops reserving 56 entries that belong to the cartridge.
+fn music_color(index: u8) -> Rgba {
+    const RAMPS: [[u8; 3]; 6] = [
         [245, 194, 231],
         [203, 166, 247],
         [166, 227, 161],
@@ -1877,35 +1882,34 @@ fn configure_palette(video: &mut Video) {
         [166, 173, 200],
         [205, 214, 244],
     ];
-    for (group, rgb) in colors.into_iter().enumerate() {
-        for row in 0..8 {
-            let scale = 1.0 - 0.5 * row as f32 / 7.0;
-            video.set_palette(
-                160 + (group * 8 + row) as u8,
-                [
-                    (rgb[0] as f32 * scale) as u8,
-                    (rgb[1] as f32 * scale) as u8,
-                    (rgb[2] as f32 * scale) as u8,
-                    255,
-                ],
-            );
+    match index {
+        // Six eight-step ramps, one per text color, darkening down the glyph.
+        160..=207 => {
+            let offset = usize::from(index - 160);
+            let rgb = RAMPS[offset / 8];
+            let row = (offset % 8) as f32;
+            let scale = 1.0 - 0.5 * row / 7.0;
+            [
+                (rgb[0] as f32 * scale) as u8,
+                (rgb[1] as f32 * scale) as u8,
+                (rgb[2] as f32 * scale) as u8,
+                255,
+            ]
         }
-    }
-    video.set_palette(PLAYING_BG, [30, 55, 92, 255]);
-    video.set_palette(SELECT_BG, [49, 50, 68, 255]);
-    // Every other pattern region gets a faint lift off black, and each region
-    // starts on a bright rule, so block boundaries read at a glance.
-    video.set_palette(REGION_BG, [22, 23, 32, 255]);
-    video.set_palette(REGION_RULE, [116, 125, 161, 255]);
-    for (index, color) in
-        [[61, 48, 58], [51, 42, 62], [42, 57, 40], [62, 56, 44]].into_iter().enumerate()
-    {
-        video.set_palette(METER_BACKGROUNDS[index], [color[0], color[1], color[2], 255]);
+        PLAYING_BG => [30, 55, 92, 255],
+        SELECT_BG => [49, 50, 68, 255],
+        REGION_BG => [22, 23, 32, 255],
+        REGION_RULE => [116, 125, 161, 255],
+        210 => [61, 48, 58, 255],
+        211 => [51, 42, 62, 255],
+        212 => [42, 57, 40, 255],
+        213 => [62, 56, 44, 255],
+        _ => [0, 0, 0, 255],
     }
 }
 
 fn channel_meter_header(
-    video: &mut Video,
+    surface: &mut Surface,
     column: usize,
     row: usize,
     width: usize,
@@ -1916,11 +1920,11 @@ fn channel_meter_header(
     let x = PANE_LEFT + column * GLYPH_WIDTH;
     let y = PANE_TOP + row * GLYPH_HEIGHT;
     let width_pixels = width * GLYPH_WIDTH;
-    fill(video, x, y, width_pixels, GLYPH_HEIGHT, UI_BLACK);
+    fill(surface, x, y, width_pixels, GLYPH_HEIGHT, UI_BLACK);
     let meter_width = width_pixels * usize::from(level.min(15)) / 15;
     if meter_width != 0 {
         fill(
-            video,
+            surface,
             x + (width_pixels - meter_width) / 2,
             y,
             meter_width,
@@ -1929,11 +1933,11 @@ fn channel_meter_header(
         );
     }
     let label_x = x + width_pixels.saturating_sub(label.len() * GLYPH_WIDTH) / 2;
-    text_transparent(video, label_x, y, label, CHANNEL_GRADIENTS[voice]);
+    text_transparent(surface, label_x, y, label, CHANNEL_GRADIENTS[voice]);
 }
-fn button(video: &mut Video, column: usize, row: usize, label: &str, foreground: u8) {
+fn button(surface: &mut Surface, column: usize, row: usize, label: &str, foreground: u8) {
     text(
-        video,
+        surface,
         PANE_LEFT + column * GLYPH_WIDTH,
         PANE_TOP + row * GLYPH_HEIGHT,
         label,
@@ -1941,52 +1945,49 @@ fn button(video: &mut Video, column: usize, row: usize, label: &str, foreground:
         SELECT_BG,
     );
 }
-fn frame(video: &mut Video, x: usize, y: usize, width: usize, height: usize) {
+fn frame(surface: &mut Surface, x: usize, y: usize, width: usize, height: usize) {
     for px in x..x + width {
-        put(video, px, y, GRAD_WHITE);
-        put(video, px, y + height - 1, GRAD_WHITE);
+        put(surface, px, y, GRAD_WHITE);
+        put(surface, px, y + height - 1, GRAD_WHITE);
     }
     for py in y..y + height {
-        put(video, x, py, GRAD_WHITE);
-        put(video, x + width - 1, py, GRAD_WHITE);
+        put(surface, x, py, GRAD_WHITE);
+        put(surface, x + width - 1, py, GRAD_WHITE);
     }
 }
-fn fill(video: &mut Video, x: usize, y: usize, width: usize, height: usize, color: u8) {
+fn fill(surface: &mut Surface, x: usize, y: usize, width: usize, height: usize, color: u8) {
     for py in y..y + height {
         for px in x..x + width {
-            put(video, px, py, color);
+            put(surface, px, py, color);
         }
     }
 }
-fn text(video: &mut Video, x: usize, y: usize, value: &str, foreground: u8, background: u8) {
+fn text(surface: &mut Surface, x: usize, y: usize, value: &str, foreground: u8, background: u8) {
     for (column, byte) in value.bytes().enumerate() {
         let glyph = CHARACTER_ROM[usize::from(byte.to_ascii_uppercase())];
         for (row, bits) in glyph.into_iter().enumerate() {
             for bit in 0..GLYPH_WIDTH {
                 let color =
                     if bits & (0x80 >> bit) != 0 { foreground + row as u8 } else { background };
-                put(video, x + column * GLYPH_WIDTH + bit, y + row, color);
+                put(surface, x + column * GLYPH_WIDTH + bit, y + row, color);
             }
         }
     }
 }
-fn text_transparent(video: &mut Video, x: usize, y: usize, value: &str, foreground: u8) {
+fn text_transparent(surface: &mut Surface, x: usize, y: usize, value: &str, foreground: u8) {
     for (column, byte) in value.bytes().enumerate() {
         let glyph = CHARACTER_ROM[usize::from(byte.to_ascii_uppercase())];
         for (row, bits) in glyph.into_iter().enumerate() {
             for bit in 0..GLYPH_WIDTH {
                 if bits & (0x80 >> bit) != 0 {
-                    put(video, x + column * GLYPH_WIDTH + bit, y + row, foreground + row as u8);
+                    put(surface, x + column * GLYPH_WIDTH + bit, y + row, foreground + row as u8);
                 }
             }
         }
     }
 }
-fn put(video: &mut Video, x: usize, y: usize, color: u8) {
-    if x < EDITOR_DISPLAY_WIDTH && y < video.dimensions().1 {
-        let width = video.dimensions().0;
-        video.pixels_mut()[y * width + x] = color;
-    }
+fn put(surface: &mut Surface, x: usize, y: usize, color: u8) {
+    surface.put_pixel(x, y, music_color(color));
 }
 
 #[cfg(test)]
@@ -2104,37 +2105,42 @@ mod tests {
     fn playback_highlights_full_center_row_and_tracker_uses_colored_gradients() {
         let mut editor = MusicEditor::default();
         editor.follow_playback(Some(0), [15, 8, 4, 2]);
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, 400);
-        editor.render(&mut video);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, 400);
+        // In the app the tracker paints over chrome the editor already drew, so
+        // start from the same opaque page rather than an empty surface.
+        surface.clear(music_color(UI_BLACK));
+        editor.render(&mut surface);
+        let has = |color: u8| {
+            let wanted = music_color(color);
+            (0..400).any(|y| (0..EDITOR_DISPLAY_WIDTH).any(|x| surface.pixel(x, y) == wanted))
+        };
         let centered_y = PANE_TOP + (6 + VISIBLE_ROWS / 2) * GLYPH_HEIGHT;
         assert_eq!(
-            video.pixels()[centered_y * EDITOR_DISPLAY_WIDTH + EDITOR_DISPLAY_WIDTH - 12],
-            PLAYING_BG
+            surface.pixel(EDITOR_DISPLAY_WIDTH - 12, centered_y),
+            music_color(PLAYING_BG)
         );
-        assert!(video.pixels().contains(&GRAD_P1));
-        assert!(video.pixels().contains(&GRAD_P2));
-        assert_eq!(video.pixels()[PANE_TOP * EDITOR_DISPLAY_WIDTH + PANE_LEFT], UI_BLACK);
+        assert!(has(GRAD_P1));
+        assert!(has(GRAD_P2));
+        assert_eq!(surface.pixel(PANE_LEFT, PANE_TOP), music_color(UI_BLACK));
         assert_eq!(
-            video.pixels()[(PANE_TOP + 45 * GLYPH_HEIGHT) * EDITOR_DISPLAY_WIDTH + PANE_LEFT],
-            UI_BLACK,
+            surface.pixel(PANE_LEFT, PANE_TOP + 45 * GLYPH_HEIGHT),
+            music_color(UI_BLACK),
             "the redundant tracker title frame must remain absent"
         );
         for color in METER_BACKGROUNDS {
-            assert!(video.pixels().contains(&color));
+            assert!(has(color));
         }
         let pulse_2_left = PANE_LEFT + 17 * GLYPH_WIDTH;
         let pulse_2_center = pulse_2_left + 5 * GLYPH_WIDTH;
         let header_y = PANE_TOP + 5 * GLYPH_HEIGHT;
         let column_contains = |x: usize, color: u8| {
-            (header_y..header_y + GLYPH_HEIGHT)
-                .any(|y| video.pixels()[y * EDITOR_DISPLAY_WIDTH + x] == color)
+            (header_y..header_y + GLYPH_HEIGHT).any(|y| surface.pixel(x, y) == music_color(color))
         };
         assert!(!column_contains(pulse_2_left, METER_BACKGROUNDS[1]));
         assert!(column_contains(pulse_2_center, METER_BACKGROUNDS[1]));
-        assert_ne!(
-            video.palette()[GRAD_WHITE as usize],
-            video.palette()[(GRAD_WHITE + 7) as usize]
-        );
+        // The text ramp still darkens down a glyph, now by arithmetic rather
+        // than by reserving one palette entry per scanline.
+        assert_ne!(music_color(GRAD_WHITE), music_color(GRAD_WHITE + 7));
     }
 
     #[test]
@@ -2214,28 +2220,30 @@ mod tests {
         assert_eq!(editor.song.pattern_rows, 16);
         assert!(editor.song.frames.len() > 1, "needs several regions to tell them apart");
 
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, 400);
-        editor.render(&mut video);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, 400);
+        // In the app the tracker paints over chrome the editor already drew, so
+        // start from the same opaque page rather than an empty surface.
+        surface.clear(music_color(UI_BLACK));
+        editor.render(&mut surface);
         let row_y = |row: usize| PANE_TOP + (6 + row) * GLYPH_HEIGHT;
         // Sample clear of the glyph columns so only the row background is read.
         let x = EDITOR_DISPLAY_WIDTH - 12;
-        let at = |x: usize, y: usize| video.pixels()[y * EDITOR_DISPLAY_WIDTH + x];
+        let at = |x: usize, y: usize| surface.pixel(x, y);
 
         // Regions alternate: the first sits on black, the second is lifted off it.
-        assert_eq!(at(x, row_y(0) + GLYPH_HEIGHT / 2), UI_BLACK);
-        assert_eq!(at(x, row_y(16) + GLYPH_HEIGHT / 2), REGION_BG);
-        assert_eq!(at(x, row_y(31) + GLYPH_HEIGHT / 2), REGION_BG);
+        assert_eq!(at(x, row_y(0) + GLYPH_HEIGHT / 2), music_color(UI_BLACK));
+        assert_eq!(at(x, row_y(16) + GLYPH_HEIGHT / 2), music_color(REGION_BG));
+        assert_eq!(at(x, row_y(31) + GLYPH_HEIGHT / 2), music_color(REGION_BG));
 
         // Each region opens on a rule, and rows inside one never draw it.
-        assert_eq!(at(x, row_y(0)), REGION_RULE);
-        assert_eq!(at(x, row_y(16)), REGION_RULE);
-        assert_ne!(at(x, row_y(8)), REGION_RULE);
-        assert_ne!(at(x, row_y(17)), REGION_RULE);
+        assert_eq!(at(x, row_y(0)), music_color(REGION_RULE));
+        assert_eq!(at(x, row_y(16)), music_color(REGION_RULE));
+        assert_ne!(at(x, row_y(8)), music_color(REGION_RULE));
+        assert_ne!(at(x, row_y(17)), music_color(REGION_RULE));
 
         // The boundary row is labelled with the frame that starts there.
-        assert!(video.pixels().contains(&GRAD_WHITE));
-        assert_ne!(video.palette()[REGION_BG as usize], video.palette()[UI_BLACK as usize]);
-        assert_ne!(video.palette()[REGION_RULE as usize], video.palette()[REGION_BG as usize]);
+        assert_ne!(music_color(REGION_BG), music_color(UI_BLACK));
+        assert_ne!(music_color(REGION_RULE), music_color(REGION_BG));
     }
 
     #[test]

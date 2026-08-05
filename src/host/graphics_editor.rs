@@ -1,11 +1,12 @@
 use fanticon::{
     machine::{TILEMAP_CELLS, TILEMAP_HEIGHT, TILEMAP_WIDTH},
-    video::Video,
+    video::rgb332_to_rgba,
 };
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use super::EDITOR_DISPLAY_WIDTH;
-use super::character_rom::{CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH};
+use super::surface::Surface;
+use super::character_rom::{GLYPH_HEIGHT, GLYPH_WIDTH};
 
 pub const TILE_BYTES: usize = 256 * 32;
 pub const MAP_CELLS: usize = TILEMAP_CELLS;
@@ -531,8 +532,8 @@ impl GraphicsEditor {
         self.stroke_changed = false;
     }
 
-    pub fn render(&self, video: &mut Video) {
-        fill_rect(video, PANE_LEFT, OUTER_TOP, EDITOR_DISPLAY_WIDTH - PANE_LEFT, 368, UI_BLACK);
+    pub fn render(&self, surface: &mut Surface) {
+        fill_rect(surface, PANE_LEFT, OUTER_TOP, EDITOR_DISPLAY_WIDTH - PANE_LEFT, 368, UI_BLACK);
         let workspace_caption = if self.palette_document {
             "SHARED PALETTE RESOURCE - 16 BANKS X 16 COLORS"
         } else {
@@ -545,7 +546,7 @@ impl GraphicsEditor {
             }
         };
         draw_group_box(
-            video,
+            surface,
             PANE_LEFT,
             OUTER_TOP,
             EDITOR_DISPLAY_WIDTH - PANE_LEFT,
@@ -554,28 +555,28 @@ impl GraphicsEditor {
         );
         if self.palette_document {
             draw_text(
-                video,
+                surface,
                 PANE_LEFT + 4,
                 PANE_TOP + 4,
                 "SHARED BY EVERY GFX FILE THAT REFERENCES THIS PALETTE",
                 UI_WHITE,
             );
             draw_text(
-                video,
+                surface,
                 PANE_LEFT + 4,
                 PANE_TOP + 18,
                 "N PRESET   SHIFT+N PREVIOUS   R/G/B EDIT",
                 UI_GRAY,
             );
         } else {
-            draw_toolbar(video, self.view, self.tool, self.bitmap_asset);
+            draw_toolbar(surface, self.view, self.tool, self.bitmap_asset);
         }
         match self.view {
-            GraphicsView::Tiles => self.render_tiles(video, false),
-            GraphicsView::Sprite => self.render_tiles(video, true),
-            GraphicsView::Map => self.render_map(video),
-            GraphicsView::Palette => self.render_palette(video),
-            GraphicsView::Bitmap => self.render_bitmap(video),
+            GraphicsView::Tiles => self.render_tiles(surface, false),
+            GraphicsView::Sprite => self.render_tiles(surface, true),
+            GraphicsView::Map => self.render_map(surface),
+            GraphicsView::Palette => self.render_palette(surface),
+            GraphicsView::Bitmap => self.render_bitmap(surface),
         }
     }
 
@@ -632,7 +633,7 @@ impl GraphicsEditor {
         }
     }
 
-    fn render_tiles(&self, video: &mut Video, sprite: bool) {
+    fn render_tiles(&self, surface: &mut Surface, sprite: bool) {
         let size = if sprite { 16 } else { 8 };
         let scale = if sprite { 14 } else { 28 };
         let origin = (PANE_LEFT + 12, PANE_TOP + 38);
@@ -642,10 +643,10 @@ impl GraphicsEditor {
         } else {
             format!("8X8 PATTERN ${:02X}", self.selected_tile)
         };
-        draw_group_box(video, PANE_LEFT + 6, PANE_TOP + 32, 236, 238, &canvas_caption);
-        draw_group_box(video, PANE_LEFT + 246, PANE_TOP + 32, 220, 206, "SHARED 8X8 PATTERNS");
+        draw_group_box(surface, PANE_LEFT + 6, PANE_TOP + 32, 236, 238, &canvas_caption);
+        draw_group_box(surface, PANE_LEFT + 246, PANE_TOP + 32, 220, 206, "SHARED 8X8 PATTERNS");
         draw_group_box(
-            video,
+            surface,
             PANE_LEFT + 6,
             PANE_TOP + 308,
             460,
@@ -662,7 +663,7 @@ impl GraphicsEditor {
                 };
                 let palette_index = usize::from(self.palette_bank) * 16 + usize::from(color);
                 fill_rect(
-                    video,
+                    surface,
                     origin.0 + px * scale,
                     origin.1 + py * scale,
                     scale.saturating_sub(1),
@@ -671,17 +672,17 @@ impl GraphicsEditor {
                 );
             }
         }
-        self.render_tile_sheet(video, (PANE_LEFT + 252, PANE_TOP + 38), 12);
+        self.render_tile_sheet(surface, (PANE_LEFT + 252, PANE_TOP + 38), 12);
         let relationship = if sprite {
             "8X8 SPRITES USE ONE PATTERN (MODE 1)"
         } else {
             "ONE PATTERN CAN BE A MAP TILE OR 8X8 SPRITE"
         };
-        draw_text(video, PANE_LEFT + 12, PANE_TOP + 282, relationship, UI_GRAY);
-        self.render_palette_strip(video, PANE_LEFT + 12, PANE_TOP + 318);
+        draw_text(surface, PANE_LEFT + 12, PANE_TOP + 282, relationship, UI_GRAY);
+        self.render_palette_strip(surface, PANE_LEFT + 12, PANE_TOP + 318);
     }
 
-    fn render_tile_sheet(&self, video: &mut Video, origin: (usize, usize), pitch: usize) {
+    fn render_tile_sheet(&self, surface: &mut Surface, origin: (usize, usize), pitch: usize) {
         for tile in 0..256 {
             let tx = tile % 16;
             let ty = tile / 16;
@@ -691,7 +692,7 @@ impl GraphicsEditor {
                     let index = usize::from(self.palette_bank) * 16 + usize::from(color);
                     let display = self.asset.palette[index];
                     put_pixel(
-                        video,
+                        surface,
                         origin.0 + tx * pitch + px,
                         origin.1 + ty * pitch + py,
                         display,
@@ -700,7 +701,7 @@ impl GraphicsEditor {
             }
             if tile == usize::from(self.selected_tile) {
                 stroke_rect(
-                    video,
+                    surface,
                     origin.0 + tx * pitch,
                     origin.1 + ty * pitch,
                     pitch.min(9),
@@ -711,41 +712,41 @@ impl GraphicsEditor {
         }
     }
 
-    fn render_palette_strip(&self, video: &mut Video, x: usize, y: usize) {
+    fn render_palette_strip(&self, surface: &mut Surface, x: usize, y: usize) {
         for color in 0..16 {
             let index = usize::from(self.palette_bank) * 16 + color;
-            fill_rect(video, x + color * 24, y, 22, 20, self.asset.palette[index]);
+            fill_rect(surface, x + color * 24, y, 22, 20, self.asset.palette[index]);
             if color == usize::from(self.selected_color) {
-                stroke_rect(video, x + color * 24, y, 22, 20, UI_WHITE);
+                stroke_rect(surface, x + color * 24, y, 22, 20, UI_WHITE);
             }
         }
-        self.render_bank_buttons(video);
+        self.render_bank_buttons(surface);
     }
 
     /// `<` and `>` step the palette bank from any view that draws through one.
-    fn render_bank_buttons(&self, video: &mut Video) {
+    fn render_bank_buttons(&self, surface: &mut Surface) {
         let Some((x, y)) = bank_button_origin(self.view) else { return };
         for (offset, label) in [(0, "<"), (26, ">")] {
-            fill_rect(video, x + offset, y, 22, 20, UI_BLACK);
-            stroke_rect(video, x + offset, y, 22, 20, UI_WHITE);
-            draw_text(video, x + offset + 7, y + 6, label, UI_WHITE);
+            fill_rect(surface, x + offset, y, 22, 20, UI_BLACK);
+            stroke_rect(surface, x + offset, y, 22, 20, UI_WHITE);
+            draw_text(surface, x + offset + 7, y + 6, label, UI_WHITE);
         }
     }
 
-    fn render_map(&self, video: &mut Video) {
+    fn render_map(&self, surface: &mut Surface) {
         let origin = (PANE_LEFT + 4, PANE_TOP + 38);
         draw_group_box(
-            video,
+            surface,
             PANE_LEFT + 2,
             PANE_TOP + 32,
             326,
             210,
             &format!("64X32 MAP - VIEW {},{}", self.map_view_x, self.map_view_y),
         );
-        draw_group_box(video, PANE_LEFT + 332, PANE_TOP + 32, 136, 142, "8X8 PATTERNS");
-        draw_group_box(video, PANE_LEFT + 332, PANE_TOP + 180, 136, 62, "CELL OPTIONS");
+        draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 32, 136, 142, "8X8 PATTERNS");
+        draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 180, 136, 62, "CELL OPTIONS");
         draw_group_box(
-            video,
+            surface,
             PANE_LEFT + 2,
             PANE_TOP + 270,
             466,
@@ -766,7 +767,7 @@ impl GraphicsEditor {
                         let color = self.tile_pixel(tile, source_x, source_y);
                         let index = usize::from(attribute & 15) * 16 + usize::from(color);
                         put_pixel(
-                            video,
+                            surface,
                             origin.0 + cell_x * 8 + px,
                             origin.1 + cell_y * 8 + py,
                             self.asset.palette[index],
@@ -775,28 +776,28 @@ impl GraphicsEditor {
                 }
             }
         }
-        self.render_tile_sheet(video, (PANE_LEFT + 336, PANE_TOP + 38), 8);
-        draw_text(video, PANE_LEFT + 338, PANE_TOP + 194, "H/V FLIP", UI_GRAY);
-        draw_text(video, PANE_LEFT + 338, PANE_TOP + 210, "Q PRIORITY", UI_GRAY);
+        self.render_tile_sheet(surface, (PANE_LEFT + 336, PANE_TOP + 38), 8);
+        draw_text(surface, PANE_LEFT + 338, PANE_TOP + 194, "H/V FLIP", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 338, PANE_TOP + 210, "Q PRIORITY", UI_GRAY);
         draw_text(
-            video,
+            surface,
             PANE_LEFT + 8,
             PANE_TOP + 252,
             "ARROWS PAN 64X32 MAP - VIEW WRAPS AT EDGES",
             UI_GRAY,
         );
-        self.render_palette_strip(video, PANE_LEFT + 4, PANE_TOP + 278);
+        self.render_palette_strip(surface, PANE_LEFT + 4, PANE_TOP + 278);
     }
 
-    fn render_palette(&self, video: &mut Video) {
+    fn render_palette(&self, surface: &mut Surface) {
         let origin = (PANE_LEFT + 28, PANE_TOP + 38);
-        draw_group_box(video, PANE_LEFT + 20, PANE_TOP + 32, 328, 300, "256-COLOR PALETTE");
-        draw_group_box(video, PANE_LEFT + 352, PANE_TOP + 32, 114, 204, "PRESETS");
+        draw_group_box(surface, PANE_LEFT + 20, PANE_TOP + 32, 328, 300, "256-COLOR PALETTE");
+        draw_group_box(surface, PANE_LEFT + 352, PANE_TOP + 32, 114, 204, "PRESETS");
         for index in 0..256 {
             let x = index % 16;
             let y = index / 16;
             fill_rect(
-                video,
+                surface,
                 origin.0 + x * 20,
                 origin.1 + y * 18,
                 18,
@@ -804,48 +805,48 @@ impl GraphicsEditor {
                 self.asset.palette[index],
             );
             if index == usize::from(self.palette_bank) * 16 + usize::from(self.selected_color) {
-                stroke_rect(video, origin.0 + x * 20 - 1, origin.1 + y * 18 - 1, 20, 18, UI_WHITE);
+                stroke_rect(surface, origin.0 + x * 20 - 1, origin.1 + y * 18 - 1, 20, 18, UI_WHITE);
             }
         }
         let index = usize::from(self.palette_bank) * 16 + usize::from(self.selected_color);
         let value = self.asset.palette[index];
-        draw_text(video, PANE_LEFT + 358, PANE_TOP + 50, &format!("INDEX ${index:02X}"), UI_WHITE);
-        draw_text(video, PANE_LEFT + 358, PANE_TOP + 66, &format!("RGB332 ${value:02X}"), UI_WHITE);
+        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 50, &format!("INDEX ${index:02X}"), UI_WHITE);
+        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 66, &format!("RGB332 ${value:02X}"), UI_WHITE);
         for (preset, (name, _)) in PALETTE_PRESETS.iter().enumerate() {
             let y = PANE_TOP + 92 + preset * 24;
             if Some(preset) == self.palette_preset {
-                fill_rect(video, PANE_LEFT + 358, y - 2, 98, 18, UI_BLUE);
+                fill_rect(surface, PANE_LEFT + 358, y - 2, 98, 18, UI_BLUE);
             }
-            draw_text(video, PANE_LEFT + 364, y, name, UI_WHITE);
+            draw_text(surface, PANE_LEFT + 364, y, name, UI_WHITE);
         }
-        draw_text(video, PANE_LEFT + 358, PANE_TOP + 190, "N NEXT", UI_GRAY);
-        draw_text(video, PANE_LEFT + 358, PANE_TOP + 206, "R/G/B EDIT", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 190, "N NEXT", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 206, "R/G/B EDIT", UI_GRAY);
     }
 
-    fn render_bitmap(&self, video: &mut Video) {
+    fn render_bitmap(&self, surface: &mut Surface) {
         let origin = (PANE_LEFT + 4, PANE_TOP + 38);
-        draw_group_box(video, PANE_LEFT + 2, PANE_TOP + 32, 326, 210, "320 X 200 BITMAP");
-        draw_group_box(video, PANE_LEFT + 332, PANE_TOP + 32, 136, 190, "BITMAP SETTINGS");
+        draw_group_box(surface, PANE_LEFT + 2, PANE_TOP + 32, 326, 210, "320 X 200 BITMAP");
+        draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 32, 136, 190, "BITMAP SETTINGS");
         for y in 0..200 {
             for x in 0..320 {
                 let color = self.bitmap_pixel(x, y);
                 let index = usize::from(self.palette_bank) * 16 + usize::from(color);
-                put_pixel(video, origin.0 + x, origin.1 + y, self.asset.palette[index]);
+                put_pixel(surface, origin.0 + x, origin.1 + y, self.asset.palette[index]);
             }
         }
         draw_text(
-            video,
+            surface,
             PANE_LEFT + 332,
             PANE_TOP + 42,
             &format!("ROM {}-{}", self.bitmap_bank, self.bitmap_bank.wrapping_add(2)),
             UI_WHITE,
         );
-        draw_text(video, PANE_LEFT + 332, PANE_TOP + 58, "BM+BM+CHR", UI_GRAY);
-        draw_text(video, PANE_LEFT + 332, PANE_TOP + 72, ",/. ROM BANK", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 332, PANE_TOP + 58, "BM+BM+CHR", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 332, PANE_TOP + 72, ",/. ROM BANK", UI_GRAY);
         for color in 0..16 {
             let index = usize::from(self.palette_bank) * 16 + color;
             fill_rect(
-                video,
+                surface,
                 PANE_LEFT + 336 + color % 4 * 28,
                 PANE_TOP + 88 + color / 4 * 24,
                 24,
@@ -854,13 +855,13 @@ impl GraphicsEditor {
             );
         }
         draw_text(
-            video,
+            surface,
             PANE_LEFT + 332,
             PANE_TOP + 188,
             &format!("PAL BANK {}", self.palette_bank),
             UI_WHITE,
         );
-        self.render_bank_buttons(video);
+        self.render_bank_buttons(surface);
     }
 
     fn apply_at(&mut self, x: usize, y: usize) -> bool {
@@ -1229,27 +1230,27 @@ fn write_hex_line(output: &mut String, bytes: &[u8]) {
     output.push('\n');
 }
 
-fn draw_toolbar(video: &mut Video, view: GraphicsView, tool: GraphicsTool, bitmap_asset: bool) {
+fn draw_toolbar(surface: &mut Surface, view: GraphicsView, tool: GraphicsTool, bitmap_asset: bool) {
     draw_text(
-        video,
+        surface,
         PANE_LEFT + 4,
         PANE_TOP + 4,
         "1 PATTERN  2 MAP  3 16X16 SPRITE  4 PALETTE  5 BITMAP",
         UI_WHITE,
     );
-    draw_text(video, PANE_LEFT + 4, PANE_TOP + 18, "P PENCIL  F FILL  I PICK", UI_GRAY);
+    draw_text(surface, PANE_LEFT + 4, PANE_TOP + 18, "P PENCIL  F FILL  I PICK", UI_GRAY);
     // Map and Bitmap are the same slot, not two places to be. Name the mode the
     // asset is actually in, and bar the tab that owns it, so opening the other
     // one reads as changing the asset rather than changing the view.
     draw_text(
-        video,
+        surface,
         PANE_LEFT + 208,
         PANE_TOP + 18,
         if bitmap_asset { "BACKGROUND: BITMAP" } else { "BACKGROUND: TILEMAP" },
         UI_WHITE,
     );
     let (mode_x, mode_width) = if bitmap_asset { (364, 64) } else { (92, 40) };
-    fill_rect(video, PANE_LEFT + mode_x, PANE_TOP + 14, mode_width, 2, UI_WHITE);
+    fill_rect(surface, PANE_LEFT + mode_x, PANE_TOP + 14, mode_width, 2, UI_WHITE);
     let view_x = match view {
         GraphicsView::Tiles => 4,
         GraphicsView::Map => 92,
@@ -1258,7 +1259,7 @@ fn draw_toolbar(video: &mut Video, view: GraphicsView, tool: GraphicsTool, bitma
         GraphicsView::Bitmap => 364,
     };
     stroke_rect(
-        video,
+        surface,
         PANE_LEFT + view_x,
         PANE_TOP + 2,
         match view {
@@ -1277,7 +1278,7 @@ fn draw_toolbar(video: &mut Video, view: GraphicsView, tool: GraphicsTool, bitma
         GraphicsTool::Eyedropper => 140,
     };
     stroke_rect(
-        video,
+        surface,
         PANE_LEFT + tool_x,
         PANE_TOP + 16,
         match tool {
@@ -1368,54 +1369,37 @@ fn preset_button_at(x: usize, y: usize) -> Option<usize> {
 }
 
 fn draw_group_box(
-    video: &mut Video,
+    surface: &mut Surface,
     x: usize,
     y: usize,
     width: usize,
     height: usize,
     caption: &str,
 ) {
-    stroke_rect(video, x, y, width, height, UI_GRAY);
+    stroke_rect(surface, x, y, width, height, UI_GRAY);
     let caption_width = (caption.len() + 2) * GLYPH_WIDTH;
-    fill_rect(video, x + 6, y.saturating_sub(3), caption_width, GLYPH_HEIGHT, UI_BLACK);
-    draw_text(video, x + 10, y.saturating_sub(3), caption, UI_WHITE);
+    fill_rect(surface, x + 6, y.saturating_sub(3), caption_width, GLYPH_HEIGHT, UI_BLACK);
+    draw_text(surface, x + 10, y.saturating_sub(3), caption, UI_WHITE);
 }
 
-fn fill_rect(video: &mut Video, x: usize, y: usize, width: usize, height: usize, color: u8) {
-    let dimensions = video.dimensions();
-    let end_y = (y + height).min(dimensions.1);
-    let end_x = (x + width).min(dimensions.0);
-    let pixels = video.pixels_mut();
-    for py in y.min(end_y)..end_y {
-        pixels[py * dimensions.0 + x.min(end_x)..py * dimensions.0 + end_x].fill(color);
-    }
+// Colors here are RGB332 bytes throughout: the UI constants are chosen from the
+// console's own range, and asset pixels are literally cartridge palette bytes.
+// Expanding at the edge means what the artist sees is exactly what the hardware
+// would output, with no palette entries reserved for the interface.
+fn fill_rect(surface: &mut Surface, x: usize, y: usize, width: usize, height: usize, color: u8) {
+    surface.fill_rect(x, y, width, height, rgb332_to_rgba(color));
 }
 
-fn stroke_rect(video: &mut Video, x: usize, y: usize, width: usize, height: usize, color: u8) {
-    fill_rect(video, x, y, width, 1, color);
-    fill_rect(video, x, y + height.saturating_sub(1), width, 1, color);
-    fill_rect(video, x, y, 1, height, color);
-    fill_rect(video, x + width.saturating_sub(1), y, 1, height, color);
+fn stroke_rect(surface: &mut Surface, x: usize, y: usize, width: usize, height: usize, color: u8) {
+    surface.stroke_rect(x, y, width, height, rgb332_to_rgba(color));
 }
 
-fn put_pixel(video: &mut Video, x: usize, y: usize, color: u8) {
-    let dimensions = video.dimensions();
-    if x < dimensions.0 && y < dimensions.1 {
-        video.pixels_mut()[y * dimensions.0 + x] = color;
-    }
+fn put_pixel(surface: &mut Surface, x: usize, y: usize, color: u8) {
+    surface.put_pixel(x, y, rgb332_to_rgba(color));
 }
 
-fn draw_text(video: &mut Video, x: usize, y: usize, text: &str, color: u8) {
-    for (index, byte) in text.bytes().enumerate() {
-        let glyph = CHARACTER_ROM[usize::from(byte.to_ascii_uppercase())];
-        for (glyph_y, bits) in glyph.into_iter().enumerate() {
-            for glyph_x in 0..GLYPH_WIDTH {
-                if bits & (0x80 >> glyph_x) != 0 {
-                    put_pixel(video, x + index * GLYPH_WIDTH + glyph_x, y + glyph_y, color);
-                }
-            }
-        }
-    }
+fn draw_text(surface: &mut Surface, x: usize, y: usize, text: &str, color: u8) {
+    surface.draw_text(x, y, text, rgb332_to_rgba(color), None);
 }
 
 #[cfg(test)]
@@ -1566,9 +1550,9 @@ mod tests {
     #[test]
     fn graphics_workspace_has_a_visible_outer_border() {
         let editor = GraphicsEditor::default();
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, 400);
-        editor.render(&mut video);
-        assert_eq!(video.pixels()[OUTER_TOP * EDITOR_DISPLAY_WIDTH + PANE_LEFT], UI_GRAY);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, 400);
+        editor.render(&mut surface);
+        assert_eq!(surface.pixel(PANE_LEFT, OUTER_TOP), rgb332_to_rgba(UI_GRAY));
     }
 
     #[test]
@@ -1588,15 +1572,16 @@ mod tests {
 
     #[test]
     fn the_toolbar_names_the_background_mode_the_asset_is_actually_in() {
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, 400);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, 400);
         let bar_row = PANE_TOP + 14;
-        let bar_at = |video: &Video, x: usize| video.pixels()[bar_row * EDITOR_DISPLAY_WIDTH + x];
+        let bar_at = |surface: &Surface, x: usize| surface.pixel(x, bar_row);
+        let white = rgb332_to_rgba(UI_WHITE);
 
         // A tilemap asset bars the MAP tab, wherever you happen to be looking.
         let tilemap = GraphicsEditor { view: GraphicsView::Tiles, ..GraphicsEditor::default() };
-        tilemap.render(&mut video);
-        assert_eq!(bar_at(&video, PANE_LEFT + 100), UI_WHITE, "MAP should carry the mode bar");
-        assert_ne!(bar_at(&video, PANE_LEFT + 380), UI_WHITE, "BITMAP should not");
+        tilemap.render(&mut surface);
+        assert_eq!(bar_at(&surface, PANE_LEFT + 100), white, "MAP should carry the mode bar");
+        assert_ne!(bar_at(&surface, PANE_LEFT + 380), white, "BITMAP should not");
 
         // Choosing bitmap moves the bar, so the pair reads as one exclusive slot.
         let bitmap = GraphicsEditor {
@@ -1604,9 +1589,9 @@ mod tests {
             bitmap_asset: true,
             ..GraphicsEditor::default()
         };
-        bitmap.render(&mut video);
-        assert_eq!(bar_at(&video, PANE_LEFT + 380), UI_WHITE, "BITMAP should carry the mode bar");
-        assert_ne!(bar_at(&video, PANE_LEFT + 100), UI_WHITE, "MAP should not");
+        bitmap.render(&mut surface);
+        assert_eq!(bar_at(&surface, PANE_LEFT + 380), white, "BITMAP should carry the mode bar");
+        assert_ne!(bar_at(&surface, PANE_LEFT + 100), white, "MAP should not");
     }
 
     #[test]

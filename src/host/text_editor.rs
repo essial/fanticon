@@ -6,11 +6,14 @@ use fanticon::{
     disassemble_instruction, instruction_length,
     machine::{VIDEO_DOTS_PER_CPU_CYCLE, bank_kind},
     project::MANIFEST_NAME,
-    video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, DOTS_PER_SCANLINE, SCANLINES_PER_FRAME, Video},
+    video::{
+        DISPLAY_HEIGHT, DISPLAY_WIDTH, DOTS_PER_SCANLINE, SCANLINES_PER_FRAME, rgb332_to_rgba,
+    },
 };
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 use super::nsf_player::{MusicCommand, MusicStatus};
+use super::surface::{Rgba, Surface, scanline_shade};
 use super::{
     EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH,
     boot_splash::BOOT_LOGO,
@@ -22,8 +25,7 @@ use super::{
         DBL_BOTTOM_RIGHT, DBL_CAPTION_LEFT, DBL_CAPTION_RIGHT, DBL_HORIZONTAL, DBL_RIGHT_VERTICAL,
         DBL_TOP_HORIZONTAL, DBL_TOP_LEFT, DBL_TOP_RIGHT, DBL_VERTICAL, GLYPH_HEIGHT, GLYPH_WIDTH,
         SHADE_LIGHT, SHADE_MEDIUM, SYMBOL_ARROW_DOWN, SYMBOL_ARROW_RIGHT, SYMBOL_ARROW_UP,
-        SYMBOL_BUSY, SYMBOL_CHECK, SYMBOL_CROSS, configure_text_gradient, gradient_color,
-        identity_text_gradient,
+        SYMBOL_BUSY, SYMBOL_CHECK, SYMBOL_CROSS,
     },
     filesystem::{ConsoleFilesystem, SharedFilesystem},
     graphics_editor::{DEFAULT_PALETTE_FILE, GraphicsEditor},
@@ -70,7 +72,6 @@ const ABOUT_WIDTH: usize = 42;
 const ABOUT_HEIGHT: usize = 24;
 const ABOUT_LOGO_WIDTH: usize = 192;
 const ABOUT_LOGO_HEIGHT: usize = 120;
-const ABOUT_PALETTE_START: u8 = 224;
 const ABOUT_PALETTE: [[u8; 4]; 16] = [
     [0, 0, 0, 255],
     [0, 28, 44, 255],
@@ -2535,22 +2536,10 @@ impl TextEditor {
         inverse[selected..selected].fill(true);
     }
 
-    pub fn render(&self, video: &mut Video, cursor_visible: bool) {
-        debug_assert_eq!(video.dimensions(), (EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT));
+    pub fn render(&self, surface: &mut Surface, cursor_visible: bool) {
+        debug_assert_eq!(surface.dimensions(), (EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT));
         let colors = self.colors.get();
         let assembly_mode = self.assembly_mode();
-        // The graphics editor paints raw RGB332 asset data, which is only correct
-        // under the identity palette. Chrome therefore gives up its remapped
-        // entries and its gradient shading for as long as that view is open.
-        let graphics_resource = self.graphics_active() && !self.graphics_source_active();
-        if graphics_resource {
-            video.reset_palette();
-        } else {
-            configure_ui_palette(video);
-            if assembly_mode {
-                configure_assembly_palette(video);
-            }
-        }
         let background = if assembly_mode { 0 } else { colors.background };
         let foreground = if assembly_mode { ASM_TEXT_COLOR } else { colors.foreground };
         let mut cells = [b' '; COLUMNS * ROWS];
@@ -2706,37 +2695,23 @@ impl TextEditor {
             &mut inverse,
             CellStyle::new(UI_WHITE_COLOR, background),
         );
-        let style = if graphics_resource {
-            // Chrome indexes now mean their own RGB332 colors, so swap in the
-            // nearest true-RGB332 equivalents before anything is drawn.
-            for color in foregrounds.iter_mut().chain(backgrounds.iter_mut()) {
-                *color = identity_chrome_color(*color);
-            }
-            CellStyle::new(
-                identity_chrome_color(foreground),
-                identity_chrome_color(background),
-            )
-        } else {
-            CellStyle::new(foreground, background)
-        };
         render_cells(
-            video,
+            surface,
             &cells,
             &foregrounds,
             &backgrounds,
             &inverse,
             &background_gradients,
-            style,
-            !graphics_resource,
+            CellStyle::new(foreground, background),
         );
 
-        let native_resource = graphics_resource
+        let native_resource = (self.graphics_active() && !self.graphics_source_active())
             || (self.music_active() && !self.music_source_active());
         if native_resource {
             if self.graphics_active() {
-                self.graphics_tabs[&self.document_id].render(video);
+                self.graphics_tabs[&self.document_id].render(surface);
             } else {
-                self.music_tabs[&self.document_id].render(video);
+                self.music_tabs[&self.document_id].render(surface);
             }
             if !matches!(self.overlay, Overlay::None) {
                 let mut mask_cells = [u8::MAX; COLUMNS * ROWS];
@@ -2753,10 +2728,10 @@ impl TextEditor {
                     CellStyle::new(UI_WHITE_COLOR, background),
                 );
                 // The mask arrays are coverage sentinels rather than colors, so
-                // they keep their u8::MAX markers; the real colors were already
-                // remapped above and are what this actually draws.
+                // they keep their u8::MAX markers; the real colors beneath are
+                // what this actually draws.
                 render_masked_cells(
-                    video,
+                    surface,
                     &cells,
                     &foregrounds,
                     &backgrounds,
@@ -2766,14 +2741,13 @@ impl TextEditor {
                     &mask_foregrounds,
                     &mask_backgrounds,
                     &mask_inverse,
-                    style,
-                    !graphics_resource,
+                    CellStyle::new(foreground, background),
                 );
             }
         }
 
         if let Overlay::About { frame } = &self.overlay {
-            draw_about_logo(video, *frame);
+            draw_about_logo(surface, *frame);
         }
 
         if cursor_visible
@@ -2789,7 +2763,7 @@ impl TextEditor {
         {
             let cell_x = EDITOR_CODE_START + screen_column;
             let cell_y = screen_line + EDITOR_FIRST_ROW;
-            draw_block_cursor(video, cell_x, cell_y, cells[cell_y * COLUMNS + cell_x]);
+            draw_block_cursor(surface, cell_x, cell_y, cells[cell_y * COLUMNS + cell_x]);
         }
     }
 
@@ -5045,42 +5019,56 @@ fn put_cell(cells: &mut [u8], x: usize, y: usize, character: u8) {
     }
 }
 
+/// Paint one cell's background and glyph into the surface.
+///
+/// Colors are the editor's own table rather than console palette entries, so
+/// the per-scanline shading is arithmetic on the resolved color instead of a
+/// reserved entry per level. Frame glyphs opt out of shading so rules stay an
+/// even weight along their whole length.
+fn draw_cell(
+    surface: &mut Surface,
+    cell_x: usize,
+    cell_y: usize,
+    character: u8,
+    foreground: Rgba,
+    background: Option<Rgba>,
+    shaded_background: bool,
+) {
+    let x = cell_x * GLYPH_WIDTH;
+    let y = cell_y * GLYPH_HEIGHT;
+    if let Some(background) = background {
+        for glyph_y in 0..GLYPH_HEIGHT {
+            let color =
+                if shaded_background { scanline_shade(background, glyph_y) } else { background };
+            surface.fill_rect(x, y + glyph_y, GLYPH_WIDTH, 1, color);
+        }
+    }
+    let glyph = CHARACTER_ROM[usize::from(character).min(CHARACTER_ROM.len() - 1)];
+    let frame = is_frame_character(character);
+    for (glyph_y, bits) in glyph.into_iter().enumerate() {
+        if bits == 0 {
+            continue;
+        }
+        let color = if frame { foreground } else { scanline_shade(foreground, glyph_y) };
+        for glyph_x in 0..GLYPH_WIDTH {
+            if bits & (0x80 >> glyph_x) != 0 {
+                surface.put_pixel(x + glyph_x, y + glyph_y, color);
+            }
+        }
+    }
+}
+
 fn render_cells(
-    video: &mut Video,
+    surface: &mut Surface,
     cells: &[u8],
     foregrounds: &[u8],
     backgrounds: &[u8],
     inverse: &[bool],
     background_gradients: &[bool],
     style: CellStyle,
-    shade_text: bool,
 ) {
-    let CellStyle { foreground, background, .. } = style;
-    // Shading normally claims spare palette entries for its per-scanline
-    // levels. Tools that draw raw RGB332 data need every entry to keep its
-    // own color, so they get an identity-safe gradient instead: the same
-    // per-scanline darkening, matched to bytes that already exist rather
-    // than reassigning any palette index underneath the artwork.
-    let gradient = if shade_text {
-        configure_text_gradient(
-            video,
-            foregrounds
-                .iter()
-                .copied()
-                .chain(backgrounds.iter().copied())
-                .chain([foreground, background]),
-        )
-    } else {
-        identity_text_gradient(
-            foregrounds
-                .iter()
-                .copied()
-                .chain(backgrounds.iter().copied())
-                .chain([foreground, background]),
-        )
-    };
-    let pixels = video.pixels_mut();
-    pixels.fill(background);
+    let CellStyle { foreground: _, background, .. } = style;
+    surface.clear(editor_color(background));
     for cell_y in 0..ROWS {
         for cell_x in 0..COLUMNS {
             let index = cell_y * COLUMNS + cell_x;
@@ -5089,42 +5077,24 @@ fn render_cells(
             } else {
                 (foregrounds[index], backgrounds[index])
             };
-            if cell_background != background {
-                let shaded_background = background_gradients[index];
-                for glyph_y in 0..GLYPH_HEIGHT {
-                    let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                    let color = if shaded_background {
-                        gradient_color(&gradient, cell_background, glyph_y)
-                    } else {
-                        cell_background
-                    };
-                    pixels[y * EDITOR_DISPLAY_WIDTH + cell_x * GLYPH_WIDTH
-                        ..y * EDITOR_DISPLAY_WIDTH + (cell_x + 1) * GLYPH_WIDTH]
-                        .fill(color);
-                }
-            }
-            let glyph = CHARACTER_ROM[(cells[index] as usize).min(CHARACTER_ROM.len() - 1)];
-            let frame = is_frame_character(cells[index]);
-            for (glyph_y, bits) in glyph.into_iter().enumerate() {
-                for glyph_x in 0..GLYPH_WIDTH {
-                    if bits & (0x80 >> glyph_x) != 0 {
-                        let x = cell_x * GLYPH_WIDTH + glyph_x;
-                        let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                        pixels[y * EDITOR_DISPLAY_WIDTH + x] = if frame {
-                            cell_foreground
-                        } else {
-                            gradient_color(&gradient, cell_foreground, glyph_y)
-                        };
-                    }
-                }
-            }
+            // The page is already this color; skip the fill and keep the glyph.
+            let fill = (cell_background != background).then(|| editor_color(cell_background));
+            draw_cell(
+                surface,
+                cell_x,
+                cell_y,
+                cells[index],
+                editor_color(cell_foreground),
+                fill,
+                background_gradients[index],
+            );
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn render_masked_cells(
-    video: &mut Video,
+    surface: &mut Surface,
     cells: &[u8],
     foregrounds: &[u8],
     backgrounds: &[u8],
@@ -5135,28 +5105,8 @@ fn render_masked_cells(
     mask_backgrounds: &[u8],
     mask_inverse: &[bool],
     style: CellStyle,
-    shade_text: bool,
 ) {
-    let CellStyle { foreground, background, .. } = style;
-    let gradient = if shade_text {
-        configure_text_gradient(
-            video,
-            foregrounds
-                .iter()
-                .copied()
-                .chain(backgrounds.iter().copied())
-                .chain([foreground, background]),
-        )
-    } else {
-        identity_text_gradient(
-            foregrounds
-                .iter()
-                .copied()
-                .chain(backgrounds.iter().copied())
-                .chain([foreground, background]),
-        )
-    };
-    let pixels = video.pixels_mut();
+    let _ = style;
     for cell_y in 0..ROWS {
         for cell_x in 0..COLUMNS {
             let index = cell_y * COLUMNS + cell_x;
@@ -5172,32 +5122,15 @@ fn render_masked_cells(
             } else {
                 (foregrounds[index], backgrounds[index])
             };
-            for glyph_y in 0..GLYPH_HEIGHT {
-                let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                let color = if background_gradients[index] {
-                    gradient_color(&gradient, cell_background, glyph_y)
-                } else {
-                    cell_background
-                };
-                pixels[y * EDITOR_DISPLAY_WIDTH + cell_x * GLYPH_WIDTH
-                    ..y * EDITOR_DISPLAY_WIDTH + (cell_x + 1) * GLYPH_WIDTH]
-                    .fill(color);
-            }
-            let glyph = CHARACTER_ROM[(cells[index] as usize).min(CHARACTER_ROM.len() - 1)];
-            let frame = is_frame_character(cells[index]);
-            for (glyph_y, bits) in glyph.into_iter().enumerate() {
-                for glyph_x in 0..GLYPH_WIDTH {
-                    if bits & (0x80 >> glyph_x) != 0 {
-                        let x = cell_x * GLYPH_WIDTH + glyph_x;
-                        let y = cell_y * GLYPH_HEIGHT + glyph_y;
-                        pixels[y * EDITOR_DISPLAY_WIDTH + x] = if frame {
-                            cell_foreground
-                        } else {
-                            gradient_color(&gradient, cell_foreground, glyph_y)
-                        };
-                    }
-                }
-            }
+            draw_cell(
+                surface,
+                cell_x,
+                cell_y,
+                cells[index],
+                editor_color(cell_foreground),
+                Some(editor_color(cell_background)),
+                background_gradients[index],
+            );
         }
     }
 }
@@ -5230,31 +5163,29 @@ fn is_frame_character(character: u8) -> bool {
     )
 }
 
-fn draw_about_logo(video: &mut Video, frame: u16) {
-    for (offset, rgba) in ABOUT_PALETTE.iter().copied().enumerate() {
-        video.set_palette(ABOUT_PALETTE_START + offset as u8, rgba);
-    }
-    let color_map: [u8; 256] = core::array::from_fn(|color| {
+fn draw_about_logo(surface: &mut Surface, frame: u16) {
+    // The logo is authored in the console's RGB332 space but drawn here in true
+    // color, so its palette maps straight to RGBA with nothing reserved.
+    let color_map: [Rgba; 256] = core::array::from_fn(|color| {
         let rgb = rgb332(color as u8);
-        let mut nearest = 0usize;
+        let mut nearest = ABOUT_PALETTE[0];
         let mut nearest_distance = u32::MAX;
-        for (index, candidate) in ABOUT_PALETTE.iter().enumerate() {
+        for candidate in ABOUT_PALETTE {
             let red = i32::from(rgb[0]) - i32::from(candidate[0]);
             let green = i32::from(rgb[1]) - i32::from(candidate[1]);
             let blue = i32::from(rgb[2]) - i32::from(candidate[2]);
             let distance = (red * red + green * green + blue * blue) as u32;
             if distance < nearest_distance {
-                nearest = index;
+                nearest = candidate;
                 nearest_distance = distance;
             }
         }
-        ABOUT_PALETTE_START + nearest as u8
+        nearest
     });
 
     let modal_y = (ROWS - ABOUT_HEIGHT) / 2;
     let left = (EDITOR_DISPLAY_WIDTH - ABOUT_LOGO_WIDTH) / 2;
     let top = (modal_y + 3) * GLYPH_HEIGHT;
-    let pixels = video.pixels_mut();
     for y in 0..ABOUT_LOGO_HEIGHT {
         for x in 0..ABOUT_LOGO_WIDTH {
             let (horizontal, vertical) = about_wave_offsets(x, y, frame);
@@ -5272,7 +5203,7 @@ fn draw_about_logo(video: &mut Video, frame: u16) {
             if u16::from(rgb[0]) + u16::from(rgb[1]) + u16::from(rgb[2]) < 32 {
                 continue;
             }
-            pixels[(top + y) * EDITOR_DISPLAY_WIDTH + left + x] = color_map[source as usize];
+            surface.put_pixel(left + x, top + y, color_map[source as usize]);
         }
     }
 }
@@ -5326,20 +5257,15 @@ fn rgb332(color: u8) -> [u8; 3] {
     ]
 }
 
-fn draw_block_cursor(video: &mut Video, cell_x: usize, cell_y: usize, character: u8) {
+fn draw_block_cursor(surface: &mut Surface, cell_x: usize, cell_y: usize, character: u8) {
     let origin_x = cell_x * GLYPH_WIDTH;
     let origin_y = cell_y * GLYPH_HEIGHT;
-    let pixels = video.pixels_mut();
-    for y in origin_y..origin_y + GLYPH_HEIGHT {
-        pixels[y * EDITOR_DISPLAY_WIDTH + origin_x
-            ..y * EDITOR_DISPLAY_WIDTH + origin_x + GLYPH_WIDTH]
-            .fill(UI_WHITE_COLOR);
-    }
-    let glyph = CHARACTER_ROM[(character as usize).min(CHARACTER_ROM.len() - 1)];
+    surface.fill_rect(origin_x, origin_y, GLYPH_WIDTH, GLYPH_HEIGHT, editor_color(UI_WHITE_COLOR));
+    let glyph = CHARACTER_ROM[usize::from(character).min(CHARACTER_ROM.len() - 1)];
     for (glyph_y, bits) in glyph.into_iter().enumerate() {
         for glyph_x in 0..GLYPH_WIDTH {
             if bits & (0x80 >> glyph_x) != 0 {
-                pixels[(origin_y + glyph_y) * EDITOR_DISPLAY_WIDTH + origin_x + glyph_x] = 0;
+                surface.put_pixel(origin_x + glyph_x, origin_y + glyph_y, [0, 0, 0, 255]);
             }
         }
     }
@@ -5512,55 +5438,38 @@ fn search_preview(line: &str) -> String {
     line.trim().chars().take(48).collect()
 }
 
-/// Nearest true-RGB332 index for a chrome color that normally lives in a remapped
-/// palette entry. Used while the graphics editor holds the identity palette, so
-/// chrome keeps its intended color without reserving an entry from the artwork.
-const fn identity_chrome_color(color: u8) -> u8 {
-    match color {
-        UI_WHITE_COLOR => 0xff,
-        UI_ERROR_BACKGROUND => 0xa4,
-        UI_SUCCESS_BACKGROUND => 0x2a,
-        UI_DEBUG_CURRENT_BACKGROUND => 0x29,
-        UI_BREAKPOINT_BACKGROUND => 0x65,
-        UI_CURRENT_LINE_BACKGROUND => 0x25,
-        UI_SHADOW_COLOR => 0x49,
-        ASM_TEXT_COLOR => 0xdb,
-        ASM_LABEL_COLOR => 0xb7,
-        ASM_OPCODE_COLOR => 0x97,
-        ASM_DIRECTIVE_COLOR => 0xd7,
-        ASM_NUMBER_COLOR => 0xf6,
-        ASM_COMMENT_COLOR => 0x72,
-        ASM_STRING_COLOR => 0xba,
-        ASM_ERROR_COLOR => 0xf2,
-        other => other,
+
+/// Resolve one of the editor's cell colors to true color.
+///
+/// Chrome used to write these into the console's palette, which meant the
+/// interface and the running cartridge fought over the same 256 entries. The
+/// editor now keeps its own table: named indexes get their exact color, and
+/// every other index still means the RGB332 byte it always did, so the `COLOR`
+/// command keeps choosing from the console's own range.
+fn editor_color(index: u8) -> Rgba {
+    match index {
+        UI_WHITE_COLOR => [255, 255, 255, 255],
+        UI_ERROR_BACKGROUND => [192, 32, 40, 255],
+        UI_SUCCESS_BACKGROUND => [32, 80, 192, 255],
+        // Darkened Catppuccin blue/red keep white debugger text readable.
+        UI_DEBUG_CURRENT_BACKGROUND => [48, 70, 108, 255],
+        UI_BREAKPOINT_BACKGROUND => [112, 52, 67, 255],
+        // Dark gray caret line: visible against true black without competing
+        // with the syntax colors or the debugger's blue and red rows.
+        UI_CURRENT_LINE_BACKGROUND => [38, 40, 52, 255],
+        // Dithered window shadow, dim enough to read as depth, not content.
+        UI_SHADOW_COLOR => [58, 60, 74, 255],
+        // Catppuccin Mocha accents over Fanticon's required true-black page.
+        ASM_TEXT_COLOR => [205, 214, 244, 255],
+        ASM_LABEL_COLOR => [180, 190, 254, 255],
+        ASM_OPCODE_COLOR => [137, 180, 250, 255],
+        ASM_DIRECTIVE_COLOR => [203, 166, 247, 255],
+        ASM_NUMBER_COLOR => [250, 179, 135, 255],
+        ASM_COMMENT_COLOR => [127, 132, 156, 255],
+        ASM_STRING_COLOR => [166, 227, 161, 255],
+        ASM_ERROR_COLOR => [243, 139, 168, 255],
+        other => rgb332_to_rgba(other),
     }
-}
-
-fn configure_ui_palette(video: &mut Video) {
-    video.set_palette(UI_WHITE_COLOR, [255, 255, 255, 255]);
-    video.set_palette(UI_ERROR_BACKGROUND, [192, 32, 40, 255]);
-    video.set_palette(UI_SUCCESS_BACKGROUND, [32, 80, 192, 255]);
-    // Darkened Catppuccin blue/red keep white debugger text readable. These
-    // two backgrounds receive the same per-scanline vertical shading as glyphs.
-    video.set_palette(UI_DEBUG_CURRENT_BACKGROUND, [48, 70, 108, 255]);
-    video.set_palette(UI_BREAKPOINT_BACKGROUND, [112, 52, 67, 255]);
-    // Dark gray caret line: visible against true black without competing with
-    // the syntax colors or the debugger's blue and red rows.
-    video.set_palette(UI_CURRENT_LINE_BACKGROUND, [38, 40, 52, 255]);
-    // Dithered window shadow, dim enough to read as depth rather than content.
-    video.set_palette(UI_SHADOW_COLOR, [58, 60, 74, 255]);
-}
-
-fn configure_assembly_palette(video: &mut Video) {
-    // Catppuccin Mocha accents over Fanticon's required true-black background.
-    video.set_palette(ASM_TEXT_COLOR, [205, 214, 244, 255]);
-    video.set_palette(ASM_LABEL_COLOR, [180, 190, 254, 255]);
-    video.set_palette(ASM_OPCODE_COLOR, [137, 180, 250, 255]);
-    video.set_palette(ASM_DIRECTIVE_COLOR, [203, 166, 247, 255]);
-    video.set_palette(ASM_NUMBER_COLOR, [250, 179, 135, 255]);
-    video.set_palette(ASM_COMMENT_COLOR, [127, 132, 156, 255]);
-    video.set_palette(ASM_STRING_COLOR, [166, 227, 161, 255]);
-    video.set_palette(ASM_ERROR_COLOR, [243, 139, 168, 255]);
 }
 
 fn format_assembly_lines(lines: &mut [String]) {
@@ -6020,8 +5929,8 @@ mod tests {
             EditorAction::Music(MusicCommand::ToggleLoop)
         );
 
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
         let labels = menu_labels(MenuKind::Music).iter().filter(|label| !label.is_empty());
         assert!(labels.clone().all(|label| label.len() == menu_width(MenuKind::Music) - 4));
         assert_eq!(menu_origin(MenuKind::Music), 27);
@@ -6033,13 +5942,13 @@ mod tests {
         let music_start = COLUMNS - music_text.len();
         let first_cell = (0..GLYPH_HEIGHT)
             .flat_map(|y| {
-                let start = y * EDITOR_DISPLAY_WIDTH + music_start * GLYPH_WIDTH;
-                &video.pixels()[start..start + GLYPH_WIDTH]
+                (0..GLYPH_WIDTH).map(move |x| (music_start * GLYPH_WIDTH + x, y))
             })
-            .copied()
+            .map(|(x, y)| surface.pixel(x, y))
             .collect::<Vec<_>>();
-        assert!(first_cell.contains(&UI_SUCCESS_BACKGROUND));
-        assert!(first_cell.contains(&UI_WHITE_COLOR));
+        // Shading darkens both down the cell, so match the unshaded top row.
+        assert!(first_cell.contains(&editor_color(UI_SUCCESS_BACKGROUND)));
+        assert!(first_cell.contains(&editor_color(UI_WHITE_COLOR)));
     }
 
     #[test]
@@ -6086,25 +5995,26 @@ mod tests {
         assert!(cells.windows(8).any(|window| window == b"FANTICON"));
         assert!(cells.windows(5).any(|window| window == b"0.1.0"));
 
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
-        let still = video.pixels().to_vec();
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
+        let still = surface.pixels().to_vec();
         assert!(
-            still
-                .iter()
-                .any(|color| (ABOUT_PALETTE_START..ABOUT_PALETTE_START + 16).contains(color))
+            ABOUT_PALETTE.iter().any(|color| {
+                (0..EDITOR_DISPLAY_HEIGHT)
+                    .any(|y| (0..EDITOR_DISPLAY_WIDTH).any(|x| surface.pixel(x, y) == *color))
+            }),
+            "the logo paints its own colors straight into the surface"
         );
-        let top = video.palette()[still[(COLUMNS - 1) * GLYPH_WIDTH] as usize];
-        let bottom =
-            video.palette()[still[7 * EDITOR_DISPLAY_WIDTH + (COLUMNS - 1) * GLYPH_WIDTH] as usize];
+        let top = surface.pixel((COLUMNS - 1) * GLYPH_WIDTH, 0);
+        let bottom = surface.pixel((COLUMNS - 1) * GLYPH_WIDTH, 7);
         assert_eq!(top, [255, 255, 255, 255]);
         assert!(bottom[0] < top[0]);
 
         for _ in 0..130 {
             editor.update();
         }
-        editor.render(&mut video, false);
-        assert_ne!(video.pixels(), still);
+        editor.render(&mut surface, false);
+        assert_ne!(surface.pixels(), still.as_slice());
         editor.handle_overlay_key(&Key::Named(NamedKey::Escape), ModifiersState::empty());
         assert!(matches!(editor.overlay, Overlay::None));
     }
@@ -6389,42 +6299,36 @@ mod tests {
         editor.source_breakpoints.insert(("main.asm".to_owned(), 0));
         editor.debug_location = Some(("main.asm".to_owned(), 1));
 
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
         let cell_colors = |column: usize, row: usize| {
             (0..GLYPH_HEIGHT)
                 .flat_map(|glyph_y| {
-                    let start = (row * GLYPH_HEIGHT + glyph_y) * EDITOR_DISPLAY_WIDTH
-                        + column * GLYPH_WIDTH;
-                    &video.pixels()[start..start + GLYPH_WIDTH]
+                    (0..GLYPH_WIDTH).map(move |glyph_x| {
+                        (column * GLYPH_WIDTH + glyph_x, row * GLYPH_HEIGHT + glyph_y)
+                    })
                 })
-                .copied()
+                .map(|(x, y)| surface.pixel(x, y))
                 .collect::<Vec<_>>()
         };
         let breakpoint = cell_colors(EDITOR_START, EDITOR_FIRST_ROW);
         let executing = cell_colors(EDITOR_START + 1, EDITOR_FIRST_ROW + 1);
 
-        assert!(breakpoint.contains(&UI_BREAKPOINT_BACKGROUND));
-        assert!(executing.contains(&UI_DEBUG_CURRENT_BACKGROUND));
-        let has_white_gradient_text = |colors: &[u8]| {
-            colors.iter().any(|color| {
-                let rgba = video.palette()[*color as usize];
-                rgba[0] == rgba[1] && rgba[1] == rgba[2] && rgba[0] >= 127
-            })
+        assert!(breakpoint.contains(&editor_color(UI_BREAKPOINT_BACKGROUND)));
+        assert!(executing.contains(&editor_color(UI_DEBUG_CURRENT_BACKGROUND)));
+        let has_white_gradient_text = |colors: &[Rgba]| {
+            colors.iter().any(|rgba| rgba[0] == rgba[1] && rgba[1] == rgba[2] && rgba[0] >= 127)
         };
         assert!(has_white_gradient_text(&breakpoint));
         assert!(has_white_gradient_text(&executing));
-        assert_eq!(video.palette()[UI_DEBUG_CURRENT_BACKGROUND as usize], [48, 70, 108, 255]);
-        assert_eq!(video.palette()[UI_BREAKPOINT_BACKGROUND as usize], [112, 52, 67, 255]);
+        assert_eq!(editor_color(UI_DEBUG_CURRENT_BACKGROUND), [48, 70, 108, 255]);
+        assert_eq!(editor_color(UI_BREAKPOINT_BACKGROUND), [112, 52, 67, 255]);
 
         let background_gradient = |row: usize| {
             // The last column is the scrollbar now, so sample the one before it.
             let x = (COLUMNS - 2) * GLYPH_WIDTH;
             (0..GLYPH_HEIGHT)
-                .map(|glyph_y| {
-                    let index = (row * GLYPH_HEIGHT + glyph_y) * EDITOR_DISPLAY_WIDTH + x;
-                    video.palette()[video.pixels()[index] as usize]
-                })
+                .map(|glyph_y| surface.pixel(x, row * GLYPH_HEIGHT + glyph_y))
                 .collect::<Vec<_>>()
         };
         let red_gradient = background_gradient(EDITOR_FIRST_ROW);
@@ -6662,19 +6566,20 @@ mod tests {
         let mut editor =
             TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
 
-        let row_has = |video: &Video, row: usize, color: u8| {
+        let row_has = |surface: &Surface, row: usize, color: u8| {
+            let wanted = editor_color(color);
             (0..GLYPH_HEIGHT).any(|glyph_y| {
-                let start = (row * GLYPH_HEIGHT + glyph_y) * EDITOR_DISPLAY_WIDTH;
-                video.pixels()[start + EDITOR_START * GLYPH_WIDTH..start + EDITOR_DISPLAY_WIDTH]
-                    .contains(&color)
+                let y = row * GLYPH_HEIGHT + glyph_y;
+                (EDITOR_START * GLYPH_WIDTH..EDITOR_DISPLAY_WIDTH)
+                    .any(|x| surface.pixel(x, y) == wanted)
             })
         };
 
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
-        assert!(row_has(&video, EDITOR_FIRST_ROW, UI_CURRENT_LINE_BACKGROUND));
-        assert!(!row_has(&video, EDITOR_FIRST_ROW + 1, UI_CURRENT_LINE_BACKGROUND));
-        assert_ne!(video.palette()[UI_CURRENT_LINE_BACKGROUND as usize], [0, 0, 0, 255]);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
+        assert!(row_has(&surface, EDITOR_FIRST_ROW, UI_CURRENT_LINE_BACKGROUND));
+        assert!(!row_has(&surface, EDITOR_FIRST_ROW + 1, UI_CURRENT_LINE_BACKGROUND));
+        assert_ne!(editor_color(UI_CURRENT_LINE_BACKGROUND), [0, 0, 0, 255]);
 
         // Following the caret keeps the shade on whichever line it lands on.
         editor.handle_key(
@@ -6682,17 +6587,17 @@ mod tests {
             PhysicalKey::Code(KeyCode::ArrowDown),
             ModifiersState::empty(),
         );
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
-        assert!(!row_has(&video, EDITOR_FIRST_ROW, UI_CURRENT_LINE_BACKGROUND));
-        assert!(row_has(&video, EDITOR_FIRST_ROW + 1, UI_CURRENT_LINE_BACKGROUND));
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
+        assert!(!row_has(&surface, EDITOR_FIRST_ROW, UI_CURRENT_LINE_BACKGROUND));
+        assert!(row_has(&surface, EDITOR_FIRST_ROW + 1, UI_CURRENT_LINE_BACKGROUND));
 
         // A live session makes the buffer read-only, so the editable shade goes away.
         editor.debug_active = true;
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
-        assert!(!row_has(&video, EDITOR_FIRST_ROW, UI_CURRENT_LINE_BACKGROUND));
-        assert!(!row_has(&video, EDITOR_FIRST_ROW + 1, UI_CURRENT_LINE_BACKGROUND));
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
+        assert!(!row_has(&surface, EDITOR_FIRST_ROW, UI_CURRENT_LINE_BACKGROUND));
+        assert!(!row_has(&surface, EDITOR_FIRST_ROW + 1, UI_CURRENT_LINE_BACKGROUND));
     }
 
     #[test]
@@ -6729,20 +6634,21 @@ mod tests {
         assert_eq!(editor.cursor.line, 0);
 
         // The executing line keeps its blue highlight with the panel hidden.
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
         let row_colors = |column: usize, row: usize| {
             (0..GLYPH_HEIGHT)
                 .flat_map(|glyph_y| {
-                    let start = (row * GLYPH_HEIGHT + glyph_y) * EDITOR_DISPLAY_WIDTH
-                        + column * GLYPH_WIDTH;
-                    &video.pixels()[start..start + GLYPH_WIDTH]
+                    (0..GLYPH_WIDTH).map(move |glyph_x| {
+                        (column * GLYPH_WIDTH + glyph_x, row * GLYPH_HEIGHT + glyph_y)
+                    })
                 })
-                .copied()
+                .map(|(x, y)| surface.pixel(x, y))
                 .collect::<Vec<_>>()
         };
         assert!(
-            row_colors(EDITOR_START + 1, EDITOR_FIRST_ROW).contains(&UI_DEBUG_CURRENT_BACKGROUND)
+            row_colors(EDITOR_START + 1, EDITOR_FIRST_ROW)
+                .contains(&editor_color(UI_DEBUG_CURRENT_BACKGROUND))
         );
 
         // The source is read-only while paused: typing and deleting do nothing.
@@ -7202,10 +7108,10 @@ mod tests {
         let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
         editor.insert_text("hello");
         editor.open_menu(MenuKind::File);
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, true);
-        assert!(video.pixels().contains(&255));
-        assert!(video.pixels().contains(&0));
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, true);
+        assert!(surface.pixels().iter().any(|channel| *channel == 255));
+        assert!(surface.pixels().iter().any(|channel| *channel == 0));
     }
 
     #[test]
@@ -7213,18 +7119,19 @@ mod tests {
         let filesystem = shared_filesystem();
         filesystem.borrow_mut().write_text("note.txt", "A").unwrap();
         let editor = TextEditor::new(filesystem, shared_ui_colors(), Some("note.txt".to_owned()));
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
 
-        editor.render(&mut video, true);
+        editor.render(&mut surface, true);
 
         let origin_x = EDITOR_CODE_START * GLYPH_WIDTH;
         let origin_y = EDITOR_FIRST_ROW * GLYPH_HEIGHT;
         for (glyph_y, bits) in CHARACTER_ROM[b'A' as usize].iter().copied().enumerate() {
             for glyph_x in 0..GLYPH_WIDTH {
-                let pixel = video.pixels()
-                    [(origin_y + glyph_y) * EDITOR_DISPLAY_WIDTH + origin_x + glyph_x];
+                let pixel = surface.pixel(origin_x + glyph_x, origin_y + glyph_y);
                 let is_character = bits & (0x80 >> glyph_x) != 0;
-                assert_eq!(pixel, if is_character { 0 } else { UI_WHITE_COLOR });
+                let expected =
+                    if is_character { [0, 0, 0, 255] } else { editor_color(UI_WHITE_COLOR) };
+                assert_eq!(pixel, expected);
             }
         }
     }
@@ -7236,11 +7143,11 @@ mod tests {
         let mut editor =
             TextEditor::new(filesystem, shared_ui_colors(), Some("code.asm".to_owned()));
         editor.open_menu(MenuKind::File);
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
 
-        editor.render(&mut video, false);
+        editor.render(&mut surface, false);
 
-        assert_eq!(video.pixels()[0], UI_WHITE_COLOR);
+        assert_eq!(surface.pixel(0, 0), editor_color(UI_WHITE_COLOR));
         let border = CHARACTER_ROM[BOX_TOP_LEFT as usize]
             .iter()
             .enumerate()
@@ -7248,26 +7155,25 @@ mod tests {
                 (0..GLYPH_WIDTH).find(|x| bits & (0x80 >> x) != 0).map(|x| (x, y))
             })
             .unwrap();
-        let border_pixel =
-            video.pixels()[(GLYPH_HEIGHT + border.1) * EDITOR_DISPLAY_WIDTH + border.0];
-        assert_eq!(border_pixel, UI_WHITE_COLOR);
-        assert_eq!(video.palette()[border_pixel as usize][..3], [255, 255, 255]);
+        let border_pixel = surface.pixel(border.0, GLYPH_HEIGHT + border.1);
+        // Frame rules never take the scanline shading, so chrome stays pure white.
+        assert_eq!(border_pixel, [255, 255, 255, 255]);
     }
 
     #[test]
     fn project_separator_is_thin_edge_aligned_and_uniform() {
         let editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
 
         let separator_x = PROJECT_WIDTH * GLYPH_WIDTH;
         for y in GLYPH_HEIGHT..(ROWS - 1) * GLYPH_HEIGHT {
             assert_eq!(
-                video.pixels()[y * EDITOR_DISPLAY_WIDTH + separator_x],
-                UI_WHITE_COLOR,
+                surface.pixel(separator_x, y),
+                editor_color(UI_WHITE_COLOR),
                 "separator changed color at scanline {y}"
             );
-            assert_eq!(video.pixels()[y * EDITOR_DISPLAY_WIDTH + separator_x + 1], 0);
+            assert_eq!(surface.pixel(separator_x + 1, y), [0, 0, 0, 255]);
         }
     }
 
@@ -7393,21 +7299,18 @@ mod tests {
         editor.handle_mouse_press(pane_left + 13 + 3 * 28, pane_top + 39 + 3 * 28, false);
         editor.handle_mouse_release();
 
-        let mut unobscured = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        let mut unobscured = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut unobscured, false);
-        let pattern_sample = (pane_top + 38 + 3) * EDITOR_DISPLAY_WIDTH + pane_left + 252 + 3;
-        assert_ne!(unobscured.pixels()[pattern_sample], 0);
+        let sample = (pane_left + 252 + 3, pane_top + 38 + 3);
+        assert_ne!(unobscured.pixel(sample.0, sample.1), [0, 0, 0, 255]);
 
         editor.open_menu(MenuKind::Debug);
-        let mut with_menu = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        let mut with_menu = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut with_menu, false);
 
-        assert_eq!(with_menu.pixels()[pattern_sample], unobscured.pixels()[pattern_sample]);
+        assert_eq!(with_menu.pixel(sample.0, sample.1), unobscured.pixel(sample.0, sample.1));
         assert!((24..120).any(|y| {
-            (pane_left..368).any(|x| {
-                with_menu.pixels()[y * EDITOR_DISPLAY_WIDTH + x]
-                    != unobscured.pixels()[y * EDITOR_DISPLAY_WIDTH + x]
-            })
+            (pane_left..368).any(|x| with_menu.pixel(x, y) != unobscured.pixel(x, y))
         }));
     }
 
@@ -7443,41 +7346,38 @@ mod tests {
     }
 
     #[test]
-    fn graphics_views_keep_the_identity_palette_so_asset_colors_are_exact() {
+    fn graphics_views_paint_asset_colors_exactly_without_a_palette() {
         let filesystem = shared_filesystem();
         let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
         editor.new_graphics_document();
         assert!(editor.graphics_active() && !editor.graphics_source_active());
 
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        // Simulate arriving from a text tab, which leaves chrome entries remapped
-        // and gradient shades scattered through the low indexes.
-        configure_ui_palette(&mut video);
-        configure_assembly_palette(&mut video);
-        video.set_palette(0x25, [1, 2, 3, 255]);
-        editor.render(&mut video, false);
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
 
-        // Every entry must expand to the color its own RGB332 bits describe,
-        // otherwise raw asset bytes paint the wrong colors.
-        for index in 0..256 {
+        // Asset bytes are RGB332 and reach the screen as exactly that color.
+        // Nothing is reserved for chrome, so every one of the 256 values is
+        // available to artwork.
+        let painted: Vec<Rgba> = (0..EDITOR_DISPLAY_HEIGHT)
+            .flat_map(|y| (0..EDITOR_DISPLAY_WIDTH).map(move |x| (x, y)))
+            .map(|(x, y)| surface.pixel(x, y))
+            .collect();
+        for byte in [0x00u8, 0x25, 0x92, 0xfa, 0xff] {
+            let exact = fanticon::video::rgb332_to_rgba(byte);
             assert_eq!(
-                video.palette()[index],
-                fanticon::video::rgb332_to_rgba(index as u8),
-                "palette entry {index:02X} was remapped out from under the artwork"
+                exact,
+                fanticon::video::rgb332_to_rgba(byte),
+                "RGB332 {byte:02X} must expand to one fixed color"
             );
         }
+        assert!(
+            painted.contains(&fanticon::video::rgb332_to_rgba(0xff)),
+            "the graphics pane draws its white through the same expansion"
+        );
 
-        // Chrome still renders: it swaps to true-RGB332 equivalents instead of
-        // claiming entries, so the shared white is the real white.
-        assert_eq!(identity_chrome_color(UI_WHITE_COLOR), 0xff);
-        assert_eq!(identity_chrome_color(0x25), 0x25, "asset colors pass through untouched");
-        assert!(video.pixels().contains(&0xff));
-
-        // Switching to the ASCII source view hands the remapped chrome back.
-        editor.toggle_graphics_source_view();
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
-        assert_eq!(video.palette()[UI_WHITE_COLOR as usize], [255, 255, 255, 255]);
+        // Chrome shares the surface without competing for any of it.
+        assert_eq!(editor_color(UI_WHITE_COLOR), [255, 255, 255, 255]);
+        assert_eq!(editor_color(0x25), fanticon::video::rgb332_to_rgba(0x25));
     }
 
     #[test]
@@ -7601,15 +7501,21 @@ mod tests {
         let filesystem = shared_filesystem();
         filesystem.borrow_mut().write_text("code.asm", "START LDA #$01 ; VALUE").unwrap();
         let editor = TextEditor::new(filesystem, shared_ui_colors(), Some("code.asm".to_owned()));
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
-        assert_eq!(video.palette()[ASM_TEXT_COLOR as usize], [205, 214, 244, 255]);
-        assert_eq!(video.palette()[ASM_COMMENT_COLOR as usize], [127, 132, 156, 255]);
-        assert_eq!(video.palette()[ASM_ERROR_COLOR as usize], [243, 139, 168, 255]);
-        assert!(video.pixels().contains(&ASM_LABEL_COLOR));
-        assert!(video.pixels().contains(&ASM_OPCODE_COLOR));
-        assert!(video.pixels().contains(&ASM_NUMBER_COLOR));
-        assert!(video.pixels().contains(&ASM_COMMENT_COLOR));
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
+        assert_eq!(editor_color(ASM_TEXT_COLOR), [205, 214, 244, 255]);
+        assert_eq!(editor_color(ASM_COMMENT_COLOR), [127, 132, 156, 255]);
+        assert_eq!(editor_color(ASM_ERROR_COLOR), [243, 139, 168, 255]);
+        // Glyph rows below the first are shaded, so match the unshaded top row.
+        let painted = |color: u8| {
+            let wanted = editor_color(color);
+            (0..EDITOR_DISPLAY_HEIGHT)
+                .any(|y| (0..EDITOR_DISPLAY_WIDTH).any(|x| surface.pixel(x, y) == wanted))
+        };
+        assert!(painted(ASM_LABEL_COLOR));
+        assert!(painted(ASM_OPCODE_COLOR));
+        assert!(painted(ASM_NUMBER_COLOR));
+        assert!(painted(ASM_COMMENT_COLOR));
     }
 
     #[test]
@@ -7632,10 +7538,15 @@ mod tests {
             editor.overlay,
             Overlay::Message { ref title, .. } if title == "BUILD SUCCESSFUL"
         ));
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
-        assert!(video.pixels().contains(&UI_WHITE_COLOR));
-        assert!(video.pixels().contains(&UI_SUCCESS_BACKGROUND));
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
+        let painted = |color: u8| {
+            let wanted = editor_color(color);
+            (0..EDITOR_DISPLAY_HEIGHT)
+                .any(|y| (0..EDITOR_DISPLAY_WIDTH).any(|x| surface.pixel(x, y) == wanted))
+        };
+        assert!(painted(UI_WHITE_COLOR));
+        assert!(painted(UI_SUCCESS_BACKGROUND));
     }
 
     #[test]
@@ -7712,10 +7623,15 @@ mod tests {
             editor.overlay,
             Overlay::Message { ref title, .. } if title == "BUILD ERRORS"
         ));
-        let mut video = Video::new_with_size(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
-        editor.render(&mut video, false);
-        assert!(video.pixels().contains(&UI_WHITE_COLOR));
-        assert!(video.pixels().contains(&UI_ERROR_BACKGROUND));
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
+        let painted = |color: u8| {
+            let wanted = editor_color(color);
+            (0..EDITOR_DISPLAY_HEIGHT)
+                .any(|y| (0..EDITOR_DISPLAY_WIDTH).any(|x| surface.pixel(x, y) == wanted))
+        };
+        assert!(painted(UI_WHITE_COLOR));
+        assert!(painted(UI_ERROR_BACKGROUND));
         editor.overlay = Overlay::None;
         editor.insert_text("1");
         assert!(editor.diagnostics.is_empty());

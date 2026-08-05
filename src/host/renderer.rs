@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use fanticon::video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, RGBA_FRAME_LEN, Video};
+
+use super::surface::Surface;
 use web_time::Instant;
 use wgpu::util::DeviceExt;
 use winit::{dpi::PhysicalSize, window::Window};
@@ -242,15 +244,34 @@ impl Renderer {
         self.write_uniform();
     }
 
+    /// Present the console's own output, resolving its indexed pixels through
+    /// the cartridge palette.
     pub fn render(&mut self, video: &mut Video, text_mode: bool) -> FrameStatus {
         let source_size = (video.width() as u32, video.height() as u32);
         if source_size != self.source_size {
             self.set_source_size(source_size);
         }
-        self.text_mode = text_mode;
-        self.write_uniform();
         self.rgba_frame.resize(video.rgba_len(), 0);
         video.resolve_rgba(&mut self.rgba_frame).expect("fixed-size display buffer");
+        self.present(text_mode)
+    }
+
+    /// Present host interface pixels, which are already true color and owe the
+    /// cartridge palette nothing.
+    pub fn render_surface(&mut self, frame: &Surface, text_mode: bool) -> FrameStatus {
+        let (width, height) = frame.dimensions();
+        let source_size = (width as u32, height as u32);
+        if source_size != self.source_size {
+            self.set_source_size(source_size);
+        }
+        self.rgba_frame.clear();
+        self.rgba_frame.extend_from_slice(frame.pixels());
+        self.present(text_mode)
+    }
+
+    fn present(&mut self, text_mode: bool) -> FrameStatus {
+        self.text_mode = text_mode;
+        self.write_uniform();
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.display_texture,

@@ -70,6 +70,7 @@ syntax colors from bleeding through the overlay.
 | Command | Effect |
 | --- | --- |
 | `HELP` | List current commands |
+| `HELP TOPIC` | Show one opcode, directive, command, or guide-section card by name |
 | `CLS` or `CLEAR` | Clear the terminal |
 | `MODE` | Print the active application mode |
 | `EDITOR` | Enter native Editor mode |
@@ -134,8 +135,18 @@ for Debug, Alt+M for Music, or Alt+H for Help. Use the arrow keys to navigate,
 Enter to choose an item, and Escape to close a menu. While a menu is open, its displayed single-letter
 hotkeys activate items immediately. File uses N/O/S/A/X for New, Open, Save,
 Save As, and Exit. Edit uses U/T/C/P/A for Undo, Cut, Copy, Paste, and Select
-All. Build uses B/N/P for Assemble, Next Error, and Previous Error. **Help >
-About** opens the version dialog. Its compact Fanticon logo periodically bends
+All. Build uses B/N/P for Assemble, Next Error, and Previous Error. **Help > Find
+Help** (or F1, from anywhere outside the bare console prompt) opens a live,
+fzf-style finder: results filter as you type across every opcode, directive,
+console command, editor shortcut, and indexed guide section, with a preview
+pane and color-coded category tags. It starts empty until you type; Up/Down
+move the selection and the preview updates live, Page Up/Page Down scroll
+the preview pane itself (shown as a `LINE X-Y OF Z` indicator whenever a
+card runs longer than one screen), and Escape closes it and returns the
+cursor to exactly where it was. Resting the cursor on a recognized opcode or
+directive in assembly mode also shows a one-line gloss in the status bar
+with no popup at all. **Help > About** opens the version
+dialog. Its compact Fanticon logo periodically bends
 individual raster lines horizontally while a smaller column-driven wave bends
 them vertically. Each burst eases in and out over 16 frames before returning to
 its stable form, avoiding an abrupt transition at either edge.

@@ -12,6 +12,7 @@ use fanticon::{
 };
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
+use super::help::{HelpCategory, HelpEntry, format_guide_body, shared_help_index};
 use super::nsf_player::{MusicCommand, MusicStatus};
 use super::surface::{Rgba, Surface, scanline_shade};
 use super::{
@@ -49,6 +50,13 @@ const SEARCH_RESULTS_Y: usize = 3;
 const SEARCH_RESULTS_WIDTH: usize = COLUMNS - 4;
 const SEARCH_RESULTS_HEIGHT: usize = ROWS - 6;
 const SEARCH_RESULTS_VISIBLE: usize = SEARCH_RESULTS_HEIGHT - 5;
+const HELP_X: usize = 2;
+const HELP_Y: usize = 3;
+const HELP_WIDTH: usize = COLUMNS - 4;
+const HELP_HEIGHT: usize = ROWS - 6;
+const HELP_LIST_WIDTH: usize = 16;
+const HELP_PREVIEW_WIDTH: usize = HELP_WIDTH - HELP_LIST_WIDTH - 5;
+const HELP_VISIBLE: usize = HELP_HEIGHT - 8;
 const ASM_TEXT_COLOR: u8 = 240;
 const ASM_LABEL_COLOR: u8 = 241;
 const ASM_OPCODE_COLOR: u8 = 242;
@@ -64,6 +72,30 @@ const UI_DEBUG_CURRENT_BACKGROUND: u8 = 251;
 const UI_BREAKPOINT_BACKGROUND: u8 = 252;
 const UI_CURRENT_LINE_BACKGROUND: u8 = 253;
 const UI_SHADOW_COLOR: u8 = 254;
+
+/// Reuses the ASM syntax palette as category tags in the help finder, so an
+/// opcode result reads blue the same way it would in an assembly buffer.
+const fn help_category_color(category: HelpCategory) -> u8 {
+    match category {
+        HelpCategory::Opcode => ASM_OPCODE_COLOR,
+        HelpCategory::Directive => ASM_DIRECTIVE_COLOR,
+        HelpCategory::Command => ASM_LABEL_COLOR,
+        HelpCategory::Shortcut => ASM_NUMBER_COLOR,
+        HelpCategory::Guide => ASM_STRING_COLOR,
+    }
+}
+
+/// Reference cards are hand-formatted tables and are shown verbatim; guide
+/// bodies are prose pulled from the docs and are word-wrapped to the preview
+/// pane's width. Shared by rendering and by the preview scroll key handling
+/// so both agree on how many lines a card actually has.
+fn help_preview_lines(entry: &HelpEntry) -> Vec<String> {
+    if entry.category == HelpCategory::Guide {
+        format_guide_body(&entry.body, HELP_PREVIEW_WIDTH)
+    } else {
+        entry.body.clone()
+    }
+}
 /// Frames the caret stays lit, then dark. Moving the caret restarts this phase
 /// so it is always solid at the moment it lands somewhere new.
 const CURSOR_BLINK_FRAMES: u32 = 30;
@@ -278,6 +310,13 @@ enum Overlay {
     About {
         frame: u16,
     },
+    HelpFinder {
+        query: String,
+        results: Vec<&'static HelpEntry>,
+        selected: usize,
+        scroll: usize,
+        preview_scroll: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -454,6 +493,11 @@ impl TextEditor {
     ) -> EditorAction {
         if !matches!(self.overlay, Overlay::None) {
             return self.handle_overlay_key(key, modifiers);
+        }
+
+        if matches!(key, Key::Named(NamedKey::F1)) {
+            self.open_help_finder();
+            return EditorAction::None;
         }
 
         if (modifiers.control_key() || modifiers.super_key())
@@ -1557,6 +1601,7 @@ impl TextEditor {
                 return EditorAction::None;
             }
             Overlay::Building { .. } => return EditorAction::None,
+            Overlay::HelpFinder { .. } => return EditorAction::None,
             Overlay::None => {}
         }
 
@@ -2649,6 +2694,7 @@ impl TextEditor {
                 })
             })
             .or_else(|| self.build_message.as_ref().map(|message| format!(" {message}")))
+            .or_else(|| self.ambient_help_status())
             .unwrap_or_else(|| {
                 if self.graphics_active() && !self.graphics_source_active() {
                     return self.graphics_tabs[&self.document_id].status();
@@ -2665,7 +2711,7 @@ impl TextEditor {
         put_text(&mut cells, 0, ROWS - 1, &status);
         // Function-key legend on the right, the way every DOS IDE ended its
         // status line. It yields to any message that needs the whole row.
-        let keys = " F2 SAVE  F5 RUN  F9 BREAK  F10 MENU ";
+        let keys = " F1 HELP  F2 SAVE  F5 RUN  F9 BREAK  F10 MENU ";
         if status.len() + keys.len() < COLUMNS {
             put_text(&mut cells, COLUMNS - keys.len(), ROWS - 1, keys);
         }
@@ -2791,6 +2837,69 @@ impl TextEditor {
             }
             return submit
                 .map_or(EditorAction::None, |(kind, input)| self.submit_debug_prompt(kind, input));
+        }
+
+        if matches!(self.overlay, Overlay::HelpFinder { .. }) {
+            let mut close = false;
+            let mut query_changed = false;
+            if let Overlay::HelpFinder { query, selected, scroll, results, preview_scroll } =
+                &mut self.overlay
+            {
+                match key {
+                    Key::Named(NamedKey::Escape | NamedKey::Enter) => close = true,
+                    Key::Named(NamedKey::Backspace) => {
+                        if query.pop().is_some() {
+                            query_changed = true;
+                        }
+                    }
+                    Key::Named(NamedKey::ArrowUp) => {
+                        *selected = selected.saturating_sub(1);
+                        *scroll = (*scroll).min(*selected);
+                        *preview_scroll = 0;
+                    }
+                    Key::Named(NamedKey::ArrowDown) if !results.is_empty() => {
+                        *selected = (*selected + 1).min(results.len() - 1);
+                        if *selected >= *scroll + HELP_VISIBLE {
+                            *scroll = *selected + 1 - HELP_VISIBLE;
+                        }
+                        *preview_scroll = 0;
+                    }
+                    // Page Up/Down scroll the preview pane rather than the
+                    // list: the list rarely has more than a screenful of
+                    // matches, but a guide section's wrapped prose often
+                    // does, and that is the content with no other way to
+                    // reach its tail.
+                    Key::Named(NamedKey::PageUp) => {
+                        *preview_scroll = preview_scroll.saturating_sub(HELP_VISIBLE);
+                    }
+                    Key::Named(NamedKey::PageDown) => {
+                        let max_scroll = results
+                            .get(*selected)
+                            .map(|entry| help_preview_lines(entry).len().saturating_sub(HELP_VISIBLE))
+                            .unwrap_or(0);
+                        *preview_scroll = (*preview_scroll + HELP_VISIBLE).min(max_scroll);
+                    }
+                    Key::Named(NamedKey::Space) => {
+                        query.push(' ');
+                        query_changed = true;
+                    }
+                    Key::Character(text) if !modifiers.control_key() && !modifiers.super_key() => {
+                        let filtered: String =
+                            text.chars().filter(|character| character.is_ascii_graphic()).collect();
+                        if !filtered.is_empty() {
+                            query.push_str(&filtered);
+                            query_changed = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if close {
+                self.overlay = Overlay::None;
+            } else if query_changed {
+                self.refresh_help_finder();
+            }
+            return EditorAction::None;
         }
 
         if matches!(self.overlay, Overlay::SearchResults { .. }) {
@@ -2997,7 +3106,8 @@ impl TextEditor {
             | Overlay::SearchPrompt { .. }
             | Overlay::SearchResults { .. }
             | Overlay::DebugPrompt { .. }
-            | Overlay::About { .. } => {}
+            | Overlay::About { .. }
+            | Overlay::HelpFinder { .. } => {}
         }
         EditorAction::None
     }
@@ -3141,7 +3251,8 @@ impl TextEditor {
             (MenuKind::Music, 5) if self.music_status.is_some() => {
                 return EditorAction::Music(MusicCommand::Stop);
             }
-            (MenuKind::Help, 0) => self.overlay = Overlay::About { frame: 0 },
+            (MenuKind::Help, 0) => self.open_help_finder(),
+            (MenuKind::Help, 1) => self.overlay = Overlay::About { frame: 0 },
             _ => {}
         }
         EditorAction::None
@@ -3426,11 +3537,125 @@ impl TextEditor {
                 );
                 put_text_width(cells, x + 10, y + 21, "ENTER/ESC/CLICK=CLOSE", 22);
             }
+            Overlay::HelpFinder { query, results, selected, scroll, preview_scroll } => {
+                draw_dialog(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    background_gradients,
+                    inverse,
+                    CellRect { x: HELP_X, y: HELP_Y, width: HELP_WIDTH, height: HELP_HEIGHT },
+                    style,
+                );
+                put_text_width(cells, HELP_X + 3, HELP_Y, "HELP FINDER", HELP_WIDTH - 6);
+                put_text(cells, HELP_X + 2, HELP_Y + 2, "FIND:");
+                put_text_width(cells, HELP_X + 8, HELP_Y + 2, query, HELP_WIDTH - 10);
+
+                let list_x = HELP_X + 2;
+                let divider_x = HELP_X + HELP_LIST_WIDTH + 2;
+                let preview_x = divider_x + 1;
+                let header_row = HELP_Y + 4;
+                let content_row = HELP_Y + 6;
+                for row in HELP_Y + 1..HELP_Y + HELP_HEIGHT - 2 {
+                    put_cell(cells, divider_x, row, BOX_VERTICAL);
+                }
+
+                // A muted color for instructional/status text (placeholder,
+                // match count, footer) keeps it visually secondary to actual
+                // opcode/directive/command/guide content.
+                let muted_start = header_row * COLUMNS + list_x;
+                let list_label = if query.trim().is_empty() {
+                    "TYPE TO SEARCH..."
+                } else if results.is_empty() {
+                    "NO MATCHES"
+                } else {
+                    ""
+                };
+                if list_label.is_empty() {
+                    let text = format!("{} MATCH{}", results.len(), if results.len() == 1 { "" } else { "ES" });
+                    put_text_width(cells, list_x, header_row, &text, HELP_LIST_WIDTH);
+                } else {
+                    put_text_width(cells, list_x, header_row, list_label, HELP_LIST_WIDTH);
+                }
+                foregrounds[muted_start..(muted_start + HELP_LIST_WIDTH).min(header_row * COLUMNS + divider_x)]
+                    .fill(ASM_COMMENT_COLOR);
+
+                for (screen_row, entry) in results.iter().skip(*scroll).take(HELP_VISIBLE).enumerate() {
+                    let row = content_row + screen_row;
+                    let index = *scroll + screen_row;
+                    // The key is colored by category (matching ASM syntax
+                    // colors) instead of spelling the category out, so the
+                    // narrow list column is spent on the name, not a label.
+                    put_text_width(cells, list_x, row, &entry.key, HELP_LIST_WIDTH);
+                    let start = row * COLUMNS + list_x;
+                    let end = (start + HELP_LIST_WIDTH).min(row * COLUMNS + divider_x);
+                    foregrounds[start..end].fill(help_category_color(entry.category));
+                    if index == *selected {
+                        inverse[row * COLUMNS + HELP_X + 1..row * COLUMNS + divider_x].fill(true);
+                    }
+                }
+
+                if let Some(entry) = results.get(*selected) {
+                    let title = format!("{} - {}", entry.category.label(), entry.key);
+                    put_text_width(cells, preview_x, header_row, &title, HELP_PREVIEW_WIDTH);
+                    let title_start = header_row * COLUMNS + preview_x;
+                    foregrounds[title_start..title_start + title.len().min(HELP_PREVIEW_WIDTH)]
+                        .fill(help_category_color(entry.category));
+
+                    let preview_lines = help_preview_lines(entry);
+                    for (index, line) in
+                        preview_lines.iter().skip(*preview_scroll).take(HELP_VISIBLE).enumerate()
+                    {
+                        put_text_width(cells, preview_x, content_row + index, line, HELP_PREVIEW_WIDTH);
+                    }
+                    if preview_lines.len() > HELP_VISIBLE {
+                        let position = format!(
+                            "LINE {}-{} OF {}",
+                            *preview_scroll + 1,
+                            (*preview_scroll + HELP_VISIBLE).min(preview_lines.len()),
+                            preview_lines.len()
+                        );
+                        let position_start = (content_row - 1) * COLUMNS + preview_x;
+                        put_text_width(cells, preview_x, content_row - 1, &position, HELP_PREVIEW_WIDTH);
+                        foregrounds[position_start..position_start + position.len().min(HELP_PREVIEW_WIDTH)]
+                            .fill(ASM_COMMENT_COLOR);
+                    }
+                }
+
+                let footer = "TYPE TO SEARCH  UP/DOWN SELECT  PGUP/PGDN SCROLL  ESC=CLOSE";
+                let footer_row = HELP_Y + HELP_HEIGHT - 2;
+                put_text(cells, HELP_X + 2, footer_row, footer);
+                let footer_start = footer_row * COLUMNS + HELP_X + 2;
+                foregrounds[footer_start..footer_start + footer.len().min(HELP_WIDTH - 4)]
+                    .fill(ASM_COMMENT_COLOR);
+            }
         }
     }
 
     fn open_menu(&mut self, menu: MenuKind) {
         self.overlay = Overlay::Menu { menu, selected: 0 };
+    }
+
+    /// Opens the F1 help finder. It starts empty on purpose: nothing is
+    /// listed until the user types, rather than dumping every opcode,
+    /// directive, command, shortcut, and guide section at once.
+    fn open_help_finder(&mut self) {
+        self.overlay = Overlay::HelpFinder {
+            query: String::new(),
+            results: Vec::new(),
+            selected: 0,
+            scroll: 0,
+            preview_scroll: 0,
+        };
+    }
+
+    fn refresh_help_finder(&mut self) {
+        if let Overlay::HelpFinder { query, results, selected, scroll, preview_scroll } = &mut self.overlay {
+            *results = shared_help_index().search(query);
+            *selected = 0;
+            *scroll = 0;
+            *preview_scroll = 0;
+        }
     }
 
     fn open_dialog(&mut self, kind: DialogKind) {
@@ -4329,6 +4554,31 @@ impl TextEditor {
         self.filename.as_deref().is_some_and(assembly_filename)
     }
 
+    /// The zero-keystroke help tier: a one-line gloss for the opcode or
+    /// directive under the cursor, shown in the status bar with no popup at
+    /// all. Returns `None` outside assembly mode or when the cursor is not
+    /// on a recognized token, so the caller falls back to the ordinary
+    /// filename/line/column status.
+    fn ambient_help_status(&self) -> Option<String> {
+        if !self.assembly_mode() {
+            return None;
+        }
+        let line = self.lines.get(self.cursor.line)?;
+        let (_, token) = assembly_tokens(line).into_iter().find(|(start, token)| {
+            self.cursor.column >= *start && self.cursor.column <= *start + token.len()
+        })?;
+        let entry = shared_help_index().ambient_gloss(token)?;
+        let name = self.filename.as_deref().unwrap_or("UNTITLED.TXT");
+        let dirty = if self.dirty { "*" } else { " " };
+        Some(format!(
+            " {name}{dirty}  LN {} COL {}  {}: {}",
+            self.cursor.line + 1,
+            self.cursor.column + 1,
+            entry.key,
+            entry.summary
+        ))
+    }
+
     fn graphics_active(&self) -> bool {
         self.graphics_tabs.contains_key(&self.document_id)
     }
@@ -4620,7 +4870,7 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "DEBUG PANEL",
         ],
         MenuKind::Music => &["PLAY/PAUSE", "PREVIOUS", "NEXT", "LOOP", "", "STOP"],
-        MenuKind::Help => &["ABOUT"],
+        MenuKind::Help => &["FIND HELP", "ABOUT"],
     }
 }
 
@@ -4715,7 +4965,7 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "",
             "STOP          SHIFT+F7",
         ],
-        MenuKind::Help => &["ABOUT      A"],
+        MenuKind::Help => &["FIND HELP F1", "ABOUT      A"],
     }
 }
 
@@ -4752,7 +5002,7 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
             &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c"), (15, "d")]
         }
         MenuKind::Music => &[(0, "p"), (1, "r"), (2, "n"), (3, "l"), (5, "s")],
-        MenuKind::Help => &[(0, "a")],
+        MenuKind::Help => &[(0, "f"), (1, "a")],
     };
     hotkeys.iter().find_map(|(index, hotkey)| (*hotkey == key).then_some(*index))
 }
@@ -5956,7 +6206,8 @@ mod tests {
         let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
         assert_eq!(menu_origin(MenuKind::Help), 34);
         assert_eq!(menu_bar_hit(34), Some(MenuKind::Help));
-        assert_eq!(menu_hotkey(MenuKind::Help, "a"), Some(0));
+        assert_eq!(menu_hotkey(MenuKind::Help, "a"), Some(1));
+        assert_eq!(menu_hotkey(MenuKind::Help, "f"), Some(0));
         assert_eq!(about_wave_phase(119), None);
         assert_eq!(about_wave_phase(120), Some(0));
         assert_eq!(about_wave_phase(121), Some(1));
@@ -5976,7 +6227,7 @@ mod tests {
             (0..ABOUT_LOGO_WIDTH).map(|x| about_wave_offsets(x, 0, 136).1.abs()).max().unwrap();
         assert_eq!(horizontal_amplitude, 8);
         assert_eq!(vertical_amplitude, 3);
-        editor.activate_menu(MenuKind::Help, 0);
+        editor.activate_menu(MenuKind::Help, 1);
         assert!(matches!(editor.overlay, Overlay::About { frame: 0 }));
 
         let mut cells = [b' '; COLUMNS * ROWS];

@@ -8,6 +8,7 @@ use super::character_rom::{
     CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, configure_text_gradient, gradient_color,
 };
 use super::filesystem::{DirectoryEntry, SharedFilesystem, shared_filesystem};
+use super::help::{HelpCategory, format_guide_body, shared_help_index};
 use super::nsf_player::{MusicCommand, import_nsf_to_mus};
 use super::ui_colors::{SharedUiColors, UiColors, parse_palette_index, shared_ui_colors};
 use super::{EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH};
@@ -206,13 +207,19 @@ impl Terminal {
         let arguments = arguments.trim();
         match name.as_str() {
             "" => TerminalAction::None,
-            "HELP" => {
+            "HELP" if arguments.is_empty() => {
                 self.write("HELP CLS MODE EDITOR GAME EDIT NEW\n");
                 self.write("ECHO VERSION COLOR CD MKDIR\n");
                 self.write("RMDIR RM DEL DIR LS ASM BUILD RUN DUMP\n");
                 self.write("PLAYNSF NSFPLAY NSFPAUSE NSFSTOP\n");
                 self.write("NSFNEXT NSFPREV NSFLOOP NSFINFO\n");
                 self.write("NSF2MUS INPUT.NSF OUTPUT.MUS [TRACK]\n");
+                self.write("HELP TOPIC FOR ONE OPCODE, DIRECTIVE,\n");
+                self.write("COMMAND, OR GUIDE SECTION BY NAME.\n");
+                TerminalAction::None
+            }
+            "HELP" => {
+                self.show_help_topic(arguments);
                 TerminalAction::None
             }
             "CLS" | "CLEAR" => {
@@ -352,6 +359,33 @@ impl Terminal {
         self.write("?");
         self.write(error);
         self.newline();
+    }
+
+    /// The console's exact/alias lookup for one help topic. There is no
+    /// overlay system here, so unlike the editor's F1 finder this always
+    /// prints a single card as plain scrolling text.
+    fn show_help_topic(&mut self, topic: &str) {
+        match shared_help_index().lookup(topic) {
+            Some(entry) => {
+                self.write(&format!("{} - {}\n", entry.key, entry.summary));
+                if matches!(entry.category, HelpCategory::Guide) {
+                    let width = self.columns.saturating_sub(2).max(20);
+                    for line in format_guide_body(&entry.body, width) {
+                        self.write(&line);
+                        self.newline();
+                    }
+                } else {
+                    for line in &entry.body {
+                        self.write(line);
+                        self.newline();
+                    }
+                }
+                if let Some(source) = &entry.source {
+                    self.write(&format!("(FROM {source})\n"));
+                }
+            }
+            None => self.write(&format!("?NO HELP FOR {topic}\n")),
+        }
     }
 
     fn set_colors(&mut self, arguments: &str) {

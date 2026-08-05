@@ -1,0 +1,11 @@
+Package: fanticon
+Version: __VERSION__
+Section: games
+Priority: optional
+Architecture: amd64
+Depends: libc6, libasound2t64 | libasound2, libudev1
+Maintainer: Tim Sarbin <tim.sarbin@gmail.com>
+Description: High-performance, cycle-accurate NMOS 6502 fantasy console
+ Fanticon is a fantasy console with a cycle-accurate NMOS 6502 core,
+ late-1980s-style video/audio/input hardware, native development tools,
+ and versioned bank-switched cartridges.

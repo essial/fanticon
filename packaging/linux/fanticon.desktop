@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Fanticon
+Comment=High-performance, cycle-accurate NMOS 6502 fantasy console
+Exec=/usr/bin/fanticon-app
+Terminal=false
+Categories=Game;Development;

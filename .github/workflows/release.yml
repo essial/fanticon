@@ -84,12 +84,14 @@ jobs:
           rm -rf "$pkgroot"
           mkdir -p "$pkgroot/DEBIAN" "$pkgroot/usr/bin" \
             "$pkgroot/usr/share/fanticon/demos" "$pkgroot/usr/share/fanticon/branding" \
-            "$pkgroot/usr/share/doc/fanticon" "$pkgroot/usr/share/applications"
+            "$pkgroot/usr/share/doc/fanticon" "$pkgroot/usr/share/applications" \
+            "$pkgroot/usr/share/icons/hicolor/256x256/apps"
           install -m 755 target/release/fanticon-app "$pkgroot/usr/bin/fanticon-app"
           cp -r code-assets/demos/. "$pkgroot/usr/share/fanticon/demos/"
           cp -r assets/branding/. "$pkgroot/usr/share/fanticon/branding/"
           cp README.md "$pkgroot/usr/share/doc/fanticon/"
           cp packaging/linux/fanticon.desktop "$pkgroot/usr/share/applications/fanticon.desktop"
+          cp assets/branding/icons/fanticon-256.png "$pkgroot/usr/share/icons/hicolor/256x256/apps/fanticon.png"
           sed "s/__VERSION__/${version}/" packaging/linux/control.template > "$pkgroot/DEBIAN/control"
           dpkg-deb --build --root-owner-group "$pkgroot" "fanticon_${version}_amd64.deb"
       - uses: actions/upload-artifact@v4
@@ -141,6 +143,7 @@ jobs:
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp build/fanticon-app "$app/Contents/MacOS/fanticon-app"
           chmod +x "$app/Contents/MacOS/fanticon-app"
+          cp assets/branding/Fanticon.icns "$app/Contents/Resources/Fanticon.icns"
           sed "s/__VERSION__/${version}/" packaging/macos/Info.plist.template > "$app/Contents/Info.plist"
           mkdir -p dmg-root
           cp -R "$app" dmg-root/

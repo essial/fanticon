@@ -118,6 +118,8 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
             .with_title("Fanticon")
             .with_inner_size(LogicalSize::new(960, 600))
             .with_min_inner_size(LogicalSize::new(320, 200));
+        #[cfg(not(target_arch = "wasm32"))]
+        let attributes = attributes.with_window_icon(app_icon());
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(error) => {
@@ -776,6 +778,22 @@ const fn should_process_keyboard_input(state: ElementState, _repeat: bool) -> bo
 
 fn create_event_loop() -> Result<EventLoop<UserEvent>, winit::error::EventLoopError> {
     EventLoop::<UserEvent>::with_user_event().build()
+}
+
+/// Raw RGBA8 pixels (128x128, row-major, straight alpha) for the Fanticon
+/// badge icon, baked from `assets/branding/fanticon-icon-master.png`. Used to
+/// set the window/taskbar icon so `cargo run` and dev builds show the real
+/// icon, not just the packaged installers. Not wired up for wasm32: the web
+/// build has no window chrome to attach an icon to.
+#[cfg(not(target_arch = "wasm32"))]
+const APP_ICON_RGBA: &[u8] =
+    include_bytes!("../assets/branding/icons/fanticon-window-icon-128.rgba");
+
+#[cfg(not(target_arch = "wasm32"))]
+fn app_icon() -> Option<winit::window::Icon> {
+    winit::window::Icon::from_rgba(APP_ICON_RGBA.to_vec(), 128, 128)
+        .map_err(|error| eprintln!("Fanticon window icon could not be loaded: {error}"))
+        .ok()
 }
 
 fn initial_mode() -> AppMode {

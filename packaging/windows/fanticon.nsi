@@ -23,6 +23,8 @@ SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
 
+!define MUI_ICON "assets\branding\fanticon.ico"
+!define MUI_UNICON "assets\branding\fanticon.ico"
 !define MUI_ABORTWARNING
 
 !insertmacro MUI_PAGE_WELCOME

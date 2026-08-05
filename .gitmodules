@@ -1,3 +1,4 @@
 [submodule "SingleStepTests"]
 	path = tests/SingleStepTests
 	url = https://github.com/SingleStepTests/65x02.git
+	ignore = all

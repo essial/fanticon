@@ -18,8 +18,12 @@ use super::{
     character_rom::{
         BOX_BOTTOM_HORIZONTAL, BOX_BOTTOM_LEFT, BOX_BOTTOM_RIGHT, BOX_CAPTION_LEFT,
         BOX_CAPTION_RIGHT, BOX_HORIZONTAL, BOX_RIGHT_VERTICAL, BOX_TOP_HORIZONTAL, BOX_TOP_LEFT,
-        BOX_TOP_RIGHT, BOX_VERTICAL, CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, SYMBOL_ARROW_RIGHT,
+        BOX_TOP_RIGHT, BOX_VERTICAL, CHARACTER_ROM, DBL_BOTTOM_HORIZONTAL, DBL_BOTTOM_LEFT,
+        DBL_BOTTOM_RIGHT, DBL_CAPTION_LEFT, DBL_CAPTION_RIGHT, DBL_HORIZONTAL, DBL_RIGHT_VERTICAL,
+        DBL_TOP_HORIZONTAL, DBL_TOP_LEFT, DBL_TOP_RIGHT, DBL_VERTICAL, GLYPH_HEIGHT, GLYPH_WIDTH,
+        SHADE_LIGHT, SHADE_MEDIUM, SYMBOL_ARROW_DOWN, SYMBOL_ARROW_RIGHT, SYMBOL_ARROW_UP,
         SYMBOL_BUSY, SYMBOL_CHECK, SYMBOL_CROSS, configure_text_gradient, gradient_color,
+        identity_text_gradient,
     },
     filesystem::{ConsoleFilesystem, SharedFilesystem},
     graphics_editor::{DEFAULT_PALETTE_FILE, GraphicsEditor},
@@ -34,7 +38,8 @@ const TEXT_ROWS: usize = ROWS - EDITOR_FIRST_ROW - 1;
 const PROJECT_WIDTH: usize = 20;
 const EDITOR_START: usize = PROJECT_WIDTH + 1;
 const EDITOR_CODE_START: usize = EDITOR_START + 2;
-const EDITOR_COLUMNS: usize = COLUMNS - EDITOR_CODE_START;
+/// The rightmost column belongs to the scrollbar, so text stops one short of it.
+const EDITOR_COLUMNS: usize = COLUMNS - EDITOR_CODE_START - 1;
 const TAB_WIDTH: usize = 14;
 const VISIBLE_TABS: usize = (EDITOR_COLUMNS - 2) / TAB_WIDTH;
 const SEARCH_RESULTS_X: usize = 2;
@@ -56,6 +61,7 @@ const UI_SUCCESS_BACKGROUND: u8 = 250;
 const UI_DEBUG_CURRENT_BACKGROUND: u8 = 251;
 const UI_BREAKPOINT_BACKGROUND: u8 = 252;
 const UI_CURRENT_LINE_BACKGROUND: u8 = 253;
+const UI_SHADOW_COLOR: u8 = 254;
 /// Frames the caret stays lit, then dark. Moving the caret restarts this phase
 /// so it is always solid at the moment it lands somewhere new.
 const CURSOR_BLINK_FRAMES: u32 = 30;
@@ -108,6 +114,18 @@ struct CellRect {
 struct CellStyle {
     foreground: u8,
     background: u8,
+    /// Draw the frame with the double rule that marks focus.
+    double_frame: bool,
+}
+
+impl CellStyle {
+    const fn new(foreground: u8, background: u8) -> Self {
+        Self { foreground, background, double_frame: false }
+    }
+
+    const fn focused(self) -> Self {
+        Self { double_frame: true, ..self }
+    }
 }
 
 #[derive(Clone)]
@@ -2010,11 +2028,43 @@ impl TextEditor {
             self.project_scroll.min(self.project_entries.len().saturating_sub(visible_rows));
     }
 
+    /// Dithered track with a solid thumb down the editor's right edge, plus the
+    /// arrow caps. Position and length both follow the document.
+    fn render_scrollbar(&self, cells: &mut [u8], foregrounds: &mut [u8]) {
+        let column = COLUMNS - 1;
+        let top = EDITOR_FIRST_ROW;
+        let rows = TEXT_ROWS;
+        if rows < 3 {
+            return;
+        }
+        put_cell(cells, column, top, SYMBOL_ARROW_UP);
+        put_cell(cells, column, top + rows - 1, SYMBOL_ARROW_DOWN);
+        let track = rows - 2;
+        let lines = self.lines.len().max(1);
+        let thumb_size = (track * rows.min(lines) / lines).clamp(1, track);
+        let span = lines.saturating_sub(rows);
+        let thumb_top = if span == 0 {
+            0
+        } else {
+            (self.scroll_line.min(span) * (track - thumb_size) + span / 2) / span
+        };
+        for row in 0..track {
+            let inside = row >= thumb_top && row < thumb_top + thumb_size;
+            put_cell(cells, column, top + 1 + row, if inside { SHADE_MEDIUM } else { SHADE_LIGHT });
+            foregrounds[(top + 1 + row) * COLUMNS + column] =
+                if inside { UI_WHITE_COLOR } else { UI_SHADOW_COLOR };
+        }
+        foregrounds[top * COLUMNS + column] = UI_WHITE_COLOR;
+        foregrounds[(top + rows - 1) * COLUMNS + column] = UI_WHITE_COLOR;
+    }
+
     fn render_project_browser(&self, cells: &mut [u8], inverse: &mut [bool]) {
         put_text_width(cells, 0, 1, " PROJECT", PROJECT_WIDTH);
         inverse[COLUMNS..COLUMNS + PROJECT_WIDTH].fill(true);
+        // The divider doubles up on whichever side holds the keyboard.
+        let divider = if self.project_focused { DBL_VERTICAL } else { BOX_VERTICAL };
         for row in 1..ROWS - 1 {
-            put_cell(cells, PROJECT_WIDTH, row, BOX_VERTICAL);
+            put_cell(cells, PROJECT_WIDTH, row, divider);
         }
         for (screen_row, entry) in
             self.project_entries.iter().skip(self.project_scroll).take(ROWS - 3).enumerate()
@@ -2089,6 +2139,7 @@ impl TextEditor {
         cells: &mut [u8],
         foregrounds: &mut [u8],
         backgrounds: &mut [u8],
+        background_gradients: &mut [bool],
         inverse: &mut [bool],
         style: CellStyle,
     ) {
@@ -2100,13 +2151,15 @@ impl TextEditor {
         let y = 2;
         let width = COLUMNS - EDITOR_START;
         let height = ROWS - 3;
+        // The panel owns the keyboard while it is open, so it wears the focus rule.
         draw_caption_window(
             cells,
             foregrounds,
             backgrounds,
+            background_gradients,
             inverse,
             CellRect { x, y, width, height },
-            style,
+            style.focused(),
         );
         let mut tab_x = x + 2;
         for (index, label) in DebugView::LABELS.iter().enumerate() {
@@ -2515,6 +2568,9 @@ impl TextEditor {
         }
         inverse[..COLUMNS].fill(true);
         foregrounds[..COLUMNS].fill(UI_WHITE_COLOR);
+        // The menu bar carries the same per-scanline shading as the rest of the
+        // chrome. Graphics mode renders flat regardless, so this stays harmless
+        // there even though the identity palette leaves no room for shades.
         background_gradients[..COLUMNS].fill(true);
 
         if (!self.graphics_active() || self.graphics_source_active())
@@ -2561,7 +2617,7 @@ impl TextEditor {
                 }
                 if executing || breakpoint {
                     let start = row * COLUMNS + EDITOR_START;
-                    let end = row * COLUMNS + COLUMNS;
+                    let end = row * COLUMNS + COLUMNS - 1;
                     foregrounds[start..end].fill(UI_WHITE_COLOR);
                     backgrounds[start..end].fill(if executing {
                         UI_DEBUG_CURRENT_BACKGROUND
@@ -2577,11 +2633,12 @@ impl TextEditor {
                     // Editable buffers mark the caret's line; the debugger's own
                     // blue and red rows above always win when a session is live.
                     let start = row * COLUMNS + EDITOR_START;
-                    let end = row * COLUMNS + COLUMNS;
+                    let end = row * COLUMNS + COLUMNS - 1;
                     backgrounds[start..end].fill(UI_CURRENT_LINE_BACKGROUND);
                     background_gradients[start..end].fill(true);
                 }
             }
+            self.render_scrollbar(&mut cells, &mut foregrounds);
         }
 
         let name = self.filename.as_deref().unwrap_or("UNTITLED.TXT");
@@ -2617,6 +2674,12 @@ impl TextEditor {
                 )
             });
         put_text(&mut cells, 0, ROWS - 1, &status);
+        // Function-key legend on the right, the way every DOS IDE ended its
+        // status line. It yields to any message that needs the whole row.
+        let keys = " F2 SAVE  F5 RUN  F9 BREAK  F10 MENU ";
+        if status.len() + keys.len() < COLUMNS {
+            put_text(&mut cells, COLUMNS - keys.len(), ROWS - 1, keys);
+        }
         inverse[(ROWS - 1) * COLUMNS..].fill(true);
         foregrounds[(ROWS - 1) * COLUMNS..].fill(UI_WHITE_COLOR);
 
@@ -2630,16 +2693,18 @@ impl TextEditor {
             &mut cells,
             &mut foregrounds,
             &mut backgrounds,
+            &mut background_gradients,
             &mut inverse,
-            CellStyle { foreground: UI_WHITE_COLOR, background },
+            CellStyle::new(UI_WHITE_COLOR, background),
         );
 
         self.render_overlay(
             &mut cells,
             &mut foregrounds,
             &mut backgrounds,
+            &mut background_gradients,
             &mut inverse,
-            CellStyle { foreground: UI_WHITE_COLOR, background },
+            CellStyle::new(UI_WHITE_COLOR, background),
         );
         let style = if graphics_resource {
             // Chrome indexes now mean their own RGB332 colors, so swap in the
@@ -2647,12 +2712,12 @@ impl TextEditor {
             for color in foregrounds.iter_mut().chain(backgrounds.iter_mut()) {
                 *color = identity_chrome_color(*color);
             }
-            CellStyle {
-                foreground: identity_chrome_color(foreground),
-                background: identity_chrome_color(background),
-            }
+            CellStyle::new(
+                identity_chrome_color(foreground),
+                identity_chrome_color(background),
+            )
         } else {
-            CellStyle { foreground, background }
+            CellStyle::new(foreground, background)
         };
         render_cells(
             video,
@@ -2678,12 +2743,14 @@ impl TextEditor {
                 let mut mask_foregrounds = [u8::MAX; COLUMNS * ROWS];
                 let mut mask_backgrounds = [u8::MAX; COLUMNS * ROWS];
                 let mut mask_inverse = [true; COLUMNS * ROWS];
+                let mut mask_gradients = [false; COLUMNS * ROWS];
                 self.render_overlay(
                     &mut mask_cells,
                     &mut mask_foregrounds,
                     &mut mask_backgrounds,
+                    &mut mask_gradients,
                     &mut mask_inverse,
-                    CellStyle { foreground: UI_WHITE_COLOR, background },
+                    CellStyle::new(UI_WHITE_COLOR, background),
                 );
                 // The mask arrays are coverage sentinels rather than colors, so
                 // they keep their u8::MAX markers; the real colors were already
@@ -3111,6 +3178,7 @@ impl TextEditor {
         cells: &mut [u8],
         foregrounds: &mut [u8],
         backgrounds: &mut [u8],
+        background_gradients: &mut [bool],
         inverse: &mut [bool],
         style: CellStyle,
     ) {
@@ -3120,13 +3188,16 @@ impl TextEditor {
                 let x = menu_origin(*menu);
                 let width = menu_width(*menu);
                 let y = 1;
+                let rect = CellRect { x, y, width, height: menu_labels(*menu).len() + 2 };
+                draw_shadow(cells, foregrounds, backgrounds, background_gradients, rect);
                 draw_window(
                     cells,
                     foregrounds,
                     backgrounds,
+                    background_gradients,
                     inverse,
-                    CellRect { x, y, width, height: menu_labels(*menu).len() + 2 },
-                    style,
+                    rect,
+                    style.focused(),
                 );
                 for (index, item) in menu_labels(*menu).iter().enumerate() {
                     let row = y + index + 1;
@@ -3148,10 +3219,11 @@ impl TextEditor {
                 let height = 8;
                 let x = (COLUMNS - width) / 2;
                 let y = (ROWS - height) / 2;
-                draw_caption_window(
+                draw_dialog(
                     cells,
                     foregrounds,
                     backgrounds,
+                    background_gradients,
                     inverse,
                     CellRect { x, y, width, height },
                     style,
@@ -3181,10 +3253,11 @@ impl TextEditor {
                 let height = 9;
                 let x = (COLUMNS - width) / 2;
                 let y = (ROWS - height) / 2;
-                draw_caption_window(
+                draw_dialog(
                     cells,
                     foregrounds,
                     backgrounds,
+                    background_gradients,
                     inverse,
                     CellRect { x, y, width, height },
                     style,
@@ -3204,6 +3277,7 @@ impl TextEditor {
                     cells,
                     foregrounds,
                     backgrounds,
+                    background_gradients,
                     inverse,
                     style,
                     "BUILD",
@@ -3212,9 +3286,9 @@ impl TextEditor {
             }
             Overlay::Message { title, lines } => {
                 let message_style = if title == "BUILD SUCCESSFUL" {
-                    CellStyle { foreground: UI_WHITE_COLOR, background: UI_SUCCESS_BACKGROUND }
+                    CellStyle::new(UI_WHITE_COLOR, UI_SUCCESS_BACKGROUND)
                 } else if title.contains("ERROR") {
-                    CellStyle { foreground: UI_WHITE_COLOR, background: UI_ERROR_BACKGROUND }
+                    CellStyle::new(UI_WHITE_COLOR, UI_ERROR_BACKGROUND)
                 } else {
                     style
                 };
@@ -3222,6 +3296,7 @@ impl TextEditor {
                     cells,
                     foregrounds,
                     backgrounds,
+                    background_gradients,
                     inverse,
                     message_style,
                     title,
@@ -3234,6 +3309,7 @@ impl TextEditor {
                     cells,
                     foregrounds,
                     backgrounds,
+                    background_gradients,
                     inverse,
                     style,
                     "UNSAVED TAB",
@@ -3251,10 +3327,11 @@ impl TextEditor {
                 let height = if *mode == SearchMode::Replace { 11 } else { 9 };
                 let x = (COLUMNS - width) / 2;
                 let y = (ROWS - height) / 2;
-                draw_caption_window(
+                draw_dialog(
                     cells,
                     foregrounds,
                     backgrounds,
+                    background_gradients,
                     inverse,
                     CellRect { x, y, width, height },
                     style,
@@ -3293,10 +3370,11 @@ impl TextEditor {
                 }
             }
             Overlay::SearchResults { query, results, selected, scroll } => {
-                draw_caption_window(
+                draw_dialog(
                     cells,
                     foregrounds,
                     backgrounds,
+                    background_gradients,
                     inverse,
                     CellRect {
                         x: SEARCH_RESULTS_X,
@@ -3354,10 +3432,11 @@ impl TextEditor {
             Overlay::About { .. } => {
                 let x = (COLUMNS - ABOUT_WIDTH) / 2;
                 let y = (ROWS - ABOUT_HEIGHT) / 2;
-                draw_caption_window(
+                draw_dialog(
                     cells,
                     foregrounds,
                     backgrounds,
+                    background_gradients,
                     inverse,
                     CellRect { x, y, width: ABOUT_WIDTH, height: ABOUT_HEIGHT },
                     style,
@@ -4734,6 +4813,7 @@ fn render_message_box(
     cells: &mut [u8],
     foregrounds: &mut [u8],
     backgrounds: &mut [u8],
+    background_gradients: &mut [bool],
     inverse: &mut [bool],
     style: CellStyle,
     title: &str,
@@ -4744,10 +4824,11 @@ fn render_message_box(
     let visible_lines = lines.len().min(7);
     let height = visible_lines + 4;
     let y = (ROWS - height) / 2;
-    draw_caption_window(
+    draw_dialog(
         cells,
         foregrounds,
         backgrounds,
+        background_gradients,
         inverse,
         CellRect { x, y, width, height },
         style,
@@ -4765,9 +4846,11 @@ fn render_message_box(
         put_text_width(cells, x + 2, y + 2 + index, line, width - 4);
     }
     let footer = match title {
-        "BUILD ERRORS" => "ENTER=OK  F4=NEXT",
-        "UNSAVED TAB" => "S=SAVE D=DISCARD ESC=CANCEL",
-        _ => "ENTER=OK  ESC=CLOSE",
+        // One way out gets one label. Enter and Escape both dismiss, so they
+        // share a single action instead of posing as a choice.
+        "BUILD ERRORS" => "F4=NEXT  ENTER/ESC=CLOSE",
+        "UNSAVED TAB" => "S=SAVE  D=DISCARD  ESC=CANCEL",
+        _ => "ENTER/ESC=CLOSE",
     };
     put_text(cells, x + 2, y + height - 2, footer);
 }
@@ -4776,6 +4859,7 @@ fn draw_window(
     cells: &mut [u8],
     foregrounds: &mut [u8],
     backgrounds: &mut [u8],
+    background_gradients: &mut [bool],
     inverse: &mut [bool],
     rect: CellRect,
     style: CellStyle,
@@ -4787,36 +4871,137 @@ fn draw_window(
         cells[range.clone()].fill(b' ');
         foregrounds[range.clone()].fill(style.foreground);
         backgrounds[range.clone()].fill(style.background);
+        // Whoever owns the background owns its shading, or the caret-line and
+        // debugger rows underneath keep banding straight through the window.
+        background_gradients[range.clone()].fill(false);
         inverse[range].fill(false);
     }
 
-    put_cell(cells, x, y, BOX_TOP_LEFT);
-    put_cell(cells, x + width - 1, y, BOX_TOP_RIGHT);
-    put_cell(cells, x, y + height - 1, BOX_BOTTOM_LEFT);
-    put_cell(cells, x + width - 1, y + height - 1, BOX_BOTTOM_RIGHT);
+    let f = frame_set(style.double_frame);
+    put_cell(cells, x, y, f.top_left);
+    put_cell(cells, x + width - 1, y, f.top_right);
+    put_cell(cells, x, y + height - 1, f.bottom_left);
+    put_cell(cells, x + width - 1, y + height - 1, f.bottom_right);
     for column in x + 1..x + width - 1 {
-        put_cell(cells, column, y, BOX_TOP_HORIZONTAL);
-        put_cell(cells, column, y + height - 1, BOX_BOTTOM_HORIZONTAL);
+        put_cell(cells, column, y, f.top);
+        put_cell(cells, column, y + height - 1, f.bottom);
     }
     for row in y + 1..y + height - 1 {
-        put_cell(cells, x, row, BOX_VERTICAL);
-        put_cell(cells, x + width - 1, row, BOX_RIGHT_VERTICAL);
+        put_cell(cells, x, row, f.left);
+        put_cell(cells, x + width - 1, row, f.right);
     }
+}
+
+struct FrameSet {
+    top_left: u8,
+    top_right: u8,
+    bottom_left: u8,
+    bottom_right: u8,
+    top: u8,
+    bottom: u8,
+    left: u8,
+    right: u8,
+    caption_left: u8,
+    caption_right: u8,
+    caption: u8,
+}
+
+const fn frame_set(double: bool) -> FrameSet {
+    if double {
+        FrameSet {
+            top_left: DBL_TOP_LEFT,
+            top_right: DBL_TOP_RIGHT,
+            bottom_left: DBL_BOTTOM_LEFT,
+            bottom_right: DBL_BOTTOM_RIGHT,
+            top: DBL_TOP_HORIZONTAL,
+            bottom: DBL_BOTTOM_HORIZONTAL,
+            left: DBL_VERTICAL,
+            right: DBL_RIGHT_VERTICAL,
+            caption_left: DBL_CAPTION_LEFT,
+            caption_right: DBL_CAPTION_RIGHT,
+            caption: DBL_HORIZONTAL,
+        }
+    } else {
+        FrameSet {
+            top_left: BOX_TOP_LEFT,
+            top_right: BOX_TOP_RIGHT,
+            bottom_left: BOX_BOTTOM_LEFT,
+            bottom_right: BOX_BOTTOM_RIGHT,
+            top: BOX_TOP_HORIZONTAL,
+            bottom: BOX_BOTTOM_HORIZONTAL,
+            left: BOX_VERTICAL,
+            right: BOX_RIGHT_VERTICAL,
+            caption_left: BOX_CAPTION_LEFT,
+            caption_right: BOX_CAPTION_RIGHT,
+            caption: BOX_HORIZONTAL,
+        }
+    }
+}
+
+/// A DOS-style drop shadow one cell right and below the window.
+fn draw_shadow(
+    cells: &mut [u8],
+    foregrounds: &mut [u8],
+    backgrounds: &mut [u8],
+    background_gradients: &mut [bool],
+    rect: CellRect,
+) {
+    let CellRect { x, y, width, height } = rect;
+    let mut shade = |column: usize, row: usize| {
+        if column >= COLUMNS || row >= ROWS {
+            return;
+        }
+        let index = row * COLUMNS + column;
+        cells[index] = SHADE_LIGHT;
+        foregrounds[index] = UI_SHADOW_COLOR;
+        backgrounds[index] = 0;
+        background_gradients[index] = false;
+    };
+    for row in y + 1..y + height + 1 {
+        shade(x + width, row);
+    }
+    for column in x + 1..x + width + 1 {
+        shade(column, y + height);
+    }
+}
+
+/// A dialog: focused double rule plus the drop shadow that sells the depth.
+fn draw_dialog(
+    cells: &mut [u8],
+    foregrounds: &mut [u8],
+    backgrounds: &mut [u8],
+    background_gradients: &mut [bool],
+    inverse: &mut [bool],
+    rect: CellRect,
+    style: CellStyle,
+) {
+    draw_shadow(cells, foregrounds, backgrounds, background_gradients, rect);
+    draw_caption_window(
+        cells,
+        foregrounds,
+        backgrounds,
+        background_gradients,
+        inverse,
+        rect,
+        style.focused(),
+    );
 }
 
 fn draw_caption_window(
     cells: &mut [u8],
     foregrounds: &mut [u8],
     backgrounds: &mut [u8],
+    background_gradients: &mut [bool],
     inverse: &mut [bool],
     rect: CellRect,
     style: CellStyle,
 ) {
-    draw_window(cells, foregrounds, backgrounds, inverse, rect, style);
-    put_cell(cells, rect.x, rect.y, BOX_CAPTION_LEFT);
-    put_cell(cells, rect.x + rect.width - 1, rect.y, BOX_CAPTION_RIGHT);
+    draw_window(cells, foregrounds, backgrounds, background_gradients, inverse, rect, style);
+    let f = frame_set(style.double_frame);
+    put_cell(cells, rect.x, rect.y, f.caption_left);
+    put_cell(cells, rect.x + rect.width - 1, rect.y, f.caption_right);
     for column in rect.x + 1..rect.x + rect.width - 1 {
-        put_cell(cells, column, rect.y, BOX_HORIZONTAL);
+        put_cell(cells, column, rect.y, f.caption);
     }
 }
 
@@ -4870,10 +5055,12 @@ fn render_cells(
     style: CellStyle,
     shade_text: bool,
 ) {
-    let CellStyle { foreground, background } = style;
-    // Shading claims spare palette entries for its per-scanline levels. Tools
-    // that draw raw RGB332 data need every entry to keep its own color, so they
-    // render flat instead of letting the gradient reassign indexes underneath.
+    let CellStyle { foreground, background, .. } = style;
+    // Shading normally claims spare palette entries for its per-scanline
+    // levels. Tools that draw raw RGB332 data need every entry to keep its
+    // own color, so they get an identity-safe gradient instead: the same
+    // per-scanline darkening, matched to bytes that already exist rather
+    // than reassigning any palette index underneath the artwork.
     let gradient = if shade_text {
         configure_text_gradient(
             video,
@@ -4884,7 +5071,13 @@ fn render_cells(
                 .chain([foreground, background]),
         )
     } else {
-        core::array::from_fn(|index| [index as u8; GLYPH_HEIGHT])
+        identity_text_gradient(
+            foregrounds
+                .iter()
+                .copied()
+                .chain(backgrounds.iter().copied())
+                .chain([foreground, background]),
+        )
     };
     let pixels = video.pixels_mut();
     pixels.fill(background);
@@ -4944,7 +5137,7 @@ fn render_masked_cells(
     style: CellStyle,
     shade_text: bool,
 ) {
-    let CellStyle { foreground, background } = style;
+    let CellStyle { foreground, background, .. } = style;
     let gradient = if shade_text {
         configure_text_gradient(
             video,
@@ -4955,7 +5148,13 @@ fn render_masked_cells(
                 .chain([foreground, background]),
         )
     } else {
-        core::array::from_fn(|index| [index as u8; GLYPH_HEIGHT])
+        identity_text_gradient(
+            foregrounds
+                .iter()
+                .copied()
+                .chain(backgrounds.iter().copied())
+                .chain([foreground, background]),
+        )
     };
     let pixels = video.pixels_mut();
     for cell_y in 0..ROWS {
@@ -5017,6 +5216,17 @@ fn is_frame_character(character: u8) -> bool {
             | BOX_TOP_RIGHT
             | BOX_BOTTOM_LEFT
             | BOX_BOTTOM_RIGHT
+            | DBL_HORIZONTAL
+            | DBL_VERTICAL
+            | DBL_TOP_HORIZONTAL
+            | DBL_BOTTOM_HORIZONTAL
+            | DBL_RIGHT_VERTICAL
+            | DBL_CAPTION_LEFT
+            | DBL_CAPTION_RIGHT
+            | DBL_TOP_LEFT
+            | DBL_TOP_RIGHT
+            | DBL_BOTTOM_LEFT
+            | DBL_BOTTOM_RIGHT
     )
 }
 
@@ -5313,6 +5523,7 @@ const fn identity_chrome_color(color: u8) -> u8 {
         UI_DEBUG_CURRENT_BACKGROUND => 0x29,
         UI_BREAKPOINT_BACKGROUND => 0x65,
         UI_CURRENT_LINE_BACKGROUND => 0x25,
+        UI_SHADOW_COLOR => 0x49,
         ASM_TEXT_COLOR => 0xdb,
         ASM_LABEL_COLOR => 0xb7,
         ASM_OPCODE_COLOR => 0x97,
@@ -5336,6 +5547,8 @@ fn configure_ui_palette(video: &mut Video) {
     // Dark gray caret line: visible against true black without competing with
     // the syntax colors or the debugger's blue and red rows.
     video.set_palette(UI_CURRENT_LINE_BACKGROUND, [38, 40, 52, 255]);
+    // Dithered window shadow, dim enough to read as depth rather than content.
+    video.set_palette(UI_SHADOW_COLOR, [58, 60, 74, 255]);
 }
 
 fn configure_assembly_palette(video: &mut Video) {
@@ -5712,13 +5925,15 @@ mod tests {
         let mut cells = [b' '; COLUMNS * ROWS];
         let mut foregrounds = [0; COLUMNS * ROWS];
         let mut backgrounds = [0; COLUMNS * ROWS];
+        let mut background_gradients = [false; COLUMNS * ROWS];
         let mut inverse = [false; COLUMNS * ROWS];
         editor.render_overlay(
             &mut cells,
             &mut foregrounds,
             &mut backgrounds,
+            &mut background_gradients,
             &mut inverse,
-            CellStyle { foreground: UI_WHITE_COLOR, background: 0 },
+            CellStyle::new(UI_WHITE_COLOR, 0),
         );
         assert_eq!(cells[2 * COLUMNS + 1], b'N');
         assert_eq!(cells[2 * COLUMNS + 2], b'E');
@@ -5858,13 +6073,15 @@ mod tests {
         let mut cells = [b' '; COLUMNS * ROWS];
         let mut foregrounds = [0; COLUMNS * ROWS];
         let mut backgrounds = [0; COLUMNS * ROWS];
+        let mut background_gradients = [false; COLUMNS * ROWS];
         let mut inverse = [false; COLUMNS * ROWS];
         editor.render_overlay(
             &mut cells,
             &mut foregrounds,
             &mut backgrounds,
+            &mut background_gradients,
             &mut inverse,
-            CellStyle { foreground: UI_WHITE_COLOR, background: 0 },
+            CellStyle::new(UI_WHITE_COLOR, 0),
         );
         assert!(cells.windows(8).any(|window| window == b"FANTICON"));
         assert!(cells.windows(5).any(|window| window == b"0.1.0"));
@@ -6201,7 +6418,8 @@ mod tests {
         assert_eq!(video.palette()[UI_BREAKPOINT_BACKGROUND as usize], [112, 52, 67, 255]);
 
         let background_gradient = |row: usize| {
-            let x = (COLUMNS - 1) * GLYPH_WIDTH;
+            // The last column is the scrollbar now, so sample the one before it.
+            let x = (COLUMNS - 2) * GLYPH_WIDTH;
             (0..GLYPH_HEIGHT)
                 .map(|glyph_y| {
                     let index = (row * GLYPH_HEIGHT + glyph_y) * EDITOR_DISPLAY_WIDTH + x;
@@ -6324,6 +6542,80 @@ mod tests {
             ),
             EditorAction::Debug(DebugCommand::Continue)
         );
+    }
+
+    #[test]
+    fn windows_wear_dos_furniture_focus_rules_shadows_and_a_scrollbar() {
+        let filesystem = shared_filesystem();
+        let long = (0..200).map(|n| format!(" NOP ; {n}")).collect::<Vec<_>>().join("\n");
+        filesystem.borrow_mut().write_text("main.asm", &long).unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+
+        let mut cells = [b' '; COLUMNS * ROWS];
+        let mut foregrounds = [UI_WHITE_COLOR; COLUMNS * ROWS];
+        let mut backgrounds = [0; COLUMNS * ROWS];
+        let mut background_gradients = [false; COLUMNS * ROWS];
+        let mut inverse = [false; COLUMNS * ROWS];
+        let at = |cells: &[u8; COLUMNS * ROWS], x: usize, y: usize| cells[y * COLUMNS + x];
+
+        // An unfocused editor keeps the plain divider; focusing the browser doubles it.
+        editor.render_project_browser(&mut cells, &mut inverse);
+        assert_eq!(at(&cells, PROJECT_WIDTH, 4), BOX_VERTICAL);
+        editor.project_focused = true;
+        editor.render_project_browser(&mut cells, &mut inverse);
+        assert_eq!(at(&cells, PROJECT_WIDTH, 4), DBL_VERTICAL);
+
+        // The scrollbar caps with arrows and rides a dithered track.
+        editor.render_scrollbar(&mut cells, &mut foregrounds);
+        assert_eq!(at(&cells, COLUMNS - 1, EDITOR_FIRST_ROW), SYMBOL_ARROW_UP);
+        assert_eq!(at(&cells, COLUMNS - 1, EDITOR_FIRST_ROW + TEXT_ROWS - 1), SYMBOL_ARROW_DOWN);
+        let track: Vec<u8> = (1..TEXT_ROWS - 1)
+            .map(|row| at(&cells, COLUMNS - 1, EDITOR_FIRST_ROW + row))
+            .collect();
+        assert!(track.contains(&SHADE_MEDIUM), "thumb");
+        assert!(track.contains(&SHADE_LIGHT), "track");
+        // Text stops one column short so a long line never collides with it.
+        assert_eq!(EDITOR_COLUMNS, COLUMNS - EDITOR_CODE_START - 1);
+
+        // A dialog draws a doubled rule and casts a shadow below and to the right.
+        let rect = CellRect { x: 10, y: 10, width: 20, height: 6 };
+        draw_dialog(
+            &mut cells,
+            &mut foregrounds,
+            &mut backgrounds,
+            &mut background_gradients,
+            &mut inverse,
+            rect,
+            CellStyle::new(UI_WHITE_COLOR, 0),
+        );
+        assert_eq!(at(&cells, 10, 15), DBL_BOTTOM_LEFT);
+        assert_eq!(at(&cells, 29, 15), DBL_BOTTOM_RIGHT);
+        assert_eq!(at(&cells, 30, 11), SHADE_LIGHT, "shadow down the right edge");
+        assert_eq!(at(&cells, 11, 16), SHADE_LIGHT, "shadow along the bottom");
+        assert_eq!(foregrounds[16 * COLUMNS + 11], UI_SHADOW_COLOR);
+
+        // A window owns the shading of every cell it covers: a caret line or
+        // debugger row underneath must not keep banding through the dialog.
+        background_gradients.fill(true);
+        draw_dialog(
+            &mut cells,
+            &mut foregrounds,
+            &mut backgrounds,
+            &mut background_gradients,
+            &mut inverse,
+            rect,
+            CellStyle::new(UI_WHITE_COLOR, 0),
+        );
+        for row in 10..16 {
+            for column in 10..30 {
+                assert!(
+                    !background_gradients[row * COLUMNS + column],
+                    "dialog cell {column},{row} still carries the row shading beneath it"
+                );
+            }
+        }
+        assert!(background_gradients[9 * COLUMNS + 10], "rows outside keep their shading");
     }
 
     #[test]
@@ -6536,13 +6828,7 @@ mod tests {
         assert!(!editor.debug_panel_visible);
         assert!(editor.debug_active);
 
-        // The same shortcut hides it again, and picking a view re-opens it.
-        editor.handle_key(
-            &Key::Character("d".into()),
-            PhysicalKey::Code(KeyCode::KeyD),
-            ModifiersState::CONTROL,
-        );
-        assert!(!editor.debug_panel_visible);
+        // Picking a view re-opens it from the source, and Ctrl/Cmd+D closes it.
         editor.handle_key(
             &Key::Character("4".into()),
             PhysicalKey::Code(KeyCode::Digit4),
@@ -6550,6 +6836,12 @@ mod tests {
         );
         assert!(editor.debug_panel_visible);
         assert_eq!(editor.debug_view, DebugView::Video);
+        editor.handle_key(
+            &Key::Character("d".into()),
+            PhysicalKey::Code(KeyCode::KeyD),
+            ModifiersState::CONTROL,
+        );
+        assert!(!editor.debug_panel_visible);
     }
 
     #[test]
@@ -6998,21 +7290,24 @@ mod tests {
         let mut cells = [b'X'; COLUMNS * ROWS];
         let mut foregrounds = [ASM_ERROR_COLOR; COLUMNS * ROWS];
         let mut backgrounds = [ASM_ERROR_COLOR; COLUMNS * ROWS];
+        let mut background_gradients = [false; COLUMNS * ROWS];
         let mut inverse = [true; COLUMNS * ROWS];
 
-        draw_caption_window(
+        draw_dialog(
             &mut cells,
             &mut foregrounds,
             &mut backgrounds,
+            &mut background_gradients,
             &mut inverse,
             CellRect { x: 3, y: 4, width: 12, height: 6 },
-            CellStyle { foreground: UI_WHITE_COLOR, background: UI_ERROR_BACKGROUND },
+            CellStyle::new(UI_WHITE_COLOR, UI_ERROR_BACKGROUND),
         );
 
-        assert_eq!(cells[4 * COLUMNS + 3], BOX_CAPTION_LEFT);
-        assert_eq!(cells[4 * COLUMNS + 14], BOX_CAPTION_RIGHT);
-        assert_eq!(cells[9 * COLUMNS + 3], BOX_BOTTOM_LEFT);
-        assert_eq!(cells[9 * COLUMNS + 14], BOX_BOTTOM_RIGHT);
+        // Dialogs wear the focus rule, so they use the doubled ROM border set.
+        assert_eq!(cells[4 * COLUMNS + 3], DBL_CAPTION_LEFT);
+        assert_eq!(cells[4 * COLUMNS + 14], DBL_CAPTION_RIGHT);
+        assert_eq!(cells[9 * COLUMNS + 3], DBL_BOTTOM_LEFT);
+        assert_eq!(cells[9 * COLUMNS + 14], DBL_BOTTOM_RIGHT);
         assert_eq!(cells[6 * COLUMNS + 8], b' ');
         assert_eq!(foregrounds[6 * COLUMNS + 8], UI_WHITE_COLOR);
         assert_eq!(backgrounds[6 * COLUMNS + 8], UI_ERROR_BACKGROUND);

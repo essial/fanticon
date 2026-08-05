@@ -1484,7 +1484,8 @@ impl MusicEditor {
                 );
             }
             // Drawn last: the glyph cells above would otherwise paint over it.
-            if region_start {
+            // The playing row keeps its own highlight unbroken.
+            if region_start && !playing {
                 fill(video, PANE_LEFT + 1, y, row_width, 1, REGION_RULE);
             }
         }

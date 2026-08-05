@@ -79,11 +79,16 @@ impl Renderer {
             .copied()
             .find(wgpu::TextureFormat::is_srgb)
             .unwrap_or(capabilities.formats[0]);
-        let present_mode = if capabilities.present_modes.contains(&wgpu::PresentMode::Fifo) {
-            wgpu::PresentMode::Fifo
-        } else {
-            capabilities.present_modes[0]
-        };
+        // Emulation keeps its own exact 60 Hz clock, which never divides evenly
+        // into a real display's refresh. Mailbox always shows the newest
+        // completed frame and never blocks the loop waiting for a vblank, so a
+        // frame finished slightly early is not held back to beat against the
+        // panel. Fifo is the fallback: still tear-free, but it blocks inside the
+        // redraw, which is what makes the mismatch visible as judder.
+        let present_mode = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo]
+            .into_iter()
+            .find(|mode| capabilities.present_modes.contains(mode))
+            .unwrap_or(capabilities.present_modes[0]);
         let configuration = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,

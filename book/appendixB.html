@@ -1,0 +1,203 @@
+<div class="chapter dense" id="appB">
+  <div class="chapter-kicker">APPENDIX B</div>
+  <h1 class="chapter-title">Complete Memory Map</h1>
+  <p class="lede">Every address a Fanticon cartridge can see, in one place. All addresses are
+  hexadecimal; multi-byte registers are little-endian.</p>
+
+  <h2>CPU address space</h2>
+  <table>
+    <tr><th>Range</th><th>Size</th><th>Read</th><th>Write</th></tr>
+    <tr><td><code>$0000&ndash;$7FFF</code></td><td>32 KiB</td><td>Main RAM</td><td>Main RAM</td></tr>
+    <tr><td><code>$8000&ndash;$BFFF</code></td><td>16 KiB</td><td>Selected bank</td><td>Selected bank, unless ROM</td></tr>
+    <tr><td><code>$C000&ndash;$C0FF</code></td><td>256 B</td><td>Device registers</td><td>Device registers</td></tr>
+    <tr><td><code>$C100&ndash;$FFFF</code></td><td>16,128 B</td><td>Fixed cartridge ROM</td><td>Ignored</td></tr>
+  </table>
+  <p>Unmapped and reserved reads return <code>$FF</code>; unmapped, reserved, and ROM writes
+  are ignored outright &mdash; Fanticon does not emulate a floating last-value data bus.</p>
+
+  <h2>Bank window ($8000&ndash;$BFFF)</h2>
+  <table class="reg-table">
+    <tr><th>Register</th><th>Address</th><th>Purpose</th></tr>
+    <tr><td><code>BANK_KIND</code></td><td><code>$C000</code></td><td>Select the backing memory type</td></tr>
+    <tr><td><code>BANK_NUMBER</code></td><td><code>$C001</code></td><td>Select one bank of that type</td></tr>
+  </table>
+  <table>
+    <tr><th><code>BANK_KIND</code></th><th>Valid <code>BANK_NUMBER</code></th><th>Window contains</th></tr>
+    <tr><td><code>$00</code></td><td>0&ndash;255</td><td>Cartridge ROM, up to 4 MiB</td></tr>
+    <tr><td><code>$01</code></td><td>0&ndash;3</td><td>Volatile work RAM, 64 KiB total</td></tr>
+    <tr><td><code>$02</code></td><td>0&ndash;2</td><td>Video RAM, 48 KiB total</td></tr>
+    <tr><td><code>$03</code></td><td>0&ndash;3</td><td>Battery-backed save RAM, up to 64 KiB total</td></tr>
+    <tr><td>Other</td><td>&mdash;</td><td>Unmapped memory</td></tr>
+  </table>
+  <pre class="code">bank number = offset / $4000
+CPU address = $8000 + (offset AND $3FFF)</pre>
+
+  <h2>I/O page overview ($C000&ndash;$C0FF)</h2>
+  <table>
+    <tr><th>Address</th><th>Device</th></tr>
+    <tr><td><code>$C000&ndash;$C00F</code></td><td>Banking, interrupt controller, frame counter</td></tr>
+    <tr><td><code>$C010&ndash;$C02F</code></td><td>Video control and palette</td></tr>
+    <tr><td><code>$C030&ndash;$C040</code></td><td>Audio channels and master control</td></tr>
+    <tr><td><code>$C050&ndash;$C05F</code></td><td>Controllers</td></tr>
+    <tr><td><code>$C060&ndash;$C06F</code></td><td>Two interval timers</td></tr>
+    <tr><td><code>$C070&ndash;$C0FF</code></td><td>Reserved</td></tr>
+  </table>
+
+  <h2>System and interrupt registers</h2>
+  <table class="reg-table">
+    <tr><th>Addr</th><th>Name</th><th>Access</th><th>Description</th></tr>
+    <tr><td>$C000</td><td>BANK_KIND</td><td>R/W</td><td>$00 cartridge, $01 work RAM, $02 VRAM, $03 save RAM</td></tr>
+    <tr><td>$C001</td><td>BANK_NUMBER</td><td>R/W</td><td>Bank within the selected kind</td></tr>
+    <tr><td>$C002</td><td>IRQ_PENDING</td><td>R/W1C</td><td>Pending interrupt sources</td></tr>
+    <tr><td>$C003</td><td>IRQ_ENABLE</td><td>R/W</td><td>Sources allowed to assert IRQ</td></tr>
+    <tr><td>$C004</td><td>FRAME_LOW</td><td>R</td><td>Frame counter low byte; latches high byte</td></tr>
+    <tr><td>$C005</td><td>FRAME_HIGH</td><td>R</td><td>Latched frame counter high byte</td></tr>
+    <tr><td>$C006</td><td>MACHINE_MAJOR</td><td>R</td><td>Hardware major version, currently 1</td></tr>
+    <tr><td>$C007</td><td>MACHINE_MINOR</td><td>R</td><td>Hardware minor version, currently 0</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>Mask</th><th>Source</th></tr>
+    <tr><td>0</td><td>$01</td><td>Vertical blank begins</td></tr>
+    <tr><td>1</td><td>$02</td><td>Raster X/Y comparison matches</td></tr>
+    <tr><td>2</td><td>$04</td><td>Timer 0 reaches zero</td></tr>
+    <tr><td>3</td><td>$08</td><td>Timer 1 reaches zero</td></tr>
+  </table>
+
+  <h2>Video registers</h2>
+  <table class="reg-table">
+    <tr><th>Addr</th><th>Name</th><th>Access</th><th>Description</th></tr>
+    <tr><td>$C010</td><td>VIDEO_MODE</td><td>R/W</td><td>0 blank, 1 tilemap, 2 packed bitmap</td></tr>
+    <tr><td>$C011</td><td>VIDEO_CONTROL</td><td>R/W</td><td>Bit 0 background enable, bit 1 sprites enable</td></tr>
+    <tr><td>$C012</td><td>BACKDROP_COLOR</td><td>R/W</td><td>8-bit palette index behind a disabled background</td></tr>
+    <tr><td>$C013/$C014</td><td>SCROLL_X</td><td>R/W</td><td>Signed 16-bit tilemap X scroll</td></tr>
+    <tr><td>$C015/$C016</td><td>SCROLL_Y</td><td>R/W</td><td>Signed 16-bit tilemap Y scroll</td></tr>
+    <tr><td>$C017/$C018</td><td>RASTER_X</td><td>R/W</td><td>Raster compare dot, 0&ndash;399</td></tr>
+    <tr><td>$C019/$C01A</td><td>RASTER_Y</td><td>R/W</td><td>Raster compare line, 0&ndash;261</td></tr>
+    <tr><td>$C01B</td><td>PALETTE_INDEX</td><td>R/W</td><td>Select one of 256 palette entries</td></tr>
+    <tr><td>$C01C</td><td>PALETTE_DATA</td><td>R/W</td><td>RGB332 data; index auto-increments</td></tr>
+    <tr><td>$C01D</td><td>BITMAP_PALETTE</td><td>R/W</td><td>Bitmap palette bank, bits 0&ndash;3</td></tr>
+    <tr><td>$C01E</td><td>VIDEO_STATUS</td><td>R</td><td>VBlank, HBlank, sprite-overflow status &mdash; see below</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>VIDEO_STATUS field</th></tr>
+    <tr><td>0</td><td>Live VBlank</td></tr>
+    <tr><td>1</td><td>Live HBlank</td></tr>
+    <tr><td>2</td><td>Sprite overflow, latched for the current frame</td></tr>
+    <tr><td>7&ndash;3</td><td>Reserved</td></tr>
+  </table>
+
+  <h3>Video RAM &mdash; tile mode</h3>
+  <table>
+    <tr><th>VRAM offset</th><th>Bank</th><th>Size</th><th>Description</th></tr>
+    <tr><td>$0000&ndash;$1FFF</td><td>0</td><td>8 KiB</td><td>256 packed 4-bpp, 8&times;8 tile patterns</td></tr>
+    <tr><td>$2000&ndash;$27FF</td><td>0</td><td>2,048 B</td><td>64&times;32 tile-number map</td></tr>
+    <tr><td>$2800&ndash;$2FFF</td><td>0</td><td>2,048 B</td><td>64&times;32 tile-attribute map</td></tr>
+    <tr><td>$3000&ndash;$30FF</td><td>0</td><td>256 B</td><td>32 eight-byte sprite records</td></tr>
+  </table>
+  <pre class="code">tile pattern offset = tile_number &times; 32
+tilemap offset       = tile_y &times; 64 + tile_x
+tile number byte     = $2000 + tilemap offset
+tile attribute byte  = $2800 + tilemap offset
+sprite record        = $3000 + sprite_number &times; 8</pre>
+  <table>
+    <tr><th>Bit</th><th>Tile attribute field</th></tr>
+    <tr><td>7</td><td>Reserved</td></tr>
+    <tr><td>6</td><td>Priority</td></tr>
+    <tr><td>5</td><td>V-flip</td></tr>
+    <tr><td>4</td><td>H-flip</td></tr>
+    <tr><td>3&ndash;0</td><td>Palette</td></tr>
+  </table>
+
+  <h3>Sprite record (8 bytes)</h3>
+  <table>
+    <tr><th>Offset</th><th>Name</th><th>Meaning</th></tr>
+    <tr><td>0</td><td>X_LOW</td><td>X position bits 0&ndash;7</td></tr>
+    <tr><td>1</td><td>X_FLAGS</td><td>Bit 0 X bit 8; bit 1 behind background</td></tr>
+    <tr><td>2</td><td>Y</td><td>Y position</td></tr>
+    <tr><td>3</td><td>TILE</td><td>First pattern tile</td></tr>
+    <tr><td>4</td><td>ATTR</td><td>Enable, size, flips, palette &mdash; see below</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>ATTR field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6</td><td>16&times;16 size</td></tr>
+    <tr><td>5</td><td>V-flip</td></tr>
+    <tr><td>4</td><td>H-flip</td></tr>
+    <tr><td>3&ndash;0</td><td>Palette</td></tr>
+  </table>
+  <p>X <code>$1F0&ndash;$1FF</code> = &minus;16..&minus;1. Y <code>$F0&ndash;$FF</code> =
+  &minus;16..&minus;1. Sprites clip at all four edges and never wrap.</p>
+
+  <h3>Video RAM &mdash; bitmap mode</h3>
+  <table>
+    <tr><th>VRAM offset</th><th>Bank</th><th>Size</th><th>Description</th></tr>
+    <tr><td>$4000&ndash;$7FFF</td><td>1</td><td>16 KiB</td><td>First bitmap section</td></tr>
+    <tr><td>$8000&ndash;$BCFF</td><td>2</td><td>15,616 B</td><td>Remaining bitmap pixels</td></tr>
+  </table>
+  <pre class="code">VRAM byte offset = $4000 + Y &times; 160 + (X / 2)
+even X pixel = high nibble   odd X pixel = low nibble</pre>
+
+  <h2>Audio registers</h2>
+  <table class="audio-table">
+    <tr><th>Channel</th><th>Control</th><th>Timer low</th><th>Timer high</th><th>Phase reset</th></tr>
+    <tr><td>Pulse 1</td><td>$C030</td><td>$C031</td><td>$C032</td><td>$C033</td></tr>
+    <tr><td>Pulse 2</td><td>$C034</td><td>$C035</td><td>$C036</td><td>$C037</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>Pulse control field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6&ndash;5</td><td>Duty</td></tr>
+    <tr><td>4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Volume</td></tr>
+  </table>
+  <table>
+    <tr><th>Addr</th><th>Name</th><th>Description</th></tr>
+    <tr><td>$C038</td><td>TRI_CONTROL</td><td>Bit 7 enables the triangle</td></tr>
+    <tr><td>$C039/$C03A</td><td>TRI_TIMER</td><td>11-bit timer</td></tr>
+    <tr><td>$C03B</td><td>TRI_PHASE_RESET</td><td>Any write resets phase</td></tr>
+    <tr><td>$C03D</td><td>NOISE_PERIOD</td><td>Period-table index, bits 0&ndash;3</td></tr>
+    <tr><td>$C03E</td><td>NOISE_RESET</td><td>Any write reseeds the LFSR</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>NOISE_CONTROL field ($C03C)</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6</td><td>Short mode</td></tr>
+    <tr><td>5&ndash;4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Volume</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>AUDIO_MASTER field ($C040)</th></tr>
+    <tr><td>7</td><td>Master enable</td></tr>
+    <tr><td>6&ndash;4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Master volume</td></tr>
+  </table>
+
+  <h2>Controller registers</h2>
+  <table class="reg-table">
+    <tr><th>Addr</th><th>Name</th><th>Description</th></tr>
+    <tr><td>$C050</td><td>PAD0_STATE</td><td>Currently held controller-1 buttons</td></tr>
+    <tr><td>$C051</td><td>PAD0_PRESSED</td><td>Newly pressed buttons; read clears returned bits</td></tr>
+    <tr><td>$C052</td><td>PAD1_STATE</td><td>Currently held controller-2 buttons</td></tr>
+    <tr><td>$C053</td><td>PAD1_PRESSED</td><td>Newly pressed buttons; read clears returned bits</td></tr>
+  </table>
+  <pre class="code">7       6       5       4       3       2       1       0
+START   SELECT  B       A       RIGHT   LEFT    DOWN    UP</pre>
+
+  <h2>Timer registers</h2>
+  <table class="reg-table">
+    <tr><th>Timer</th><th>Reload lo</th><th>Reload hi</th><th>Control</th><th>Count lo</th><th>Count hi</th></tr>
+    <tr><td>Timer 0</td><td>$C060</td><td>$C061</td><td>$C062</td><td>$C063</td><td>$C064</td></tr>
+    <tr><td>Timer 1</td><td>$C068</td><td>$C069</td><td>$C06A</td><td>$C06B</td><td>$C06C</td></tr>
+  </table>
+  <p>Control: <code>$01</code> enable, <code>$02</code> auto-reload. Both timers decrement once
+  per CPU cycle; reload of zero means 65,536 cycles.</p>
+
+  <h2>CPU vectors</h2>
+  <table>
+    <tr><th>Address</th><th>Vector</th></tr>
+    <tr><td>$FFFA&ndash;$FFFB</td><td>NMI &mdash; reserved by v0.1 hardware</td></tr>
+    <tr><td>$FFFC&ndash;$FFFD</td><td>RESET entry point</td></tr>
+    <tr><td>$FFFE&ndash;$FFFF</td><td>IRQ and BRK entry point</td></tr>
+  </table>
+  <p>Fixed ROM must supply all three vectors even when a cartridge never uses NMI or IRQ.</p>
+</div>

@@ -1,0 +1,555 @@
+<div class="divider-page hue-pink" id="part3">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 03</div>
+  <div class="divider-number">03</div>
+  <div class="divider-title">Graphics<br>Programming</div>
+  <div class="divider-sub">The video hardware, the visual graphics editor, tile worlds, sprites, bitmap mode, and racing the raster beam.</div>
+  <div class="divider-contents">CH 7 VIDEO TOUR &middot; CH 8 GRAPHICS EDITOR &middot; CH 9 TILES &amp; SCROLLING &middot; CH 10 SPRITES &middot; CH 11 BITMAP MODE &middot; CH 12 RASTER TRICKS</div>
+</div>
+
+<div class="chapter" id="ch7">
+  <div class="chapter-kicker">CHAPTER 7 &middot; PART III</div>
+  <h1 class="chapter-title">Video Hardware Tour</h1>
+
+  <p class="lede">Fanticon always outputs a fixed 320&times;200 indexed-color image at 60&nbsp;Hz.
+  Every game picks one background mode and may overlay the same 32 hardware sprites over
+  either of them.</p>
+
+  <table class="reg-table">
+    <caption>TABLE 7.1 &mdash; VIDEO_MODE ($C010)</caption>
+    <tr><th>Value</th><th>Mode</th></tr>
+    <tr><td>0</td><td>Blank &mdash; backdrop color only</td></tr>
+    <tr><td>1</td><td>320&times;200 viewport into a 64&times;32 map of 8&times;8, 4-bpp tiles</td></tr>
+    <tr><td>2</td><td>Packed 320&times;200, 4-bpp bitmap</td></tr>
+  </table>
+  <p>This is one background layer. Tile mode is the
+  efficient default for action games; bitmap mode suits illustration-heavy adventures,
+  paint-style games, and software-rendered effects. Sprites work identically over either one.</p>
+
+  <h2>The palette</h2>
+  <p>There are 256 palette entries, arranged as 16 banks of 16 colors, each entry one RGB332
+  byte. Tile and sprite pixels store a 4-bit color number and select one of the 16 banks; a
+  whole bitmap shares a single bank chosen by <code>BITMAP_PALETTE</code>. Color 0 is
+  <strong>transparent</strong> for sprites but <strong>opaque</strong> for backgrounds.</p>
+  <pre class="code"><span class="lbl">PALINDEX</span> <span class="dir">EQU</span>   <span class="num">$C01B</span>
+<span class="lbl">PALDATA</span>  <span class="dir">EQU</span>   <span class="num">$C01C</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$20</span>       <span class="cmt">; start at bank 2, entry 0</span>
+         <span class="op">STA</span>   PALINDEX
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">11100000</span> <span class="cmt">; RGB332: R=7 G=0 B=0 -- bright red</span>
+         <span class="op">STA</span>   PALDATA    <span class="cmt">; index auto-increments after every read or write</span></pre>
+  <p>At reset, entry <code>N</code> already contains RGB332 byte <code>N</code> &mdash; an
+  identity palette. Components expand to full 8-bit color with rounding:
+  <code>R=round(R3&times;255/7)</code>, <code>G=round(G3&times;255/7)</code>,
+  <code>B=round(B2&times;255/3)</code>, before the host's CRT presentation pass runs.</p>
+
+  <h2>Video registers at a glance</h2>
+  <table>
+    <tr><th>Address</th><th>Name</th><th>Purpose</th></tr>
+    <tr><td><code>$C010</code></td><td><code>VIDEO_MODE</code></td><td>Blank, tile, or bitmap background</td></tr>
+    <tr><td><code>$C011</code></td><td><code>VIDEO_CONTROL</code></td><td>Bit 0 background enable, bit 1 sprite enable</td></tr>
+    <tr><td><code>$C012</code></td><td><code>BACKDROP_COLOR</code></td><td>Full 8-bit palette index shown when the background is off</td></tr>
+    <tr><td><code>$C013&ndash;$C016</code></td><td><code>SCROLL_X</code>/<code>SCROLL_Y</code></td><td>Signed 16-bit tilemap scroll</td></tr>
+    <tr><td><code>$C017&ndash;$C01A</code></td><td><code>RASTER_X</code>/<code>RASTER_Y</code></td><td>Raster-compare target</td></tr>
+    <tr><td><code>$C01B/$C01C</code></td><td><code>PALETTE_INDEX</code>/<code>DATA</code></td><td>Palette read/write with auto-increment</td></tr>
+    <tr><td><code>$C01D</code></td><td><code>BITMAP_PALETTE</code></td><td>Palette bank for the whole bitmap</td></tr>
+    <tr><td><code>$C01E</code></td><td><code>VIDEO_STATUS</code></td><td>Live VBlank/HBlank, latched sprite overflow</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th><code>VIDEO_STATUS</code> field</th></tr>
+    <tr><td>0</td><td>Live VBlank</td></tr>
+    <tr><td>1</td><td>Live HBlank</td></tr>
+    <tr><td>2</td><td>Sprite overflow, latched for the current frame</td></tr>
+    <tr><td>7&ndash;3</td><td>Reserved</td></tr>
+  </table>
+  <p>HBlank covers dots 320&ndash;399; VBlank covers lines 200&ndash;261; overflow clears at
+  line 0, dot 0. Reading the register clears nothing &mdash; you explicitly acknowledge
+  interrupt sources instead, as Chapter&nbsp;17 covers.</p>
+
+  <div class="box hw">
+    <div class="box-title">Master Timing</div>
+    60&nbsp;Hz frames, 262 scanlines each, 400 dots per scanline, 320&times;200 visible. The
+    video dot clock is 6.288&nbsp;MHz &mdash; exactly two dots per 3.144&nbsp;MHz CPU cycle
+    &mdash; giving 200 CPU cycles per scanline and 52,400 per frame. VRAM is dual-ported: v0.1
+    has no CPU wait states or display-induced bus contention, so writes land exactly where you
+    time them, and never stall your program.
+  </div>
+
+  <p>Chapter&nbsp;8 introduces the visual tool you will use to author tiles, maps,
+  sprite art, and palettes, before Chapters 9&ndash;11 put each mode to work.</p>
+</div>
+
+<div class="chapter" id="ch8">
+  <div class="chapter-kicker">CHAPTER 8 &middot; PART III</div>
+  <h1 class="chapter-title">The Graphics Editor</h1>
+
+  <p class="lede">Fanticon graphics are edited as <code>.GFX</code> documents, right in the
+  normal editor tab strip, alongside a shared <code>.PAL</code> palette document that every
+  image can reference. Both are plain ASCII, valid assembler input, and editable visually
+  <em>or</em> as source with <span class="kbd">Ctrl/Cmd+G</span>.</p>
+
+  <h2>Creating one</h2>
+  <p>Choose <strong>File &gt; New Graphics</strong> (<span class="kbd">Ctrl/Cmd+Shift+N</span>).
+  A new <code>.GFX</code> file references <code>GAME.PAL</code>; if that file does not exist
+  yet, the editor creates a default DawnBringer DB16 palette automatically. DB16 color 0 maps
+  to RGB332 <code>$00</code> (true black) rather than quantizing DB16's very dark purple, which
+  would otherwise pick up an unwanted red cast.</p>
+
+  <h2>One shared library, three views</h2>
+  <p>There is exactly one library of 256 reusable 8&times;8 patterns shared by everything on
+  screen:</p>
+  <ol>
+    <li><strong>Pattern</strong> edits one reusable 8&times;8 image.</li>
+    <li><strong>Map</strong> places those patterns into the 64&times;32 circular background.</li>
+    <li><strong>16&times;16 Sprite</strong> edits four consecutive patterns together as one composite.</li>
+  </ol>
+  <p>Change a pattern and every map cell and sprite referencing it updates &mdash; there is
+  only one copy. Press number keys to switch views: <span class="kbd">1</span> pattern sheet,
+  <span class="kbd">2</span> the pannable 40&times;25 map viewport, <span class="kbd">3</span>
+  the 16&times;16 sprite composite, <span class="kbd">4</span> the palette, <span class="kbd">5</span>
+  the packed 320&times;200 bitmap. Drawing tools are <span class="kbd">P</span> Pencil,
+  <span class="kbd">F</span> connected Fill, and <span class="kbd">I</span> Eyedropper, with
+  <span class="kbd">H</span>/<span class="kbd">V</span> flips and <span class="kbd">R</span>
+  rotation in Pattern view.</p>
+
+  <div class="box tip">
+    <div class="box-title">The Circular Map</div>
+    In Map view, arrow keys pan the viewport one tile at a time and <strong>wrap at all four
+    map edges</strong> &mdash; every one of the 64&times;32 cells is directly reachable and
+    editable, including the seam. That circularity is not just an editor convenience; it is
+    exactly how the hardware scroll registers work, which is what makes infinite scrolling
+    possible in Chapter&nbsp;9.
+  </div>
+
+  <h2>Palette banks in practice</h2>
+  <p>A typical project assigns palette banks by role, not by image:</p>
+  <pre class="code">bank 0  UI and text
+bank 1  player
+bank 2  enemies
+bank 3  current level
+bank 8  title bitmap</pre>
+  <p>Palette view offers <code>DB16</code>, <code>PICO-8</code>, <code>C64</code>, and
+  <code>EGA</code> presets &mdash; click one or press <span class="kbd">N</span>/<span class="kbd">Shift+N</span>
+  to replace just the selected bank. <span class="kbd">R</span>/<span class="kbd">G</span>/<span class="kbd">B</span>
+  nudge a color's RGB332 component up, Shift down. Every edit is undoable.</p>
+
+  <h2>What gets saved</h2>
+  <p>A new tilemap-mode <code>.GFX</code> file begins:</p>
+  <pre class="code"><span class="cmt">;@FANTICON-GFX 3</span>
+<span class="cmt">;@PALETTE-FILE GAME.PAL</span>
+<span class="cmt">;@MODE TILEMAP</span></pre>
+  <p>Saving <code>WORLD.GFX</code> generates three hardware-native blocks under
+  <code>;@TILES</code>, <code>;@MAP</code>, and <code>;@ATTRIBUTES</code> markers, exposed to
+  your code as the labels <code>WORLD_CHR</code>, <code>WORLD_MAP</code>, and
+  <code>WORLD_ATR</code>. A palette file exposes one label, e.g. <code>GAME_PAL</code>, after
+  its own <code>;@FANTICON-PAL 1</code> header. Because both are ordinary assembler source,
+  pulling them into a cartridge is one line each:</p>
+  <pre class="code">         <span class="dir">FIXED</span>
+         <span class="dir">ORG</span>   <span class="num">$D000</span>
+         <span class="dir">PUT</span>   GAME.PAL
+         <span class="dir">PUT</span>   WORLD.GFX</pre>
+  <p>Visual saves always produce canonical uppercase hex, and returning from the ASCII source
+  view validates every marker and block size &mdash; malformed data stays visible with a
+  readable error instead of being silently truncated. Because palette references are explicit
+  text, sharing and changing palettes stays visible in ordinary source control diffs.</p>
+
+  <h2>Loading the palette at runtime</h2>
+  <p><code>GAME_PAL</code> is the complete 256-byte table &mdash; all 16 banks, back to back
+  &mdash; so loading it is one pass through <code>PALINDEX</code>/<code>PALDATA</code>, letting
+  the auto-increment do the addressing for you. Unlike tile and sprite data, the palette
+  registers sit in the fixed <code>$C000&ndash;$C0FF</code> I/O page, not the bank window, so
+  no bank switch is needed before or during this loop:</p>
+  <pre class="code"><span class="lbl">PALINDEX</span> <span class="dir">EQU</span>   <span class="num">$C01B</span>
+<span class="lbl">PALDATA</span>  <span class="dir">EQU</span>   <span class="num">$C01C</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>       <span class="cmt">; start at bank 0, entry 0</span>
+         <span class="op">STA</span>   PALINDEX
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">$00</span>
+<span class="lbl">.LOOP</span>    <span class="op">LDA</span>   GAME_PAL,X
+         <span class="op">STA</span>   PALDATA     <span class="cmt">; writes entry X, then PALINDEX advances on its own</span>
+         <span class="op">INX</span>
+         <span class="op">BNE</span>   .LOOP       <span class="cmt">; X wraps 255-&gt;0, ending the loop after exactly 256 writes</span></pre>
+  <p>The <code>INX</code>/<code>BNE</code> pair is the standard 6502 idiom for a full 256-byte
+  pass: <code>X</code> counts <code>0</code> through <code>255</code> and wrapping back to
+  <code>0</code> clears the zero flag's complement, so <code>BNE</code> falls through exactly
+  once, after the 256th byte. The same loop works for a partial table &mdash; compare
+  <code>CPX</code> against the byte count instead of relying on the wrap &mdash; which is what
+  you want when loading just one or two banks rather than the whole file.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It</div>
+    Open <code>/demos/graphics/SCENE.GFX</code> and <code>GAME.PAL</code>. Pan the map with
+    arrow keys, then open <code>MAIN.ASM</code> in the same folder to see the complete runtime
+    path from ROM to screen: <code>PUT</code> the palette and graphics resources, upload the
+    palette through <code>PALDATA</code>, stage GFX pages through RAM, copy patterns/map/attributes
+    to VRAM, and finally build a sprite from patterns 4&ndash;7. Run it with <code>RUN</code>
+    or <span class="kbd">F5</span>.
+  </div>
+</div>
+
+<div class="chapter" id="ch9">
+  <div class="chapter-kicker">CHAPTER 9 &middot; PART III</div>
+  <h1 class="chapter-title">Tiles &amp; Scrolling Worlds</h1>
+
+  <p class="lede">Tile mode VRAM holds a pattern library, a 64&times;32 tile-number map, and a
+  matching attribute map &mdash; 12,288 bytes total, small enough to fit in a single 16&nbsp;KiB
+  cartridge bank.</p>
+
+  <table>
+    <tr><th>VRAM offset</th><th>Size</th><th>Contents</th></tr>
+    <tr><td><code>$0000&ndash;$1FFF</code></td><td>8 KiB</td><td>256 packed 4-bpp, 8&times;8 tile patterns</td></tr>
+    <tr><td><code>$2000&ndash;$27FF</code></td><td>2,048 B</td><td>64&times;32 tile-number map</td></tr>
+    <tr><td><code>$2800&ndash;$2FFF</code></td><td>2,048 B</td><td>64&times;32 tile-attribute map</td></tr>
+    <tr><td><code>$3000&ndash;$30FF</code></td><td>256 B</td><td>32 eight-byte sprite records</td></tr>
+  </table>
+  <p>Every pattern byte packs two pixels &mdash; high nibble left, low nibble right &mdash; so
+  no runtime unpacking is ever needed:</p>
+  <pre class="code">tile pattern offset = tile_number &times; 32
+tilemap offset      = tile_y &times; 64 + tile_x
+tile number byte    = $2000 + tilemap offset
+tile attribute byte = $2800 + tilemap offset</pre>
+  <p>Each attribute byte packs five fields:</p>
+  <table>
+    <tr><th>Bit</th><th>Field</th></tr>
+    <tr><td>7</td><td>Reserved</td></tr>
+    <tr><td>6</td><td>Foreground priority</td></tr>
+    <tr><td>5</td><td>Vertical flip</td></tr>
+    <tr><td>4</td><td>Horizontal flip</td></tr>
+    <tr><td>3&ndash;0</td><td>Palette bank, 0&ndash;15</td></tr>
+  </table>
+  <p>A tile's foreground-priority bit lets it cover every sprite regardless of that sprite's own
+  behind-background flag &mdash; the one hard rule for layering platforms above characters.</p>
+
+  <h2>Loading a set at runtime</h2>
+  <p>Copy <code>WORLD_CHR</code> to VRAM <code>$0000</code>, <code>WORLD_MAP</code> to
+  <code>$2000</code>, and <code>WORLD_ATR</code> to <code>$2800</code> &mdash; exact sizes
+  <code>$2000</code>, <code>$0800</code>, and <code>$0800</code>. All three live in VRAM bank
+  0, alongside the sprite table from Chapter&nbsp;10. Because banked ROM and VRAM share the same
+  <code>$8000&ndash;$BFFF</code> window, a loader stages each piece through main RAM: map the
+  ROM bank in, copy it out to RAM, map VRAM bank 0 in, copy from RAM into it. Chapter&nbsp;19
+  builds a small reusable <code>PAGECOPY</code> routine for exactly this relay; here it is
+  loading <code>WORLD_MAP</code> from a switchable cartridge bank, the way a full multi-level
+  game would keep its tile sets:</p>
+  <pre class="code"><span class="lbl">BANKKIND</span> <span class="dir">EQU</span>   <span class="num">$C000</span>
+<span class="lbl">BANKNUM</span>  <span class="dir">EQU</span>   <span class="num">$C001</span>
+<span class="lbl">VMODE</span>    <span class="dir">EQU</span>   <span class="num">$C010</span>
+<span class="lbl">VCTRL</span>    <span class="dir">EQU</span>   <span class="num">$C011</span>
+
+         <span class="cmt">; leg 1: WORLD_MAP's cartridge bank -&gt; the STAGE buffer in RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   BANKKIND     <span class="cmt">; cartridge ROM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span>BANKOF(WORLD_MAP)
+         <span class="op">STA</span>   BANKNUM
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;WORLD_MAP
+         <span class="op">STA</span>   SRC
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;WORLD_MAP
+         <span class="op">STA</span>   SRC+1
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;STAGE
+         <span class="op">STA</span>   DST
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;STAGE
+         <span class="op">STA</span>   DST+1
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>            <span class="cmt">; the tile-number map is 2,048 bytes = 8 pages</span>
+         <span class="op">JSR</span>   PAGECOPY
+
+         <span class="cmt">; leg 2: STAGE -&gt; the tile-number map in VRAM bank 0</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$02</span>
+         <span class="op">STA</span>   BANKKIND     <span class="cmt">; video RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   BANKNUM      <span class="cmt">; patterns, map, attributes, and sprites all live in bank 0</span>
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;STAGE
+         <span class="op">STA</span>   SRC
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;STAGE
+         <span class="op">STA</span>   SRC+1
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;<span class="num">$A000</span>    <span class="cmt">; $8000 + $2000, the tile-number map's offset</span>
+         <span class="op">STA</span>   DST
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;<span class="num">$A000</span>
+         <span class="op">STA</span>   DST+1
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>
+         <span class="op">JSR</span>   PAGECOPY
+
+         <span class="cmt">; WORLD_CHR (8 KiB = 32 pages, -&gt; $8000) and WORLD_ATR (8 pages,</span>
+         <span class="cmt">; -&gt; $A800) load the same way -- change SRC, DST, and the page count</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">1</span>
+         <span class="op">STA</span>   VMODE       <span class="cmt">; tilemap mode</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000011</span>
+         <span class="op">STA</span>   VCTRL       <span class="cmt">; background + sprites on</span></pre>
+
+  <h2>Scrolling that never ends</h2>
+  <p><code>SCROLL_X</code> and <code>SCROLL_Y</code> are independent signed 16-bit values that
+  wrap the viewport across a 512&times;256-pixel circular tile map. Increasing X moves the
+  viewport right; increasing Y moves it down. Decrementing zero to <code>$FFFF</code> scrolls
+  smoothly left or up by one pixel &mdash; the wrap is seamless in both directions.</p>
+  <p>Treat the 64&times;32 map as a ring buffer for a world larger than it: keep world-space
+  camera coordinates in RAM, write their low 16 bits to the scroll registers, and map a world
+  tile <code>(wx,wy)</code> to hardware cell <code>(wx &amp; 63, wy &amp; 31)</code>. A fully
+  scrolled 320&times;200 viewport occupies at most 41&times;26 cells, leaving at least 23
+  hidden columns and 6 hidden rows &mdash; plenty of room to repaint the next row or column of
+  the map during VBlank, just before it scrolls into view.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It</div>
+    <code>/demos/tiles</code> builds a full 64&times;32 tilemap and uses a VBlank IRQ to sample
+    controller&nbsp;1: arrow keys scroll freely in every direction, and the 16-bit scroll
+    registers wrap smoothly around the whole map with no visible seam. Read <code>MAIN.ASM</code>
+    to see the VBlank-driven input pattern you will reuse constantly starting in Chapter&nbsp;17.
+  </div>
+</div>
+
+<div class="chapter" id="ch10">
+  <div class="chapter-kicker">CHAPTER 10 &middot; PART III</div>
+  <h1 class="chapter-title">Sprites</h1>
+
+  <p class="lede">Fanticon gives you 32 hardware sprites, each an eight-byte record at VRAM
+  <code>$3000 + sprite_number &times; 8</code>, evaluated in record order every scanline.</p>
+
+  <table>
+    <tr><th>Offset</th><th>Name</th><th>Meaning</th></tr>
+    <tr><td>0</td><td><code>X_LOW</code></td><td>X position bits 0&ndash;7</td></tr>
+    <tr><td>1</td><td><code>X_FLAGS</code></td><td>Bit 0: X bit 8. Bit 1: behind-background priority</td></tr>
+    <tr><td>2</td><td><code>Y</code></td><td>Y position</td></tr>
+    <tr><td>3</td><td><code>TILE</code></td><td>First pattern tile</td></tr>
+    <tr><td>4</td><td><code>ATTR</code></td><td>Enable, size, flips, and palette &mdash; see below</td></tr>
+  </table>
+
+  <table>
+    <tr><th>Bit</th><th><code>ATTR</code> field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6</td><td>16&times;16 size (0 = 8&times;8)</td></tr>
+    <tr><td>5</td><td>Vertical flip</td></tr>
+    <tr><td>4</td><td>Horizontal flip</td></tr>
+    <tr><td>3&ndash;0</td><td>Palette bank, 0&ndash;15</td></tr>
+  </table>
+
+  <p>An 8&times;8 sprite uses one pattern tile. A 16&times;16 sprite uses four consecutive
+  tiles arranged <code>N,N+1</code> above <code>N+2,N+3</code>, where <code>N</code> must be
+  divisible by four; flips apply to the whole composite at once.</p>
+
+  <h2>Clipping and negative coordinates</h2>
+  <p>X values <code>$1F0&ndash;$1FF</code> mean &minus;16 through &minus;1; Y values
+  <code>$F0&ndash;$FF</code> mean the same. This lets an object enter smoothly from the left or
+  top edge without special-casing anything &mdash; sprites clip at all four screen edges and
+  never wrap. Here is a complete minimal sprite setup, in the same spirit as
+  <code>/demos/sprites</code>:</p>
+  <pre class="code"><span class="lbl">XPOS</span>     <span class="dir">EQU</span>   <span class="num">$20</span>
+<span class="lbl">XFLAG</span>    <span class="dir">EQU</span>   <span class="num">$21</span>
+<span class="lbl">YPOS</span>     <span class="dir">EQU</span>   <span class="num">$22</span>
+<span class="lbl">REC0</span>     <span class="dir">EQU</span>   <span class="num">$B000</span>   <span class="cmt">; sprite 0's record, bank window + $3000</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">156</span>
+         <span class="op">STA</span>   XPOS
+         <span class="op">STA</span>   REC0        <span class="cmt">; X_LOW</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   XFLAG
+         <span class="op">STA</span>   REC0+1      <span class="cmt">; X bit 8 clear, in front of background</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">96</span>
+         <span class="op">STA</span>   YPOS
+         <span class="op">STA</span>   REC0+2
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">1</span>
+         <span class="op">STA</span>   REC0+3      <span class="cmt">; first tile</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10000010</span>
+         <span class="op">STA</span>   REC0+4      <span class="cmt">; enabled, 8x8, palette bank 2</span></pre>
+  <p>Moving the sprite once per VBlank and letting <code>X</code> cross <code>$000</code> from
+  below naturally produces <code>$1FF</code> (&minus;1); the renderer clips it at the edge
+  rather than wrapping it around, the same way it would leave the visible edge of the
+  display.</p>
+
+  <h2>Priority and the eight-per-line limit</h2>
+  <p>Sprite color 0 is transparent. A background tile's foreground-priority attribute covers
+  every sprite outright; otherwise a sprite's own behind-background flag puts it under a
+  nonzero background pixel, and a front sprite simply wins ties. Background color 0 never
+  hides a sprite. Lower record numbers always win overlap ties against other sprites.</p>
+  <p>Only the <strong>first eight enabled sprites</strong> whose vertical range intersects a
+  scanline are drawn on it &mdash; every enabled sprite counts toward that limit even if it is
+  horizontally off-screen or fully transparent on that line. A ninth candidate sets the
+  sprite-overflow status bit (<code>VIDEO_STATUS</code> bit 2) and is simply skipped for that
+  line. Gameplay collision is handled in your own code, comparing object bounds against each
+  other rather than rendered pixels.</p>
+  <p>Sprite records are sampled at the <em>start</em> of each scanline, so writing a record
+  mid-line affects only the following scanline &mdash; a simple, deterministic rule once you
+  start multiplexing sprites for effects beyond 32 on-screen objects.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It</div>
+    <code>/demos/sprites</code> shows exactly this pattern: one 8&times;8 sprite, moved once
+    per VBlank by arrow keys. Push it past any edge to watch clipping and the signed
+    coordinate wraparound in action.
+  </div>
+
+  <h2>Sprite limits and flicker</h2>
+  <p>Fanticon's sprite hardware has two separate limits, and they run out in different ways:</p>
+  <table>
+    <tr><th>Limit</th><th>What happens past it</th></tr>
+    <tr><td>32 records total</td><td>There is no 33rd record &mdash; an object with no
+    assigned record simply has no sprite to draw with</td></tr>
+    <tr><td>8 drawn per scanline</td><td>The ninth-and-later enabled, vertically-intersecting
+    record on a line is skipped for that line only, and <code>VIDEO_STATUS</code> bit&nbsp;2
+    latches</td></tr>
+  </table>
+  <p>Both limits count enabled records whose vertical range intersects a line, whether or not
+  they are horizontally visible or transparent there &mdash; a wide spread of off-screen bullets
+  can still burn through the eight-per-line budget of an on-screen line at the same height.</p>
+
+  <h3>Rotating who wins the race</h3>
+  <p>Because the hardware always favors the <em>lowest</em> record number on a contested
+  scanline, a fixed object-to-record assignment means the same low-priority objects silently
+  vanish every time a line gets crowded. Flicker fixes that by rotating which object occupies
+  which record every frame, so the dropout moves around instead of sitting permanently on one
+  object &mdash; the same technique NES games used to show more than eight objects on a busy
+  line. Each frame, one call before writing sprite records:</p>
+  <pre class="code"><span class="lbl">FLICKER</span>  <span class="dir">EQU</span>   <span class="num">$30</span>      <span class="cmt">; rotation offset, one byte</span>
+<span class="lbl">OBJCOUNT</span> <span class="dir">EQU</span>   <span class="num">$31</span>      <span class="cmt">; active objects this frame, 1-32</span>
+<span class="lbl">OBJIDX</span>   <span class="dir">EQU</span>   <span class="num">$32</span>      <span class="cmt">; which object goes into the record being written</span>
+
+<span class="cmt">; advance the rotation by one object per frame, wrapping at OBJCOUNT</span>
+         <span class="op">INC</span>   FLICKER
+         <span class="op">LDA</span>   FLICKER
+         <span class="op">CMP</span>   OBJCOUNT
+         <span class="op">BCC</span>   .SKIP
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   FLICKER
+<span class="lbl">.SKIP</span>
+         <span class="op">LDA</span>   FLICKER
+         <span class="op">STA</span>   OBJIDX
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">0</span>            <span class="cmt">; X = sprite record index, 0-31</span>
+<span class="lbl">.LOOP</span>    <span class="op">LDY</span>   OBJIDX
+         <span class="op">JSR</span>   WRITERECORD  <span class="cmt">; your routine: object Y -&gt; sprite record X</span>
+         <span class="op">INC</span>   OBJIDX
+         <span class="op">LDA</span>   OBJIDX
+         <span class="op">CMP</span>   OBJCOUNT
+         <span class="op">BCC</span>   .NOWRAP
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   OBJIDX
+<span class="lbl">.NOWRAP</span>  <span class="op">INX</span>
+         <span class="op">CPX</span>   OBJCOUNT
+         <span class="op">BCC</span>   .LOOP</pre>
+  <p>Record 0 &mdash; the one every contested scanline favors &mdash; holds a different object
+  each frame, so a crowded line drops a different object each time rather than always the last
+  one in the list. If <code>OBJCOUNT</code> is below 32, disable the leftover records
+  explicitly (clear <code>ATTR</code> bit&nbsp;7) once when the count drops, or a stale record
+  from a busier frame keeps drawing.</p>
+
+  <div class="box tip">
+    <div class="box-title">Cap the Problem Before You Rotate It</div>
+    Flicker distributes dropout; it does not remove it. A line that regularly needs 20 sprites
+    will still flicker heavily no matter how the rotation is arranged. Keep genuinely
+    high-density effects &mdash; explosions, bullet spreads &mdash; short-lived and staggered in
+    Y, and consider drawing the least important layer (dust, sparks) as tiles instead of
+    sprites when a scene is already sprite-heavy.
+  </div>
+</div>
+
+<div class="chapter" id="ch11">
+  <div class="chapter-kicker">CHAPTER 11 &middot; PART III</div>
+  <h1 class="chapter-title">Bitmap Mode</h1>
+
+  <p class="lede">Bitmap mode trades the tile grid for 32,000 directly addressable 4-bpp
+  pixels &mdash; the mode for illustration, paint tools, and effects that do not fit neatly
+  into 8&times;8 cells.</p>
+
+  <table>
+    <tr><th>VRAM offset</th><th>Bank</th><th>Contents</th></tr>
+    <tr><td><code>$4000&ndash;$7FFF</code></td><td>1</td><td>First bitmap section (16 KiB)</td></tr>
+    <tr><td><code>$8000&ndash;$BCFF</code></td><td>2</td><td>Remaining bitmap pixels (15,616 B)</td></tr>
+  </table>
+  <pre class="code">VRAM byte offset = $4000 + Y &times; 160 + (X / 2)
+even X pixel = high nibble
+odd  X pixel = low nibble</pre>
+  <p>The 4-bit pixel combines with <code>BITMAP_PALETTE</code> (<code>$C01D</code>, low
+  nibble) to select one of the 256 palette entries, the same bank for every pixel in the
+  bitmap. Sprite patterns and records stay in VRAM bank&nbsp;0, untouched by bitmap data, so
+  sprites composite over bitmap graphics exactly as they do over tiles. Scroll registers have
+  no effect in this mode.</p>
+
+  <h2>Loading a bitmap set</h2>
+  <p>The graphics editor packages a bitmap <code>.GFX</code> as three consecutive cartridge
+  banks. Starting at bank 7, for example:</p>
+  <table>
+    <tr><th>Cartridge bank</th><th>Label</th><th>Destination</th></tr>
+    <tr><td>7</td><td><code>TITLE_BM0</code></td><td>First bitmap portion &rarr; VRAM bank 1</td></tr>
+    <tr><td>8</td><td><code>TITLE_BM1</code></td><td>Remaining pixels &rarr; VRAM bank 2</td></tr>
+    <tr><td>9</td><td><code>TITLE_CHR</code></td><td>Resident sprite patterns &rarr; VRAM bank 0</td></tr>
+  </table>
+  <p>Include the bitmap <code>.GFX</code> before your program's <code>FIXED</code> section,
+  then explicitly restore <code>FIXED</code> afterward for ordinary code. Load its referenced
+  <code>.PAL</code>, set <code>BITMAP_PALETTE</code>, select <code>VIDEO_MODE=2</code>, and
+  enable sprites as needed &mdash; the editor limits the starting bank to 0&ndash;253 so all
+  three banks always fit.</p>
+
+  <div class="box warn">
+    <div class="box-title">Writing 32,000 Bytes Takes Time</div>
+    Filling a full-screen bitmap from the 6502 is substantial work: at roughly 4&ndash;6 cycles per
+    byte for a simple copy loop, painting all 32,000 bytes costs on the order of one to two
+    full frames. <code>/demos/bitmap</code> demonstrates exactly this &mdash; startup visibly
+    takes a few frames while the CPU writes the whole packed bitmap through both VRAM banks.
+    Budget for it, and consider painting during a loading or title screen rather than a moment
+    that needs to feel instant.
+  </div>
+
+  <p>Bitmap mode and tile mode are not exclusive within a project &mdash; a title screen in
+  bitmap mode and the rest of the game in tile mode is a completely normal combination, since
+  switching <code>VIDEO_MODE</code> is a single register write.</p>
+</div>
+
+<div class="chapter" id="ch12">
+  <div class="chapter-kicker">CHAPTER 12 &middot; PART III</div>
+  <h1 class="chapter-title">Raster Tricks</h1>
+
+  <p class="lede">Because Fanticon is cycle-deterministic, your code can race the raster beam
+  on purpose &mdash; changing colors or scroll position at an exact scanline, well before
+  general-purpose GPUs made that unnecessary.</p>
+
+  <h2>The raster comparator</h2>
+  <p><code>RASTER_X</code> (<code>$C017/$C018</code>, 0&ndash;399) and <code>RASTER_Y</code>
+  (<code>$C019/$C01A</code>, 0&ndash;261) name one exact dot. When the beam visits it,
+  <code>IRQ_PENDING</code> bit&nbsp;1 sets &mdash; once per visit. Clearing it while the beam
+  is still sitting on that coordinate does not retrigger it; programming a new target ahead of
+  the beam can still fire this frame, while a target the beam already passed waits for the next
+  one. Reset selects the unreachable target <code>(511,511)</code>, so a cartridge that never
+  touches these registers never gets a spurious raster interrupt.</p>
+  <pre class="code"><span class="lbl">RASTX_LO</span> <span class="dir">EQU</span> <span class="num">$C017</span>
+<span class="lbl">RASTY_LO</span> <span class="dir">EQU</span> <span class="num">$C019</span>
+<span class="lbl">IRQEN</span>    <span class="dir">EQU</span> <span class="num">$C003</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   RASTX_LO    <span class="cmt">; dot 0</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">50</span>
+         <span class="op">STA</span>   RASTY_LO    <span class="cmt">; line 50 -- high bytes stay 0 here</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000010</span>
+         <span class="op">STA</span>   IRQEN       <span class="cmt">; enable the raster-compare source</span></pre>
+
+  <h2>Color bands with zero framebuffer cost</h2>
+  <p>The simplest raster trick needs no VRAM writes at all: reprogram
+  <code>BACKDROP_COLOR</code> from a raster IRQ handler to paint horizontal bands. Each time the
+  handler fires, it writes a new color and re-arms the comparator for the next band boundary
+  &mdash; <code>/demos/raster</code> does exactly this to draw four solid bands using only the
+  dot/line comparator and raster IRQs, without touching a single framebuffer byte.</p>
+
+  <h2>Budgeting cycles against the beam</h2>
+  <p>Finer effects &mdash; a palette split mid-scanline, or bending scroll position along a
+  curve one line at a time &mdash; have to win a race against the beam itself. HBlank covers
+  dots 320&ndash;399, which at two dots per CPU cycle is exactly 40&nbsp;CPU cycles: enough for
+  IRQ entry, a table lookup, and one register write, but not much more.</p>
+  <p><code>/demos/wave</code> uses one raster IRQ per visible scanline to bend the tilemap's
+  horizontal scroll along a smooth 128-step sine table, with vertical scroll following the same
+  curve once per frame at a quarter-cycle offset &mdash; keeping both axes moving without ever
+  folding at a scanline boundary. Its raster comparator deliberately fires <em>before</em>
+  HBlank begins, so that IRQ entry and the table lookup consume exactly enough cycles that
+  <code>SCROLL_X</code> gets written during HBlank itself, before the next visible line starts
+  fetching. That is the general pattern for any per-scanline raster effect: trigger the
+  interrupt slightly early, and let the handler's own fixed cost land the write inside the
+  blanking window you are aiming for.</p>
+
+  <div class="box warn">
+    <div class="box-title">Same-Cycle Ordering Is a Guarantee, Not Luck</div>
+    Within every CPU cycle, the raster fetches the first dot, your bus transfer completes on
+    the second dot, mapped writes become visible, and only then does the raster fetch that
+    second dot &mdash; with new interrupt-pending bits set last of all. A same-cycle
+    <code>IRQ_PENDING</code> clear can never erase an event that just happened. This exact,
+    reproducible ordering is what makes racing the beam a reliable technique on Fanticon rather
+    than a fragile trick that only works on one host.
+  </div>
+
+  <p>You can now put pixels, characters, sprites, and beam-timed effects on screen. Part IV
+  turns to the other half of a console&rsquo;s personality &mdash; its four voices of sound.</p>
+</div>

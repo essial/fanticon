@@ -1,0 +1,151 @@
+<div class="divider-page hue-ink" id="appendices">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">REFERENCE</div>
+  <div class="divider-number">R</div>
+  <div class="divider-title">Appendices</div>
+  <div class="divider-sub">The exact tables and formats you will keep this book open to &mdash; opcode timings, the full memory map, the assembler, both file formats, every demo cartridge, and a glossary.</div>
+  <div class="divider-contents">APP A CPU OPCODES &middot; APP B MEMORY MAP &middot; APP C ASSEMBLER &middot; APP D FILE FORMATS &middot; APP E DEMOS &middot; APP F GLOSSARY</div>
+</div>
+
+<div class="chapter dense" id="appA">
+  <div class="chapter-kicker">APPENDIX A</div>
+  <h1 class="chapter-title">Complete 6502 Opcode &amp; Cycle Reference</h1>
+  <p class="lede">Fanticon implements the standard NMOS MOS 6502 &mdash; not the CMOS 65C02
+  &mdash; including every undocumented opcode byte. This appendix is the exact reference; the
+  teaching version is Chapter&nbsp;3.</p>
+
+  <h2>Official opcode and cycle table</h2>
+  <p>Each cell is <code>opcode/cycles</code>. <code>+P</code> means one additional cycle on a
+  page crossing. A dash means the instruction has no such addressing mode.</p>
+  <table class="opcode-table">
+    <thead><tr><th>Instr</th><th>#</th><th>zp</th><th>zp,X</th><th>zp,Y</th><th>abs</th><th>abs,X</th><th>abs,Y</th><th>(zp,X)</th><th>(zp),Y</th></tr></thead>
+    <tbody>
+    <tr><td>ADC</td><td>69/2</td><td>65/3</td><td>75/4</td><td>&mdash;</td><td>6D/4</td><td>7D/4+P</td><td>79/4+P</td><td>61/6</td><td>71/5+P</td></tr>
+    <tr><td>AND</td><td>29/2</td><td>25/3</td><td>35/4</td><td>&mdash;</td><td>2D/4</td><td>3D/4+P</td><td>39/4+P</td><td>21/6</td><td>31/5+P</td></tr>
+    <tr><td>CMP</td><td>C9/2</td><td>C5/3</td><td>D5/4</td><td>&mdash;</td><td>CD/4</td><td>DD/4+P</td><td>D9/4+P</td><td>C1/6</td><td>D1/5+P</td></tr>
+    <tr><td>EOR</td><td>49/2</td><td>45/3</td><td>55/4</td><td>&mdash;</td><td>4D/4</td><td>5D/4+P</td><td>59/4+P</td><td>41/6</td><td>51/5+P</td></tr>
+    <tr><td>LDA</td><td>A9/2</td><td>A5/3</td><td>B5/4</td><td>&mdash;</td><td>AD/4</td><td>BD/4+P</td><td>B9/4+P</td><td>A1/6</td><td>B1/5+P</td></tr>
+    <tr><td>ORA</td><td>09/2</td><td>05/3</td><td>15/4</td><td>&mdash;</td><td>0D/4</td><td>1D/4+P</td><td>19/4+P</td><td>01/6</td><td>11/5+P</td></tr>
+    <tr><td>SBC</td><td>E9/2</td><td>E5/3</td><td>F5/4</td><td>&mdash;</td><td>ED/4</td><td>FD/4+P</td><td>F9/4+P</td><td>E1/6</td><td>F1/5+P</td></tr>
+    <tr><td>LDX</td><td>A2/2</td><td>A6/3</td><td>&mdash;</td><td>B6/4</td><td>AE/4</td><td>&mdash;</td><td>BE/4+P</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>LDY</td><td>A0/2</td><td>A4/3</td><td>B4/4</td><td>&mdash;</td><td>AC/4</td><td>BC/4+P</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>CPX</td><td>E0/2</td><td>E4/3</td><td>&mdash;</td><td>&mdash;</td><td>EC/4</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>CPY</td><td>C0/2</td><td>C4/3</td><td>&mdash;</td><td>&mdash;</td><td>CC/4</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>STA</td><td>&mdash;</td><td>85/3</td><td>95/4</td><td>&mdash;</td><td>8D/4</td><td>9D/5</td><td>99/5</td><td>81/6</td><td>91/6</td></tr>
+    <tr><td>STX</td><td>&mdash;</td><td>86/3</td><td>&mdash;</td><td>96/4</td><td>8E/4</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>STY</td><td>&mdash;</td><td>84/3</td><td>94/4</td><td>&mdash;</td><td>8C/4</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Read-modify-write instructions (fixed timing)</h2>
+  <table class="opcode-table">
+    <thead><tr><th>Instr</th><th>A</th><th>zp</th><th>zp,X</th><th>abs</th><th>abs,X</th></tr></thead>
+    <tbody>
+    <tr><td>ASL</td><td>0A/2</td><td>06/5</td><td>16/6</td><td>0E/6</td><td>1E/7</td></tr>
+    <tr><td>LSR</td><td>4A/2</td><td>46/5</td><td>56/6</td><td>4E/6</td><td>5E/7</td></tr>
+    <tr><td>ROL</td><td>2A/2</td><td>26/5</td><td>36/6</td><td>2E/6</td><td>3E/7</td></tr>
+    <tr><td>ROR</td><td>6A/2</td><td>66/5</td><td>76/6</td><td>6E/6</td><td>7E/7</td></tr>
+    <tr><td>DEC</td><td>&mdash;</td><td>C6/5</td><td>D6/6</td><td>CE/6</td><td>DE/7</td></tr>
+    <tr><td>INC</td><td>&mdash;</td><td>E6/5</td><td>F6/6</td><td>EE/6</td><td>FE/7</td></tr>
+    </tbody>
+  </table>
+  <p>A read-modify-write instruction reads the value, writes the old value back unchanged,
+  then writes the new value &mdash; three bus accesses, not one. See the hardware-register
+  warning in Chapter&nbsp;21.</p>
+
+  <h2>Other official opcodes</h2>
+  <table>
+    <thead><tr><th>Group</th><th>Opcodes and cycles</th></tr></thead>
+    <tbody>
+    <tr><td>Branch</td><td><code>BPL 10, BMI 30, BVC 50, BVS 70, BCC 90, BCS B0, BNE D0, BEQ F0</code> &mdash; all 2 + taken + page</td></tr>
+    <tr><td>Bit test</td><td><code>BIT zp 24/3</code>, <code>BIT abs 2C/4</code></td></tr>
+    <tr><td>Jump/call</td><td><code>JMP abs 4C/3</code>, <code>JMP (abs) 6C/5</code>, <code>JSR 20/6</code>, <code>RTS 60/6</code>, <code>RTI 40/6</code></td></tr>
+    <tr><td>Stack</td><td><code>PHP 08/3</code>, <code>PLP 28/4</code>, <code>PHA 48/3</code>, <code>PLA 68/4</code></td></tr>
+    <tr><td>Transfer</td><td><code>DEY 88/2, TXA 8A/2, TAY A8/2, TAX AA/2, TYA 98/2, TXS 9A/2, TSX BA/2</code></td></tr>
+    <tr><td>Increment</td><td><code>INY C8/2, INX E8/2, DEX CA/2</code></td></tr>
+    <tr><td>Flags</td><td><code>CLC 18/2, SEC 38/2, CLI 58/2, SEI 78/2, CLV B8/2, CLD D8/2, SED F8/2</code></td></tr>
+    <tr><td>System</td><td><code>BRK 00/7</code>, <code>NOP EA/2</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Cycle-accurate programming rules</h2>
+  <ul>
+    <li>Taken branches perform an extra read; a page-crossing branch performs another.</li>
+    <li>Indexed reads perform a correction cycle when their address crosses a page.</li>
+    <li>Indexed stores always perform a dummy read before the write.</li>
+    <li>Stack and control-flow instructions perform their documented dummy reads.</li>
+    <li>Holding the hardware-ready signal inactive repeats read cycles but never stalls a write.</li>
+  </ul>
+
+  <h2>Decimal mode</h2>
+  <p>With <code>D=1</code>, <code>ADC</code>/<code>SBC</code> perform NMOS binary-coded-decimal
+  adjustment &mdash; each nibble is a decimal digit, so <code>$42</code> means decimal&nbsp;42.
+  Fanticon implements NMOS decimal behavior exactly, including inputs that are not valid BCD
+  digits. <code>N</code>, <code>V</code>, and <code>Z</code> after a decimal operation are
+  NMOS-specific and should not be read as portable BCD indicators &mdash; prefer <code>C</code>
+  for carry/no-borrow and test <code>A</code> directly when it matters. Interrupt entry does not
+  clear <code>D</code>; leave decimal mode clear except inside a small, deliberately controlled
+  BCD routine.</p>
+
+  <h2>Undocumented NMOS opcodes</h2>
+  <p>Fanticon's assembler accepts every stable undocumented mnemonic below. Where the NMOS has
+  duplicate opcode bytes for identical syntax, the assembler emits one canonical encoding
+  (<code>$0B</code> for <code>ANC #</code>, <code>$02</code> for <code>KIL</code>/<code>JAM</code>,
+  and <code>$80</code>/<code>$04</code>/<code>$14</code>/<code>$0C</code>/<code>$1C</code> for
+  addressed <code>NOP</code>); use <code>DFB</code>/<code>HEX</code> to force a specific
+  alternate byte.</p>
+
+  <table class="opcode-table">
+    <thead><tr><th>Mnemonic</th><th>Operation</th><th>Opcodes by mode (same order as official table)</th></tr></thead>
+    <tbody>
+    <tr><td>SLO</td><td><code>ASL M</code>, then <code>A&larr;A|M</code></td><td>03,07,0F,13,17,1B,1F</td></tr>
+    <tr><td>RLA</td><td><code>ROL M</code>, then <code>A&larr;A&amp;M</code></td><td>23,27,2F,33,37,3B,3F</td></tr>
+    <tr><td>SRE</td><td><code>LSR M</code>, then <code>A&larr;A^M</code></td><td>43,47,4F,53,57,5B,5F</td></tr>
+    <tr><td>RRA</td><td><code>ROR M</code>, then <code>ADC M</code></td><td>63,67,6F,73,77,7B,7F</td></tr>
+    <tr><td>SAX</td><td><code>M&larr;A&amp;X</code></td><td>(zp,X)83, zp87, abs8F, zp,Y97</td></tr>
+    <tr><td>LAX</td><td><code>A&larr;M; X&larr;M</code></td><td>(zp,X)A3, zpA7, absAF, (zp),YB3, zp,YB7, abs,YBF</td></tr>
+    <tr><td>DCP</td><td><code>DEC M</code>, then compare A with M</td><td>C3,C7,CF,D3,D7,DB,DF</td></tr>
+    <tr><td>ISC/ISB</td><td><code>INC M</code>, then <code>SBC M</code></td><td>E3,E7,EF,F3,F7,FB,FF</td></tr>
+    </tbody>
+  </table>
+  <p>For the seven-mode rows, cycle counts in listed order are 8, 5, 6, 8, 6, 7, 7 &mdash;
+  these are read-modify-write operations that perform both the old-value and new-value writes.</p>
+
+  <table class="opcode-table">
+    <thead><tr><th>Mnemonic</th><th>Opcode</th><th>Cyc</th><th>Operation</th></tr></thead>
+    <tbody>
+    <tr><td>ANC #</td><td>0B, 2B</td><td>2</td><td><code>A&larr;A&amp;#</code>; C&larr;result bit 7</td></tr>
+    <tr><td>ALR #</td><td>4B</td><td>2</td><td><code>A&larr;A&amp;#</code>, then LSR</td></tr>
+    <tr><td>ARR #</td><td>6B</td><td>2</td><td><code>A&larr;A&amp;#</code>, then ROR; special C/V/decimal behavior</td></tr>
+    <tr><td>XAA #</td><td>8B</td><td>2</td><td><code>A&larr;(A|$EE)&amp;X&amp;#</code></td></tr>
+    <tr><td>LAX #</td><td>AB</td><td>2</td><td><code>A&larr;X&larr;(A|$EE)&amp;#</code></td></tr>
+    <tr><td>AXS/SBX #</td><td>CB</td><td>2</td><td><code>X&larr;(A&amp;X)-#</code>; C reports no borrow</td></tr>
+    <tr><td>SBC #</td><td>EB</td><td>2</td><td>Alias of official immediate SBC</td></tr>
+    <tr><td>LAS abs,Y</td><td>BB</td><td>4+P</td><td><code>A&larr;X&larr;SP&larr;M&amp;SP</code></td></tr>
+    <tr><td>AHX (zp),Y / abs,Y</td><td>93 / 9F</td><td>6 / 5</td><td>Unstable high-byte-masked store</td></tr>
+    <tr><td>TAS abs,Y</td><td>9B</td><td>5</td><td><code>SP&larr;A&amp;X</code>, then unstable masked store</td></tr>
+    <tr><td>SHY abs,X</td><td>9C</td><td>5</td><td>Store Y masked by address-derived high byte</td></tr>
+    <tr><td>SHX abs,Y</td><td>9E</td><td>5</td><td>Store X masked by address-derived high byte</td></tr>
+    </tbody>
+  </table>
+  <p>The unstable stores follow Fanticon's own fixed, deterministic behavior exactly
+  (including its <code>$EE</code> magic-mask value), which differs from how these bytes behave
+  on an original chip, where results vary with silicon revision, temperature, and bus
+  conditions.</p>
+
+  <table>
+    <thead><tr><th>Undocumented NOP form</th><th>Opcodes</th><th>Cycles</th></tr></thead>
+    <tbody>
+    <tr><td>Implied</td><td>1A 3A 5A 7A DA FA</td><td>2</td></tr>
+    <tr><td>Immediate</td><td>80 82 89 C2 E2</td><td>2</td></tr>
+    <tr><td>Zero page</td><td>04 44 64</td><td>3</td></tr>
+    <tr><td>Zero page,X</td><td>14 34 54 74 D4 F4</td><td>4</td></tr>
+    <tr><td>Absolute</td><td>0C</td><td>4</td></tr>
+    <tr><td>Absolute,X</td><td>1C 3C 5C 7C DC FC</td><td>4+P</td></tr>
+    </tbody>
+  </table>
+  <p>Undocumented NOPs still fetch operands and perform normal addressing-mode bus reads
+  &mdash; they are not all equivalent to <code>EA</code>. The JAM/KIL opcodes
+  (<code>02 12 22 32 42 52 62 72 92 B2 D2 F2</code>) halt useful execution until RESET; do not
+  use JAM as a wait primitive unless that halt-until-reset behavior is exactly the intent.</p>
+</div>

@@ -1,0 +1,352 @@
+<div class="divider-page hue-slate" id="part6">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 06</div>
+  <div class="divider-number">06</div>
+  <div class="divider-title">Shipping<br>a Game</div>
+  <div class="divider-sub">Bank switching at scale, packaging a cartridge, writing cycle-accurate code, and testing it before release.</div>
+  <div class="divider-contents">CH 19 BANK SWITCHING &middot; CH 20 PACKAGING &amp; SAVES &middot; CH 21 OPTIMIZATION &middot; CH 22 TESTING &amp; SHIPPING</div>
+</div>
+
+<div class="chapter" id="ch19">
+  <div class="chapter-kicker">CHAPTER 19 &middot; PART VI</div>
+  <h1 class="chapter-title">Bank Switching &amp; Memory Management</h1>
+
+  <p class="lede">Everything you have built so far fit inside fixed ROM. A complete game outgrows
+  16&nbsp;KiB quickly &mdash; the bank window is how Fanticon scales up to 4&nbsp;MiB of code
+  and assets without ever widening the CPU's address bus.</p>
+
+  <div class="box tip">
+    <div class="box-title">One Window, Four Pools</div>
+    Think of <code>$8000&ndash;$BFFF</code> as a single 16&nbsp;KiB peephole, not four separate
+    ones. <code>BANK_KIND</code> decides <em>which pool</em> of memory the peephole currently
+    looks into &mdash; cartridge ROM, work RAM, video RAM, or save RAM. <code>BANK_NUMBER</code>
+    decides <em>which 16&nbsp;KiB slice</em> of that pool you are looking at. Nothing else about
+    addressing changes: <code>LDA&nbsp;$8005</code> always means &quot;the sixth byte of
+    whatever is mapped right now&quot; &mdash; ROM, RAM, VRAM, or save RAM, depending entirely
+    on the two registers below.
+  </div>
+
+  <table>
+    <tr><th><code>BANK_KIND</code></th><th>Valid <code>BANK_NUMBER</code></th><th>Window contains</th></tr>
+    <tr><td><code>$00</code></td><td>0&ndash;255</td><td>Cartridge ROM, up to 4&nbsp;MiB</td></tr>
+    <tr><td><code>$01</code></td><td>0&ndash;3</td><td>Volatile work RAM, 64&nbsp;KiB total</td></tr>
+    <tr><td><code>$02</code></td><td>0&ndash;2</td><td>Video RAM, 48&nbsp;KiB total</td></tr>
+    <tr><td><code>$03</code></td><td>0&ndash;3</td><td>Battery-backed save RAM, up to 64&nbsp;KiB</td></tr>
+  </table>
+  <p>Every bank switch is the same two-register move, regardless of which pool you are headed
+  for:</p>
+  <ol>
+    <li>Write the pool you want to <code>BANK_KIND</code> (<code>$C000</code>) &mdash; one of
+    the four values above.</li>
+    <li>Write which slice of that pool to <code>BANK_NUMBER</code> (<code>$C001</code>).</li>
+    <li>Address <code>$8000&ndash;$BFFF</code> normally. It now means whatever you just
+    selected, until the next write to either register.</li>
+  </ol>
+  <p>The same CPU address means a different physical byte depending only on what those two
+  registers currently hold:</p>
+  <table>
+    <tr><th><code>BANK_KIND</code></th><th><code>BANK_NUMBER</code></th><th><code>$8005</code> currently means</th></tr>
+    <tr><td><code>$00</code></td><td><code>5</code></td><td>Byte 5 of cartridge ROM bank 5</td></tr>
+    <tr><td><code>$01</code></td><td><code>0</code></td><td>Byte 5 of work RAM bank 0</td></tr>
+    <tr><td><code>$02</code></td><td><code>0</code></td><td>Byte 5 of video RAM bank 0</td></tr>
+    <tr><td><code>$03</code></td><td><code>1</code></td><td>Byte 5 of save RAM bank 1</td></tr>
+  </table>
+  <p>The change takes effect after the register write's bus cycle completes, so the golden rule
+  is simple: <strong>switch banks while executing from main RAM or fixed ROM, never from the
+  bank window itself</strong> &mdash; you would be changing the ground out from under the
+  instruction that is running.</p>
+  <pre class="code">bank number = offset / $4000
+CPU address = $8000 + (offset AND $3FFF)</pre>
+
+  <h2>Bank-aware symbols</h2>
+  <p>Every label the assembler resolves records its CPU address <em>and</em> which section
+  produced it. <code>BANKOF(label)</code> turns a switchable-ROM label into its bank number
+  &mdash; it is an error to call it on a fixed-ROM, RAM, or plain numeric label:</p>
+  <pre class="code">         <span class="op">LDA</span>   <span class="dir">#</span>BANKOF(LEVEL2)
+         <span class="op">STA</span>   BANKNUM
+         <span class="op">JMP</span>   LEVEL2      <span class="cmt">; resolves to its $8000-$BFFF address</span></pre>
+  <p>Referring to a banked label always returns its <code>$8000&ndash;$BFFF</code> address, and
+  never silently inserts a bank switch for you &mdash; a direct branch or jump between two
+  <em>different</em> switchable banks produces a build warning, because the assembler cannot
+  know whether the correct bank will be mapped in when execution gets there.</p>
+
+  <h2>What goes where</h2>
+  <p>Work RAM (<code>BANK_KIND=$01</code>) is volatile banked scratch space &mdash; a natural
+  home for level data staged out of ROM, decompression buffers, or music driver state that does
+  not need to persist. Remember that only the lower 32&nbsp;KiB of main RAM is <em>always</em>
+  visible; work RAM banks exist purely inside the window. Save RAM (<code>$03</code>) is the
+  one banked kind that survives power-off, covered fully in Chapter&nbsp;20. A cartridge that
+  declares fewer than four save banks simply exposes its unused bank numbers as unmapped.</p>
+
+  <h2>A complete worked example: staging ROM into VRAM</h2>
+  <p>Cartridge ROM and video RAM are two different pools behind the <em>same</em> window, so
+  you can never have both mapped in at once &mdash; there is no register write that lets the
+  CPU read ROM and write VRAM in the same instruction. Moving a level's graphics from ROM to
+  VRAM is therefore always a three-step relay: map the ROM bank in and copy it out to ordinary
+  main RAM, then map the VRAM bank in and copy from RAM into it. A small reusable routine
+  handles the copying half of that relay regardless of which pool is mapped:</p>
+  <pre class="code"><span class="lbl">BANKKIND</span> <span class="dir">EQU</span>   <span class="num">$C000</span>
+<span class="lbl">BANKNUM</span>  <span class="dir">EQU</span>   <span class="num">$C001</span>
+<span class="lbl">SRC</span>      <span class="dir">EQU</span>   <span class="num">$10</span>      <span class="cmt">; 2-byte zero-page pointer</span>
+<span class="lbl">DST</span>      <span class="dir">EQU</span>   <span class="num">$12</span>      <span class="cmt">; 2-byte zero-page pointer</span>
+<span class="lbl">PAGES</span>    <span class="dir">EQU</span>   <span class="num">$14</span>      <span class="cmt">; pages left to copy</span>
+
+<span class="cmt">; Copies A 256-byte pages from (SRC) to (DST). Load both pointers and A</span>
+<span class="cmt">; before calling; this only walks them forward one page at a time.</span>
+<span class="lbl">PAGECOPY</span> <span class="op">STA</span>   PAGES
+<span class="lbl">.PAGE</span>    <span class="op">LDY</span>   <span class="dir">#</span><span class="num">0</span>
+<span class="lbl">.BYTE</span>    <span class="op">LDA</span>   (SRC),Y
+         <span class="op">STA</span>   (DST),Y
+         <span class="op">INY</span>
+         <span class="op">BNE</span>   .BYTE
+         <span class="op">INC</span>   SRC+1
+         <span class="op">INC</span>   DST+1
+         <span class="op">DEC</span>   PAGES
+         <span class="op">BNE</span>   .PAGE
+         <span class="op">RTS</span></pre>
+  <p>With that in place, staging one level's 2,048-byte tile-number map from a switchable
+  cartridge bank into video RAM is two calls &mdash; one bank switch and one <code>PAGECOPY</code>
+  per leg of the relay:</p>
+  <pre class="code">         <span class="cmt">; leg 1: cartridge ROM -&gt; main RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   BANKKIND     <span class="cmt">; cartridge ROM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span>BANKOF(LEVEL1_MAP)
+         <span class="op">STA</span>   BANKNUM      <span class="cmt">; LEVEL1_MAP's bank now fills $8000-$BFFF</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;LEVEL1_MAP
+         <span class="op">STA</span>   SRC
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;LEVEL1_MAP
+         <span class="op">STA</span>   SRC+1
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;STAGE
+         <span class="op">STA</span>   DST
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;STAGE
+         <span class="op">STA</span>   DST+1
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>            <span class="cmt">; 2,048 bytes = 8 pages</span>
+         <span class="op">JSR</span>   PAGECOPY
+
+         <span class="cmt">; leg 2: main RAM -&gt; video RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$02</span>
+         <span class="op">STA</span>   BANKKIND     <span class="cmt">; video RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   BANKNUM      <span class="cmt">; the tile-number map lives in VRAM bank 0</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;STAGE
+         <span class="op">STA</span>   SRC
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;STAGE
+         <span class="op">STA</span>   SRC+1
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;<span class="num">$A000</span>    <span class="cmt">; $8000 + $2000, the tile-map offset from Ch. 9</span>
+         <span class="op">STA</span>   DST
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;<span class="num">$A000</span>
+         <span class="op">STA</span>   DST+1
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>
+         <span class="op">JSR</span>   PAGECOPY</pre>
+  <p><code>STAGE</code> is any 2,048-byte buffer you set aside in main RAM &mdash; it never
+  needs to be bigger than the largest single asset you stage through it, and the same buffer is
+  reused for tile patterns, attributes, sprite records, and bitmap pages by simply changing the
+  source label, the destination offset, and the page count passed to <code>PAGECOPY</code>.
+  Chapter&nbsp;9 puts this exact relay to work loading a tile set.</p>
+
+  <div class="box warn">
+    <div class="box-title">Reset Always Selects Bank 0</div>
+    Every reset selects cartridge bank 0, kind <code>$00</code>. Reset code cannot assume any
+    other switchable bank is mapped &mdash; if your reset routine needs data from a different
+    bank, it must explicitly select that bank itself before reading it, exactly like any other
+    routine would.
+  </div>
+
+  <p>With multiple banks in play, packaging becomes the next question: how does a project
+  with a handful of referenced banks turn into one <code>.FCN</code> file, and how
+  does a game remember player progress between sessions? Chapter&nbsp;20 covers both.</p>
+</div>
+
+<div class="chapter" id="ch20">
+  <div class="chapter-kicker">CHAPTER 20 &middot; PART VI</div>
+  <h1 class="chapter-title">Packaging &amp; Save Files</h1>
+
+  <p class="lede">A finished cartridge is a single <code>.FCN</code> file: a 64-byte header, a
+  fixed 16&nbsp;KiB ROM image, and zero or more banked ROM images, all little-endian and
+  independently versioned from its optional <code>.SAV</code> companion.</p>
+
+  <h2>How BUILD packs a cartridge</h2>
+  <p>The packager writes the fixed image, then every bank from zero through the
+  <strong>highest bank your source references</strong> &mdash; skipped banks and
+  unwritten bytes fill with <code>$FF</code>, and any trailing banks above the highest
+  reference are omitted entirely. Using banks 0 and 3, for instance, stores four banks, not
+  256 &mdash; you only pay for what you use.</p>
+
+  <table>
+    <tr><th>Offset</th><th>Field</th><th>Meaning</th></tr>
+    <tr><td><code>$00</code></td><td><code>MAGIC</code></td><td>ASCII <code>FANTICON</code></td></tr>
+    <tr><td><code>$08/$09</code></td><td><code>FORMAT_MAJOR/MINOR</code></td><td><code>1.0</code></td></tr>
+    <tr><td><code>$0C</code></td><td><code>FLAGS</code></td><td>Bit 0: uses battery RAM</td></tr>
+    <tr><td><code>$10</code></td><td><code>ROM_BANKS</code></td><td>Switchable banks, 0&ndash;256</td></tr>
+    <tr><td><code>$12</code></td><td><code>SAVE_BANKS</code></td><td>Battery RAM banks, 0&ndash;4</td></tr>
+    <tr><td><code>$14/$18</code></td><td><code>FIXED_CRC32/BANKED_CRC32</code></td><td>CRC-32 of ROM contents</td></tr>
+    <tr><td><code>$1C</code></td><td><code>CARTRIDGE_ID</code></td><td>Stable, nonzero 64-bit identity</td></tr>
+    <tr><td><code>$24</code></td><td><code>TITLE</code></td><td>22 bytes, printable ASCII</td></tr>
+    <tr><td><code>$3A/$3B</code></td><td><code>MACHINE_MAJOR/MINOR</code></td><td>Required hardware version</td></tr>
+  </table>
+  <p>All CRC fields use CRC-32/ISO-HDLC. A loader validates, in strict order: minimum length
+  and magic, supported version and header size, known flags and mapper, ROM/save bank-count
+  limits, a nonzero ID with valid title bytes and compatible machine version, exact total file
+  size, every checksum, and finally the presence of all three fixed-ROM vectors &mdash; before
+  a single byte is exposed to the CPU. Nothing partially loads.</p>
+
+  <h2>Save files</h2>
+  <p>A cartridge with <code>SAVE_BANKS &gt; 0</code> gets a sibling save file: on native
+  platforms, the same base name with a <code>.SAV</code> extension beside the cartridge
+  (<code>ASTRO.FCN</code> &rarr; <code>ASTRO.SAV</code>), keyed by path, not by the cartridge's
+  internal title. Browser builds store the equivalent bytes in persistent browser storage,
+  keyed by <code>CARTRIDGE_ID</code> instead.</p>
+  <p>Writes through the save-RAM bank window update RAM immediately and mark the save dirty.
+  The host flushes it to disk after one second of no new writes, whenever a cartridge is
+  cleanly ejected or Game mode exits, and during orderly shutdown &mdash; always through a
+  temporary file that is flushed and then atomically swapped in, so a crash mid-save can only
+  lose the most recent unflushed writes, never corrupt the last good file. Only one running
+  Fanticon instance can hold the write lock for a given save; if a second instance cannot
+  acquire it, that cartridge simply runs with save RAM read-only and a host warning.</p>
+
+  <div class="box tip">
+    <div class="box-title">Why CARTRIDGE_ID Matters</div>
+    <code>ID</code> in <code>FANTICON.CFG</code> is generated once, the first time a project is
+    created, and ordinary rebuilds never change it &mdash; that is deliberate. It is what lets
+    you ship new versions of a game, with completely different code and assets, while every
+    player's existing save file keeps working. If a loaded save's declared size does not match
+    <code>SAVE_BANKS &times; $4000</code> for the cartridge that is loading it, Fanticon deletes
+    the mismatched save and creates a fresh zero-filled one at the correct size &mdash; save
+    data is never silently migrated across a size change.
+  </div>
+
+  <p>Packaging and saving are both automatic once your manifest and sections are right &mdash;
+  the work that is yours to get right is making the code fast enough to hit 60&nbsp;Hz
+  every frame, which is where Chapter&nbsp;21 goes next.</p>
+</div>
+
+<div class="chapter" id="ch21">
+  <div class="chapter-kicker">CHAPTER 21 &middot; PART VI</div>
+  <h1 class="chapter-title">Cycle-Accurate Optimization</h1>
+
+  <p class="lede">Fanticon gives you a fixed budget every frame: 52,400 CPU cycles at 60&nbsp;Hz.
+  Writing efficient 6502 code is mostly about arranging data around the processor, not chasing
+  clever instruction tricks.</p>
+
+  <ul>
+    <li>Put frequently accessed variables and pointers in <strong>zero page</strong> &mdash; a
+    zero-page load is one byte shorter and one cycle faster than the equivalent absolute load.</li>
+    <li>Use <code>X</code> or <code>Y</code> as loop counters so <code>DEX</code>/<code>DEY</code>/<code>INX</code>/<code>INY</code>
+    avoid memory traffic entirely.</li>
+    <li>Choose <code>(zp),Y</code> for walking one buffer through a zero-page pointer, and
+    <code>(zp,X)</code> for selecting among several adjacent zero-page pointers.</li>
+    <li>Align tables to page boundaries when indexed-read timing must stay constant &mdash;
+    an <code>abs,X</code> or <code>abs,Y</code> read costs one extra cycle whenever the index
+    crosses a page.</li>
+    <li>Keep hot loops inside a single page so a taken branch never pays the page-crossing
+    penalty, and remember the final (not-taken) iteration of a counted loop usually has a
+    different cycle cost than the taken ones.</li>
+    <li>Prefer a counted loop over unrolled code until you have measured a bottleneck
+    &mdash; unroll only after profiling shows it matters.</li>
+  </ul>
+
+  <pre class="code"><span class="cmt">; X iterations: 5 cycles per taken pass, 4 on the final (not-taken) pass</span>
+<span class="lbl">LOOP</span>     <span class="op">DEX</span>            <span class="cmt">; 2 cycles</span>
+         <span class="op">BNE</span>   LOOP        <span class="cmt">; 3 taken, 2 not taken (same-page target)</span></pre>
+
+  <div class="box warn">
+    <div class="box-title">Hardware Registers Are Not Ordinary Memory</div>
+    Fanticon exposes exact NMOS bus timing: indexed stores always perform a dummy read before
+    the write, and a read-modify-write instruction (<code>INC</code>, <code>ASL</code>,
+    and friends) reads the old value, writes it back unchanged, and only then writes the new
+    value &mdash; three bus accesses where you might expect one. Never use a read-modify-write
+    instruction on a device register unless that register's own documentation explicitly says
+    it tolerates the extra read and write. The same caution applies to indexed addressing near
+    a device register: an indexed access can briefly touch a provisional address on its way to
+    the final one.
+  </div>
+
+  <h2>A portability and correctness checklist</h2>
+  <p>Before treating any routine as finished:</p>
+  <ul>
+    <li>Know exactly which registers, flags, zero-page bytes, and stack bytes it clobbers.</li>
+    <li>Set carry explicitly (<code>CLC</code>/<code>SEC</code>) before every independent
+    <code>ADC</code>/<code>SBC</code> chain &mdash; never assume its state.</li>
+    <li>Confirm decimal mode is what you expect; NMOS interrupt entry does not clear <code>D</code>
+    for you.</li>
+    <li>Check every relative branch is in range, and whether a page crossing changes its timing.</li>
+    <li>Never assume RESET initializes <code>A</code>, <code>X</code>, or <code>Y</code> &mdash;
+    initialize your own program state explicitly, every time.</li>
+    <li>Keep <code>SP</code> balanced across every control-flow path, and end interrupt
+    handlers with <code>RTI</code>, ordinary subroutines with <code>RTS</code> &mdash; never
+    mix the two.</li>
+    <li>Avoid undocumented opcodes in anything you might someday retarget to a different
+    6502-family chip; Fanticon emulates all 256 opcode bytes faithfully, but that faithfulness
+    is exactly why relying on them is a one-way door.</li>
+  </ul>
+
+  <p>Appendix&nbsp;A collects the complete opcode and cycle tables this chapter draws its rules
+  of thumb from, including the full undocumented-opcode catalog for when you deliberately
+  decide the trade-off is worth it. Chapter&nbsp;22 closes the loop: how Fanticon itself
+  verifies correctness, and how to give your own cartridge the same confidence before it ships.</p>
+</div>
+
+<div class="chapter" id="ch22">
+  <div class="chapter-kicker">CHAPTER 22 &middot; PART VI</div>
+  <h1 class="chapter-title">Testing &amp; Shipping</h1>
+
+  <p class="lede">Fanticon itself is held to an exacting standard: cycle-accurate, bit-identical
+  behavior on every host, every time. Here is how to borrow that same confidence for your own
+  game before you call it done.</p>
+
+  <h2>Playtesting with the debugger, deliberately</h2>
+  <p>Chapter&nbsp;6 introduced breakpoints, watchpoints, and stepping as tools for understanding
+  code you just wrote. Before shipping, turn them on your <em>finished</em> cartridge instead:</p>
+  <ul>
+    <li>Set a memory-write watchpoint on your player's health or position variable and play
+    normally &mdash; anything that writes it unexpectedly stands out immediately.</li>
+    <li>Drop a breakpoint at the top of your VBlank handler and single-step
+    (<span class="kbd">F11</span>) through one full frame at least once, confirming every
+    interrupt source you expect to see acknowledged is.</li>
+    <li>Use a raster breakpoint at the exact <code>LINE,DOT</code> of a raster effect
+    (Chapter&nbsp;12) to confirm it fires where you think it does, not just that it looks right
+    on screen.</li>
+    <li>Watch the paused panel's APU section while audio plays to confirm channels enable,
+    retrigger, and disable exactly when your code intends.</li>
+  </ul>
+
+  <h2>Budget every frame, not just the average one</h2>
+  <p>52,400 cycles is the hard limit, but the moment that matters is your <em>worst</em> frame,
+  not your typical one &mdash; the frame where the player is taking damage, three enemies are
+  on screen, a room transition is loading, and the tracker is mid-pattern all at once. Trigger
+  that worst case deliberately while stepping through it, and confirm your VBlank handler still
+  finishes before the next VBlank arrives. A handler that occasionally overruns shows up as a
+  dropped frame or a one-frame input hiccup &mdash; often intermittent enough to ship
+  unnoticed unless you have gone looking for it on purpose.</p>
+
+  <h2>Exercise every save path</h2>
+  <p>Chapter&nbsp;20 covered how save RAM persists; test all three shapes that behavior can
+  take before release:</p>
+  <ul>
+    <li>A completely fresh save, from a player who has never run your cartridge before.</li>
+    <li>A save created by an earlier build of your own cartridge, loaded by the current one.</li>
+    <li>What happens if <code>SAVE_BANKS</code> in your manifest ever changes between versions
+    &mdash; Fanticon discards a save whose size no longer matches and starts over rather than
+    guessing, so make sure that is an acceptable experience rather than a surprise.</li>
+  </ul>
+
+  <h2>A pre-ship checklist for your own cartridge</h2>
+  <ul>
+    <li>Confirm your frame's work fits inside 52,400&nbsp;cycles with room to spare for
+    worst-case input/animation/audio bursts.</li>
+    <li>Step through RESET and your interrupt handlers in the debugger at least once end to
+    end; confirm every acknowledgment clears the bit it means to.</li>
+    <li>If Fanticon is available to you on more than one platform (say, native and browser),
+    play your finished cartridge on both &mdash; save persistence in particular takes a
+    different path on each, as Chapter&nbsp;20 described.</li>
+    <li>Re-read the correctness checklist at the end of Chapter&nbsp;21 against your
+    source, not from memory.</li>
+  </ul>
+
+  <p>That is the complete path from an empty folder to a shipped cartridge. Part&nbsp;VII turns
+  from the console itself to the games you build with it &mdash; menus, side-scrollers,
+  top-down worlds, raster effects, and palette tricks, all in genre-shaped detail. The
+  appendices after that are the reference material you will keep this book open to.</p>
+</div>

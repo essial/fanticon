@@ -1,0 +1,232 @@
+<div class="divider-page hue-mustard" id="part4">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 04</div>
+  <div class="divider-number">04</div>
+  <div class="divider-title">Sound</div>
+  <div class="divider-sub">Four deterministic voices, direct register programming, and the visual tracker that composes for them.</div>
+  <div class="divider-contents">CH 13 AUDIO TOUR &middot; CH 14 DIRECT REGISTERS &middot; CH 15 MUSIC TRACKER</div>
+</div>
+
+<div class="chapter" id="ch13">
+  <div class="chapter-kicker">CHAPTER 13 &middot; PART IV</div>
+  <h1 class="chapter-title">Audio Hardware Tour</h1>
+
+  <p class="lede">Fanticon has four deterministic, monophonic voices: two pulse channels, one
+  triangle channel, and one noise channel &mdash; the sound character of the NES. Envelopes,
+  sweeps, and note timing are all under direct control of your 6502 code, driven register by
+  register.</p>
+
+  <table class="audio-table">
+    <tr><th>Range</th><th>Voice</th></tr>
+    <tr><td><code>$C030&ndash;$C033</code></td><td>Pulse 1</td></tr>
+    <tr><td><code>$C034&ndash;$C037</code></td><td>Pulse 2</td></tr>
+    <tr><td><code>$C038&ndash;$C03B</code></td><td>Triangle</td></tr>
+    <tr><td><code>$C03C&ndash;$C03F</code></td><td>Noise</td></tr>
+    <tr><td><code>$C040</code></td><td>Master control</td></tr>
+  </table>
+
+  <h2>Pulse channels</h2>
+  <p>Pulse&nbsp;1 and Pulse&nbsp;2 are identical, each four registers: control, an 11-bit timer
+  split across two bytes, and a phase-reset register that any write resets. The control byte
+  packs three fields:</p>
+  <table>
+    <tr><th>Bit</th><th>Control field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6&ndash;5</td><td>Duty, 0&ndash;3 &mdash; see table below</td></tr>
+    <tr><td>4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Volume, 0&ndash;15</td></tr>
+  </table>
+  <p>Four duty sequences are available:</p>
+  <table>
+    <tr><th>Duty</th><th>Width</th><th>Sequence</th></tr>
+    <tr><td>0</td><td>12.5%</td><td><code>0 1 0 0 0 0 0 0</code></td></tr>
+    <tr><td>1</td><td>25%</td><td><code>0 1 1 0 0 0 0 0</code></td></tr>
+    <tr><td>2</td><td>50%</td><td><code>0 1 1 1 1 0 0 0</code></td></tr>
+    <tr><td>3</td><td>75%</td><td><code>1 0 0 1 1 1 1 1</code></td></tr>
+  </table>
+  <pre class="code">pulse Hz = 3,144,000 / (16 &times; (timer + 1))</pre>
+
+  <h2>Triangle</h2>
+  <p>One 32-step, 4-bit sequence at a fixed amplitude, scaled only by master volume &mdash;
+  matching its main historical inspiration exactly:</p>
+  <pre class="code">triangle Hz = 3,144,000 / (32 &times; (timer + 1))</pre>
+
+  <h2>Noise</h2>
+  <p>A 15-bit right-shifting LFSR, controlled by one <code>NOISE_CONTROL</code>
+  (<code>$C03C</code>) byte:</p>
+  <table>
+    <tr><th>Bit</th><th>Control field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6</td><td>Short mode (0 = long mode)</td></tr>
+    <tr><td>5&ndash;4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Volume, 0&ndash;15</td></tr>
+  </table>
+  <p>Long mode feeds <code>bit0 XOR bit1</code> back into bit 14 and repeats after 32,767 shifts
+  &mdash; ordinary percussion. Short mode feeds <code>bit0 XOR bit6</code> instead and repeats
+  after only 93 shifts from reset, giving a recognizably metallic, pitched noise. A set
+  bit&nbsp;0 of the LFSR outputs zero; a clear bit&nbsp;0 outputs the channel's 4-bit volume.
+  Sixteen fixed periods (index in <code>NOISE_PERIOD</code> bits 0&ndash;3) span roughly
+  440&nbsp;Hz to 449&nbsp;kHz shift rates, scaled from the NTSC NES table to Fanticon's clock.</p>
+
+  <h2>Enable, phase, and the divider</h2>
+  <p>A channel's enable bit only gates whether it reaches the mixer &mdash; the oscillator and
+  divider keep running underneath even while muted, so re-enabling resumes wherever the
+  hardware silently got to. Writing a timer half changes the reload value but does not reload
+  the running divider; only a phase-reset write snaps the waveform back to step zero and
+  reloads the divider from the current timer. Use phase reset whenever a note needs a
+  synchronized attack.</p>
+
+  <h2>Mixing</h2>
+  <p>One <code>AUDIO_MASTER</code> (<code>$C040</code>) byte gates and scales all four voices
+  together:</p>
+  <table>
+    <tr><th>Bit</th><th>Control field</th></tr>
+    <tr><td>7</td><td>Master enable</td></tr>
+    <tr><td>6&ndash;4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Master volume, 0&ndash;15</td></tr>
+  </table>
+  <p>The two pulse DACs share one nonlinear path; triangle and noise share a second. For
+  current 4-bit levels <code>p1</code>, <code>p2</code>, <code>t</code>, <code>n</code>:</p>
+  <pre class="code">pulse = 95.88 / (8128 / (p1 + p2) + 100)
+tnd   = 159.79 / (1 / (t/8227 + n/12241) + 100)
+mix   = (pulse + tnd) &times; master_volume / 15</pre>
+  <p>Fanticon evaluates the integer-rational equivalent of these equations, so results are
+  bit-identical everywhere the machine runs &mdash; the same NES-like nonlinear balance on
+  every system. The host then applies a light, presentation-only stereo width and a short,
+  subdued reverb; neither can feed back into APU state, consume CPU cycles, or change VM
+  timing.</p>
+
+  <div class="box warn">
+    <div class="box-title">RESET Silences Everything</div>
+    Power-on, CPU RESET, and cartridge removal all perform the same APU reset: every register
+    zero, every channel and master enable clear, pulse/triangle phase at step zero, every
+    divider zero, and the noise LFSR reseeded to 1. An ordinary pause instead freezes emulated
+    time and all APU state exactly as it stood &mdash; it does not reset anything.
+  </div>
+
+  <p>Chapter&nbsp;14 turns these registers into sound.</p>
+</div>
+
+<div class="chapter" id="ch14">
+  <div class="chapter-kicker">CHAPTER 14 &middot; PART IV</div>
+  <h1 class="chapter-title">Programming Sound Directly</h1>
+
+  <p class="lede">Every voice follows the same four-step pattern: pick a timer for the pitch
+  you want, set volume and duty/mode, reset phase for a clean attack, and enable the channel
+  &mdash; plus one master switch that gates everything.</p>
+
+  <pre class="code"><span class="lbl">P1_CTRL</span>  <span class="dir">EQU</span>   <span class="num">$C030</span>
+<span class="lbl">P1_TLO</span>   <span class="dir">EQU</span>   <span class="num">$C031</span>
+<span class="lbl">P1_THI</span>   <span class="dir">EQU</span>   <span class="num">$C032</span>
+<span class="lbl">P1_RST</span>   <span class="dir">EQU</span>   <span class="num">$C033</span>
+<span class="lbl">MASTER</span>   <span class="dir">EQU</span>   <span class="num">$C040</span>
+
+<span class="cmt">; Concert A (~440 Hz): timer = 3,144,000/(16*440) - 1 = 446 = $1BE</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$BE</span>       <span class="cmt">; timer low</span>
+         <span class="op">STA</span>   P1_TLO
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$01</span>       <span class="cmt">; timer high (11-bit total)</span>
+         <span class="op">STA</span>   P1_THI
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10101111</span> <span class="cmt">; enable, duty 2 (50%), volume 15</span>
+         <span class="op">STA</span>   P1_CTRL
+         <span class="op">STA</span>   P1_RST      <span class="cmt">; any write resets phase for a clean attack</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10001111</span> <span class="cmt">; master enable, volume 15</span>
+         <span class="op">STA</span>   MASTER</pre>
+
+  <div class="box warn">
+    <div class="box-title">Ultrasonic Timers Are Allowed, Not Silenced</div>
+    Timer values <code>$000&ndash;$007</code> are legal and produce ultrasonic fundamentals
+    rather than being clamped or muted &mdash; they simply are not useful pitches for music.
+    Double-check a computed timer value before trusting a very high note.
+  </div>
+
+  <h2>Driving sound from a timer, not the main loop</h2>
+  <p>Audio registers hold whatever they were last written and can be read back, but nothing
+  advances them automatically &mdash; a game normally updates volume and timer values from a
+  VBlank interrupt or a Fanticon interval timer (Chapter&nbsp;18), the same way it drives
+  animation. <code>/demos/audio</code> plays both pulses, the triangle, and noise together,
+  using a VBlank IRQ to change the lead note and the backdrop color in lockstep, four times per
+  cycle &mdash; a compact demonstration of interrupt-driven sound without a full tracker.</p>
+
+  <h2>Reference basis</h2>
+  <p>The voice layout follows the Ricoh 2A03 tradition found in the NESdev community's APU
+  documentation. Fanticon freezes its own exact waveform, divider, LFSR, and mixer choices as
+  its own behavior &mdash; not a claim of being electrically identical to any specific NES
+  revision.</p>
+
+  <p>Hand-writing register pokes works well for sound effects and simple leads. For a complete
+  composition, Chapter&nbsp;15's tracker generates this same register stream for you.</p>
+</div>
+
+<div class="chapter" id="ch15">
+  <div class="chapter-kicker">CHAPTER 15 &middot; PART IV</div>
+  <h1 class="chapter-title">The Music Tracker</h1>
+
+  <p class="lede">Choose <strong>File &gt; New Music</strong> or open an existing
+  <code>.MUS</code> file to enter Fanticon's four-channel tracker &mdash; one column per voice,
+  compiled straight into assembler source your cartridge includes directly.</p>
+
+  <h2>Three views, one song</h2>
+  <p>Press <span class="kbd">V</span> to rotate through them, or click their tabs:</p>
+  <ul>
+    <li><strong>Pattern</strong> &mdash; notes, instrument, and volume per row. The active row
+    stays highlighted and centered during playback.</li>
+    <li><strong>Frames</strong> &mdash; the song order. Each frame independently selects a
+    pattern for pulse&nbsp;1, pulse&nbsp;2, triangle, and noise, FamiTracker-style, so one
+    channel can repeat a pattern while another advances.</li>
+    <li><strong>Instrument</strong> &mdash; volume, arpeggio, pitch, and tone/duty envelopes.</li>
+  </ul>
+  <p>Notes enter on a piano-style layout, <span class="kbd">A W S E D F T G Y H U J</span>
+  across a chromatic octave, with <span class="kbd">Z</span>/<span class="kbd">X</span>
+  shifting the entry octave. <code>OFF</code> disables a channel for that row; <code>---</code>
+  holds the previous value. Noise notes <code>N00</code>&ndash;<code>N0F</code> pick its
+  sixteen periods directly. <span class="kbd">[</span>/<span class="kbd">]</span> move between
+  frames without leaving Pattern view.</p>
+
+  <h2>Instruments are four independent sequences</h2>
+  <p>Each sequence advances once per <em>video frame</em>, including the frames between
+  tracker rows &mdash; this is where a Fanticon instrument gets its character:</p>
+  <table>
+    <tr><th>Sequence</th><th>Values</th></tr>
+    <tr><td>Volume</td><td><code>0&ndash;15</code>, scales the row's volume</td></tr>
+    <tr><td>Arpeggio</td><td>Signed semitone offsets from the note</td></tr>
+    <tr><td>Pitch</td><td>Signed timer offsets, for slides and vibrato</td></tr>
+    <tr><td>Tone/Duty</td><td>Pulse duty 0&ndash;3; on noise, 0 selects long mode and nonzero selects short/metallic; triangle ignores it</td></tr>
+  </table>
+
+  <h2>Playing it back in a cartridge</h2>
+  <p><code>/demos/music</code> includes <code>PLAYER.INC</code>, a small reference player. Pass
+  the compiled song header in <code>X</code>/<code>Y</code> once, then tick it every VBlank:</p>
+  <pre class="code">         <span class="op">LDX</span>   <span class="dir">#</span>&lt;SONG_MUSIC
+         <span class="op">LDY</span>   <span class="dir">#</span>&gt;SONG_MUSIC
+         <span class="op">JSR</span>   MUSIC_START
+<span class="cmt">; ...inside your VBlank handler, once per frame...</span>
+         <span class="op">JSR</span>   MUSIC_TICK</pre>
+  <p>Each tick decodes one delta frame straight into <code>$C030&ndash;$C03E</code>. That
+  decode is deliberately small and predictable &mdash; all the expensive pattern and envelope
+  work already happened at build time, not at runtime. <code>MUSIC_STOP</code> disables every
+  voice. The driver reserves zero-page <code>$30&ndash;$41</code>; relocate its <code>EQU</code>
+  definitions if that range collides with your own variables.</p>
+
+  <div class="box tip">
+    <div class="box-title">Included Demo Song</div>
+    <code>/demos/music/SONG.MUS</code> is a complete chiptune arrangement of Beethoven's
+    "Ode to Joy" (Mutopia Music&nbsp;ID&nbsp;528, public domain), with a Fanticon-original noise
+    percussion part. Space starts and stops playback in the tracker. Opening it also
+    demonstrates automatic migration: it is stored in the legacy flat-row v1 format, and saving
+    it upgrades the file to v2 patterns, frames, and instruments in place.
+  </div>
+
+  <h2>Importing existing NES music</h2>
+  <p>Editor mode can run an isolated NSF driver and transcribe its output directly into an
+  editable <code>.MUS</code> resource:</p>
+  <pre class="code">NSF2MUS INPUT.NSF OUTPUT.MUS [TRACK]</pre>
+  <p>The importer samples all four supported channels at 60&nbsp;Hz, converts NES timer values
+  to the nearest Fanticon note, and preserves volume, duty, noise mode, retriggers, and legato
+  pitch changes, stopping automatically once its loop detector recognizes a repeating intro.
+  An NSF is executable code rather than a score, so this is necessarily a transcription: fine
+  pitch quantizes to Fanticon notes, PAL timing retunes to Fanticon's clock, and DPCM samples
+  have no matching channel and are dropped with a warning rather than silently ignored.</p>
+
+  <p>With graphics and sound both in hand, Part V covers the remaining systems every game
+  needs: controllers, interrupts, and precise timing.</p>
+</div>

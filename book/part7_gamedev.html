@@ -1,0 +1,353 @@
+<div class="divider-page hue-coral" id="part7">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 07</div>
+  <div class="divider-number">07</div>
+  <div class="divider-title">Game Dev<br>Patterns</div>
+  <div class="divider-sub">Turning the raw hardware from Parts II&ndash;VI into menus, side-scrollers, top-down worlds, raster tricks, and palette-swap magic.</div>
+  <div class="divider-contents">CH 23 LOOPS, STATES &amp; MENUS &middot; CH 24 SIDE-SCROLLERS &middot; CH 25 TOP-DOWN &amp; RPG &middot; CH 26 RASTER EFFECTS &middot; CH 27 PALETTE SWAPPING</div>
+</div>
+
+<div class="chapter" id="ch23">
+  <div class="chapter-kicker">CHAPTER 23 &middot; PART VII</div>
+  <h1 class="chapter-title">Game Loops, States &amp; Building a Main Menu</h1>
+
+  <p class="lede">Almost every Fanticon game, regardless of genre, is structured the same way
+  underneath: a VBlank-driven heartbeat, and a state machine deciding what that heartbeat does
+  this frame. A main menu is simply the first state.</p>
+
+  <h2>The heartbeat</h2>
+  <p>Chapter&nbsp;17 built a VBlank handler that reads input, updates the game, and ticks music.
+  Keep that structure for the life of the project; what changes screen to screen is only what
+  <code>UPDATEGAME</code> does. The cleanest way to express "what it does depends on where the
+  player currently is" is a small state variable and a jump table:</p>
+  <pre class="code"><span class="lbl">GAMESTATE</span> <span class="dir">EQU</span>  <span class="num">$40</span>    <span class="cmt">; 0=menu, 1=play, 2=pause</span>
+<span class="lbl">STATEPTR</span>  <span class="dir">EQU</span>  <span class="num">$41</span>    <span class="cmt">; 2-byte zero-page pointer</span>
+
+<span class="lbl">UPDATEGAME</span>
+         <span class="op">LDX</span>   GAMESTATE
+         <span class="op">LDA</span>   STATE_LO,X
+         <span class="op">STA</span>   STATEPTR
+         <span class="op">LDA</span>   STATE_HI,X
+         <span class="op">STA</span>   STATEPTR+1
+         <span class="op">JMP</span>   (STATEPTR)  <span class="cmt">; the 6502's one indirect jump form</span>
+
+<span class="lbl">STATE_LO</span>  <span class="dir">DFB</span>   <span class="dir">&lt;</span>MENU_UPDATE,<span class="dir">&lt;</span>PLAY_UPDATE,<span class="dir">&lt;</span>PAUSE_UPDATE
+<span class="lbl">STATE_HI</span>  <span class="dir">DFB</span>   <span class="dir">&gt;</span>MENU_UPDATE,<span class="dir">&gt;</span>PLAY_UPDATE,<span class="dir">&gt;</span>PAUSE_UPDATE</pre>
+  <p>This is the standard 6502 jump-table idiom: since <code>JMP</code> only has one indirect
+  form (a plain pointer, not an indexed one), you compute the target address into a zero-page
+  pointer yourself using the low/high byte operators <code>&lt;</code> and <code>&gt;</code>
+  from Chapter&nbsp;4, then jump through it. Adding a new state is one entry in two tables, not
+  a growing chain of <code>CMP</code>/<code>BEQ</code> checks.</p>
+
+  <h2>Building the menu screen itself</h2>
+  <p>A main menu is ordinary tile-mode content: a static background built once in the graphics
+  editor (Chapter&nbsp;8), with menu text authored directly as tiles rather than drawn at
+  runtime. Selection typically works one of two ways:</p>
+  <ul>
+    <li><strong>Attribute swap</strong> &mdash; give the currently selected menu row's tiles a
+    different palette bank in the attribute map (Chapter&nbsp;9), so "highlighting" an option is
+    one small VRAM write, not a redraw.</li>
+    <li><strong>Cursor sprite</strong> &mdash; park one 8&times;8 sprite next to the selected
+    row and move its <code>Y</code> field to point at a new row on Up/Down.</li>
+  </ul>
+  <pre class="code"><span class="lbl">MENUSEL</span>  <span class="dir">EQU</span>  <span class="num">$42</span>    <span class="cmt">; 0-2: which menu row is selected</span>
+
+<span class="lbl">MENU_UPDATE</span>
+         <span class="op">LDA</span>   PAD0P
+         <span class="op">AND</span>   <span class="dir">#</span>BTN_DOWN
+         <span class="op">BEQ</span>   CHECKUP
+         <span class="op">INC</span>   MENUSEL
+         <span class="op">LDA</span>   MENUSEL
+         <span class="op">CMP</span>   <span class="dir">#</span><span class="num">3</span>
+         <span class="op">BNE</span>   MOVED
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   MENUSEL     <span class="cmt">; wrap back to the top entry</span>
+<span class="lbl">MOVED</span>    <span class="op">JSR</span>   MOVECURSOR
+<span class="lbl">CHECKUP</span>
+         <span class="cmt">; ...BTN_UP handled the same way, decrementing...</span>
+         <span class="op">LDA</span>   PAD0P
+         <span class="op">AND</span>   <span class="dir">#</span>BTN_A
+         <span class="op">BEQ</span>   MENUDONE
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">1</span>
+         <span class="op">STA</span>   GAMESTATE   <span class="cmt">; confirm -- switch to the PLAY state</span>
+<span class="lbl">MENUDONE</span>
+         <span class="op">RTS</span></pre>
+
+  <h2>Transitioning between screens</h2>
+  <p>Because a state change is just writing <code>GAMESTATE</code>, the interesting work is
+  usually what happens once, on the frame a transition starts: swapping in the gameplay
+  <code>.GFX</code> set (Chapter&nbsp;9), selecting the right cartridge bank if the new screen's
+  code lives elsewhere (Chapter&nbsp;19), and resetting per-screen RAM. Do that setup work in a
+  dedicated <code>ENTER_PLAY</code> routine called exactly once on the transition, not inside
+  <code>PLAY_UPDATE</code> itself &mdash; otherwise it silently re-runs every frame you are in
+  that state.</p>
+
+  <div class="box tip">
+    <div class="box-title">Pause Is Just Another State</div>
+    Because the state machine already exists, pause is nearly free: a <code>PAUSE_UPDATE</code>
+    handler that ignores gameplay input, watches only for the pause button to return to state 1,
+    and optionally stops calling <code>MUSIC_TICK</code> (Chapter&nbsp;15) so the soundtrack
+    freezes with everything else.
+  </div>
+
+  <p>With state management in place, the next three chapters are about what <em>lives</em>
+  inside the "play" state for three different kinds of games.</p>
+</div>
+
+<div class="chapter" id="ch24">
+  <div class="chapter-kicker">CHAPTER 24 &middot; PART VII</div>
+  <h1 class="chapter-title">Side-Scrolling Games</h1>
+
+  <p class="lede">A side-scroller is Chapter&nbsp;9's ring-buffer scrolling technique, plus a
+  player that moves smoothly through it and a world that pushes back.</p>
+
+  <h2>Sub-pixel movement</h2>
+  <p>Smooth in-between speeds come from storing position as a 16-bit fixed-point value, high
+  byte the pixel position and low byte a sub-pixel fraction, and adding a small velocity to the
+  whole 16-bit value every frame:</p>
+  <pre class="code"><span class="lbl">PLAYERX</span>  <span class="dir">EQU</span>  <span class="num">$50</span>    <span class="cmt">; sub-pixel fraction</span>
+<span class="lbl">PLAYERX_HI</span> <span class="dir">EQU</span> <span class="num">$51</span> <span class="cmt">; whole pixel position</span>
+<span class="lbl">VELX</span>    <span class="dir">EQU</span>  <span class="num">$52</span>    <span class="cmt">; e.g. $180 = 1.5 px/frame</span>
+
+         <span class="op">CLC</span>
+         <span class="op">LDA</span>   PLAYERX
+         <span class="op">ADC</span>   VELX
+         <span class="op">STA</span>   PLAYERX
+         <span class="op">LDA</span>   PLAYERX_HI
+         <span class="op">ADC</span>   VELX+1
+         <span class="op">STA</span>   PLAYERX_HI  <span class="cmt">; carry propagates into the pixel byte automatically</span></pre>
+  <p>Only <code>PLAYERX_HI</code> ever needs to reach the sprite record's <code>X_LOW</code>
+  byte (Chapter&nbsp;10); the fraction stays entirely in RAM. This is exactly how the wave
+  demo's smooth raster curve and countless 8-bit platformers get sub-integer motion out of
+  an integer CPU.</p>
+
+  <h2>Collision is a lookup table</h2>
+  <p>Tile collision is software work: reserve a range of tile numbers for solid terrain and
+  check the map, not the screen:</p>
+  <pre class="code"><span class="cmt">; Is the tile under world pixel (X,Y) solid? Tiles $00-$1F = passable, $20+ = solid.</span>
+<span class="lbl">ISSOLID</span>
+         <span class="cmt">; ...compute tile_x = X/8, tile_y = Y/8, read the map byte at $2000+tile_y*64+tile_x...</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$20</span>
+         <span class="op">CMP</span>   MAPBYTE
+         <span class="op">RTS</span>            <span class="cmt">; carry clear if MAPBYTE < $20 (passable)</span></pre>
+  <p>Checking a handful of sample points around the player's bounding box (feet, head, both
+  sides) against this table is enough for a solid platformer &mdash; the same approach scales
+  down to one point for a simple top-down game in Chapter&nbsp;25.</p>
+
+  <h2>Following the player with the camera</h2>
+  <p>Write <code>SCROLL_X</code> from a camera variable, not directly from the player's
+  position &mdash; a camera that is always centered exactly on the player feels jittery and
+  reveals level edges the moment the player stops near them. A small deadzone keeps the camera
+  still while the player moves within the middle of the screen, then catches up smoothly, and
+  clamping keeps it from scrolling past the level's edges:</p>
+  <pre class="code">         <span class="cmt">; if player is left of camera+deadzone, pull camera left; mirror on the right</span>
+         <span class="cmt">; then clamp: if camera < 0, camera = 0; if camera > level_max, camera = level_max</span></pre>
+
+  <h2>Streaming new columns without blowing the frame budget</h2>
+  <p>Chapter&nbsp;9 described the ring-buffer idea: as the camera crosses an 8-pixel tile
+  boundary, the column of map cells about to scroll into view needs fresh tile numbers written
+  before it arrives. Writing an entire 32-cell column in one VBlank is usually fine, but if a
+  level streams from compressed or procedurally generated data, cap how much work happens per
+  frame (a handful of cells) and spread the rest across the next few frames &mdash; the hidden
+  margin outside the 320&times;200 viewport (Chapter&nbsp;9) is exactly the slack that makes
+  this possible.</p>
+
+  <div class="box warn">
+    <div class="box-title">Faking Parallax on One Layer</div>
+    Convincing depth on single-layer 8-bit hardware usually comes from restraint: a static or
+    slow backdrop color change instead of a moving backdrop, or a few large sprites drifting at
+    a different speed than the world for a lightweight parallax illusion, budgeted against the
+    eight-sprites-per-line limit from Chapter&nbsp;10.
+  </div>
+</div>
+
+<div class="chapter" id="ch25">
+  <div class="chapter-kicker">CHAPTER 25 &middot; PART VII</div>
+  <h1 class="chapter-title">Top-Down &amp; RPG-Style Games</h1>
+
+  <p class="lede">Top-down games trade continuous scrolling for grid discipline: characters
+  move cell by cell, and worlds bigger than one screen are built as connected rooms rather than
+  one continuously scrolling map.</p>
+
+  <h2>Grid-locked movement</h2>
+  <p>Rather than free sub-pixel motion, classic top-down movement snaps to an 8 or 16-pixel
+  grid matching the tile size, animating <em>between</em> cells over a fixed number of frames:</p>
+  <pre class="code"><span class="lbl">MOVETIMER</span> <span class="dir">EQU</span> <span class="num">$53</span>   <span class="cmt">; counts down while sliding between cells</span>
+<span class="lbl">MOVEDX</span>   <span class="dir">EQU</span>  <span class="num">$54</span>    <span class="cmt">; +1, 0, or -1 this move</span>
+
+<span class="lbl">TRYMOVE</span>
+         <span class="op">LDA</span>   MOVETIMER
+         <span class="op">BNE</span>   BUSY        <span class="cmt">; already sliding -- ignore new input</span>
+         <span class="cmt">; ...check the destination cell with the same ISSOLID-style lookup as Chapter 24...</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>
+         <span class="op">STA</span>   MOVETIMER   <span class="cmt">; 8 frames to cross one 8px cell = 1px/frame</span>
+<span class="lbl">BUSY</span>    <span class="op">RTS</span></pre>
+  <p>Each frame that <code>MOVETIMER</code> is nonzero, add <code>MOVEDX</code>/<code>MOVEDY</code>
+  to the player's pixel position and decrement the timer; input is only sampled again once it
+  reaches zero. This single rule &mdash; a move either fully completes or has not started
+  &mdash; is what makes grid movement feel precise instead of mushy, and it makes tile collision
+  trivial: you only ever need to validate the single destination cell before committing to a
+  move, never a mid-slide position.</p>
+
+  <h2>Worlds bigger than one map</h2>
+  <p>The hardware tilemap is a fixed 64&times;32 cells &mdash; plenty for one scrolling
+  side-scrolling level, but an RPG overworld is usually built from many discrete
+  <strong>rooms</strong>, each its own <code>.GFX</code> map, rather than one giant scrolling
+  space. When the player walks off the edge of the current room, load the next one using the
+  same VRAM-loading routine from Chapter&nbsp;9 &mdash; select the neighboring room's bank
+  (Chapter&nbsp;19), copy its patterns/map/attributes into VRAM, and place the player at the
+  matching entry point on the new map's opposite edge. Unlike side-scrolling, this is a
+  deliberate hard cut rather than continuous motion, so it reads well with a brief screen wipe
+  (Chapter&nbsp;26) covering the one or two frames the load takes.</p>
+
+  <h2>NPCs, facing, and interaction</h2>
+  <p>An NPC is a sprite plus a small record: grid position, facing direction, and a pointer to
+  whatever it does when interacted with. "Talk to the NPC in front of you" is then just: compute
+  the cell one step ahead of the player in their current facing direction, and check it against
+  the NPC table the same way <code>ISSOLID</code> checks it against terrain:</p>
+  <pre class="code"><span class="cmt">; FACEDX/FACEDY are -1/0/+1 based on the player's last-pressed direction</span>
+<span class="lbl">TRYINTERACT</span>
+         <span class="cmt">; targetcell = playercell + (FACEDX, FACEDY)</span>
+         <span class="cmt">; ...scan the NPC table for an entry at targetcell...</span>
+         <span class="cmt">; if found: JSR through that NPC's dialogue pointer</span></pre>
+
+  <h2>Text and dialogue boxes</h2>
+  <p>Because tile-map cells can hold any of the 256 resident patterns, author a text tileset
+  (one 8&times;8 pattern per glyph) in the graphics editor and reserve a palette bank for it
+  (Chapter&nbsp;8). "Printing" a message is then writing tile numbers directly into a fixed
+  region of the tile-number map &mdash; usually a few rows near the bottom of the screen &mdash;
+  one character (one <code>STA</code>) at a time, optionally paced a letter every few frames for
+  a classic scrolling-text effect. Because this is ordinary VRAM, the same dialogue box works
+  whether it appears over a top-down room or a side-scrolling level.</p>
+
+  <div class="box tip">
+    <div class="box-title">Buffer the Input, Not Just the Position</div>
+    A common RPG feel comes from accepting a directional press slightly before the current move
+    finishes and queuing it, rather than dropping it because <code>MOVETIMER</code> was still
+    nonzero. Latch the most recent direction pressed into a one-entry buffer in your VBlank
+    handler, and consult that buffer instead of a fresh read the instant <code>MOVETIMER</code>
+    reaches zero &mdash; it is a small change that makes continuous movement across several
+    cells feel responsive instead of stuttery.
+  </div>
+</div>
+
+<div class="chapter" id="ch26">
+  <div class="chapter-kicker">CHAPTER 26 &middot; PART VII</div>
+  <h1 class="chapter-title">Raster Effects in Practice</h1>
+
+  <p class="lede">Chapter&nbsp;12 covered the raster comparator itself. This chapter applies it
+  to three effects nearly every genre eventually wants: a status bar that will not scroll,
+  animated color cycling, and a screen wipe between scenes.</p>
+
+  <h2>A non-scrolling status bar via a scroll split</h2>
+  <p>Fanticon has one tile layer, so a HUD that stays put while the world above it scrolls needs
+  a trick, not a second layer. Reserve the bottom rows of your 64&times;32 map (say, rows
+  30&ndash;31) exclusively for HUD tiles, keep your world scroll's <em>vertical</em> range
+  clamped so those rows never scroll into view during normal play, and then use a raster IRQ at
+  the exact scanline where the HUD begins to rewrite <code>SCROLL_Y</code> so the remaining
+  visible lines display that fixed HUD region instead of continuing the world:</p>
+  <pre class="code"><span class="cmt">; Raster IRQ fires at line 184 -- the last 16 lines become the HUD</span>
+<span class="lbl">HUDSPLIT</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   SCROLLY_LO
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">240</span>     <span class="cmt">; points SCROLL_Y at map row 30 (240 / 8)</span>
+         <span class="op">STA</span>   SCROLLY_HI  <span class="cmt">; (illustrative split -- tune to your HUD's row count)</span>
+         <span class="cmt">; re-arm RASTER_Y for line 0 next frame, then restore the world SCROLL_Y there</span></pre>
+  <p>A second raster target back at line&nbsp;0 (or simply doing it at the top of your next
+  VBlank handler) restores the camera scroll before the world begins drawing again next
+  frame. This is the same family of technique NES games used for split-screen status bars
+  &mdash; here it is simpler, because Chapter&nbsp;7's dual-ported VRAM means the write always
+  lands exactly on the raster timestamp you programmed, with no bus contention to fight.</p>
+
+  <h2>Palette cycling</h2>
+  <p>Animating water, lava, or energy fields without touching a single tile is a palette trick:
+  rotate a small run of entries in one bank every few frames.</p>
+  <pre class="code"><span class="lbl">CYCLE</span>    <span class="op">LDA</span>   COLOR3      <span class="cmt">; save the entry about to be overwritten</span>
+         <span class="op">PHA</span>
+         <span class="op">LDA</span>   COLOR2
+         <span class="op">STA</span>   COLOR3
+         <span class="op">LDA</span>   COLOR1
+         <span class="op">STA</span>   COLOR2
+         <span class="op">PLA</span>
+         <span class="op">STA</span>   COLOR1      <span class="cmt">; write all three back through PALETTE_INDEX/DATA</span></pre>
+  <p>Because every tile using that palette bank updates the instant the palette entry changes
+  (Chapter&nbsp;7), a whole river or lava field animates from one small per-frame write,
+  regardless of how many tiles are on screen.</p>
+
+  <h2>Screen wipes between scenes</h2>
+  <p>The cheapest transition is a straight cut. The next cheapest, and usually worth it, fades
+  through <code>BACKDROP_COLOR</code> with the background layer momentarily disabled
+  (<code>VIDEO_CONTROL</code> bit&nbsp;0 clear, Chapter&nbsp;7) &mdash; step the backdrop
+  through a short table of darkening RGB332 values over a handful of frames, do your room load
+  (Chapter&nbsp;25) while the screen reads as solid black, then step back up and re-enable the
+  background. For a full-color wipe instead of fading to black, step every entry of the active
+  palette bank(s) toward its target using the same per-frame table idea from palette cycling
+  above.</p>
+
+  <p>All three of these effects are variations on one idea: Fanticon guarantees a write lands
+  exactly where you time it, so "when" is as much a creative tool here as "what."</p>
+</div>
+
+<div class="chapter" id="ch27">
+  <div class="chapter-kicker">CHAPTER 27 &middot; PART VII</div>
+  <h1 class="chapter-title">Palette Swapping &amp; Color Tricks</h1>
+
+  <p class="lede">Sixteen palette banks sharing one pattern library (Chapter&nbsp;7) is one of
+  the cheapest tools in the whole machine: the same artwork, a completely different look, for
+  the cost of a register write.</p>
+
+  <h2>Recoloring for free</h2>
+  <p>An enemy palette swap is not a second set of sprite patterns &mdash; it is the same tile
+  numbers with a different palette bank in the sprite's <code>ATTR</code> byte (Chapter&nbsp;10)
+  or the tile attribute map (Chapter&nbsp;9). A "red slime" and a "blue slime" can be one
+  pattern, two palette banks, and zero extra VRAM for pixels:</p>
+  <pre class="code">         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10000001</span> <span class="cmt">; enabled, 8x8, palette bank 1 (red variant)</span>
+         <span class="op">STA</span>   REC0+4
+         <span class="cmt">; ...later, for the blue variant, only the low nibble changes...</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10000011</span> <span class="cmt">; same sprite, palette bank 3 (blue variant)</span>
+         <span class="op">STA</span>   REC1+4</pre>
+
+  <h2>Damage flash and invincibility blink</h2>
+  <p>A hit-flash is a palette bank swap held for a handful of frames &mdash; write the sprite's
+  palette bits to a bank containing an all-white or all-red version of the same ramp for a few
+  frames, then restore the normal bank. Invincibility blinking is the same idea driven by a
+  timer in your VBlank handler, alternately toggling the sprite's <code>ENABLE</code> bit (or
+  swapping between the normal bank and a dimmed one) every few frames until the timer expires
+  &mdash; both are RAM-side bookkeeping around registers already covered in Chapter&nbsp;10, not
+  new hardware capability.</p>
+
+  <h2>Re-tinting a whole scene</h2>
+  <p>Because <code>PALETTE_INDEX</code>/<code>PALETTE_DATA</code> can rewrite any of the 256
+  entries at any time (Chapter&nbsp;7), a day-to-night transition, a "poisoned" status tint, or
+  an alternate title-screen look for a bitmap (via <code>BITMAP_PALETTE</code>,
+  Chapter&nbsp;11) can all be authored as a handful of extra palette banks in the graphics
+  editor and swapped in with the same loop from Chapter&nbsp;8's palette-upload example:</p>
+  <pre class="code"><span class="lbl">PALINDEX</span> <span class="dir">EQU</span>   <span class="num">$C01B</span>
+<span class="lbl">PALDATA</span>  <span class="dir">EQU</span>   <span class="num">$C01C</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$30</span>       <span class="cmt">; bank 3, entry 0 -- the "level" bank from Ch. 8's table</span>
+         <span class="op">STA</span>   PALINDEX
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">0</span>
+<span class="lbl">RETINT</span>   <span class="op">LDA</span>   NIGHT_PAL,X
+         <span class="op">STA</span>   PALDATA     <span class="cmt">; index auto-increments -- 16 writes recolor the whole bank</span>
+         <span class="op">INX</span>
+         <span class="op">CPX</span>   <span class="dir">#</span><span class="num">16</span>
+         <span class="op">BNE</span>   RETINT</pre>
+  <p>Sixteen writes re-skins every tile and sprite already using that bank, instantly, with no
+  changes to map data, pattern data, or code anywhere else &mdash; a large visual change for one
+  of the smallest possible pieces of work on the machine.</p>
+
+  <div class="box tip">
+    <div class="box-title">Reserve a Bank on Purpose</div>
+    Chapter&nbsp;8's suggested bank layout (<code>UI</code>, <code>player</code>,
+    <code>enemies</code>, <code>level</code>, <code>title</code>) is worth extending
+    deliberately: if you know a scene will need a flash, a tint, or a variant color scheme,
+    reserve its palette bank up front rather than discovering late that every other bank is
+    already spoken for. There are only sixteen.
+  </div>
+
+  <p>That closes the loop from raw hardware to genre-shaped technique. Whatever kind of game you
+  are building, it is assembled from exactly the pieces in Parts&nbsp;II&ndash;VII &mdash; the
+  appendices that follow are where you go to check the exact register, cycle count, or byte
+  layout behind any of them.</p>
+</div>

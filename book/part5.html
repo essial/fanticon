@@ -1,0 +1,208 @@
+<div class="divider-page hue-green" id="part5">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 05</div>
+  <div class="divider-number">05</div>
+  <div class="divider-title">Input,<br>Interrupts &amp;<br>Timing</div>
+  <div class="divider-sub">Reading controllers, structuring interrupt handlers, and driving precise sub-frame schedules with the two hardware timers.</div>
+  <div class="divider-contents">CH 16 CONTROLLERS &middot; CH 17 INTERRUPTS &middot; CH 18 TIMERS</div>
+</div>
+
+<div class="chapter" id="ch16">
+  <div class="chapter-kicker">CHAPTER 16 &middot; PART V</div>
+  <h1 class="chapter-title">Controllers</h1>
+
+  <p class="lede">Two standard eight-button controllers are readable in parallel through
+  simple memory-mapped registers, keeping input code small and predictable.</p>
+
+  <table>
+    <tr><th>Address</th><th>Name</th><th>Description</th></tr>
+    <tr><td><code>$C050</code></td><td><code>PAD0_STATE</code></td><td>Currently held controller-1 buttons</td></tr>
+    <tr><td><code>$C051</code></td><td><code>PAD0_PRESSED</code></td><td>Newly pressed buttons; read clears the returned bits</td></tr>
+    <tr><td><code>$C052</code></td><td><code>PAD1_STATE</code></td><td>Currently held controller-2 buttons</td></tr>
+    <tr><td><code>$C053</code></td><td><code>PAD1_PRESSED</code></td><td>Newly pressed buttons; read clears the returned bits</td></tr>
+  </table>
+  <pre class="code">7       6       5       4       3       2       1       0
+START   SELECT  B       A       RIGHT   LEFT    DOWN    UP</pre>
+  <p>A set bit means pressed. Inputs are sampled once per frame, at line&nbsp;0, dot&nbsp;0.
+  <code>PAD_PRESSED</code> accumulates newly pressed edges until you read it, then clears every
+  bit it returned &mdash; a same-cycle new edge is latched <em>after</em> the read completes, so
+  it is never lost even if you happen to read at exactly the wrong instant. Opposite directions
+  may be held simultaneously; Fanticon does not resolve that for you, so decide your own policy
+  (last-pressed-wins is common). A disconnected controller simply reads all-released.</p>
+
+  <pre class="code"><span class="lbl">PAD0</span>     <span class="dir">EQU</span>   <span class="num">$C050</span>
+<span class="lbl">PAD0P</span>    <span class="dir">EQU</span>   <span class="num">$C051</span>
+<span class="lbl">BTN_A</span>    <span class="dir">EQU</span>   <span class="num">%00010000</span>
+<span class="lbl">BTN_RIGHT</span> <span class="dir">EQU</span>  <span class="num">%00001000</span>
+
+<span class="cmt">; held-state check -- movement, usually read every frame</span>
+         <span class="op">LDA</span>   PAD0
+         <span class="op">AND</span>   <span class="dir">#</span>BTN_RIGHT
+         <span class="op">BEQ</span>   NOTRIGHT
+         <span class="op">INC</span>   PLAYERX
+<span class="lbl">NOTRIGHT</span>
+
+<span class="cmt">; press-edge check -- jump, menu confirm, anything that should fire once</span>
+         <span class="op">LDA</span>   PAD0P
+         <span class="op">AND</span>   <span class="dir">#</span>BTN_A
+         <span class="op">BEQ</span>   NOJUMP
+         <span class="op">JSR</span>   STARTJUMP
+<span class="lbl">NOJUMP</span></pre>
+
+  <h2>Defaults and hot-plug</h2>
+  <p>Controller&nbsp;1 defaults to arrow keys, <span class="kbd">Z</span> for A,
+  <span class="kbd">X</span> for B, <span class="kbd">Space</span> for Select, and
+  <span class="kbd">Enter</span> for Start, and combines its keyboard and gamepad state into one
+  reading. Controller&nbsp;2 has no default keyboard mapping and relies on a second gamepad. The
+  first two connected gamepads keep stable controller slots across hot-plug events, and losing
+  focus, a hot-unplug, or a debugger stop all release host input latches cleanly rather than
+  leaving a button artificially stuck down.</p>
+
+  <div class="box tip">
+    <div class="box-title">Read Once, Use Twice</div>
+    Reading <code>PAD_PRESSED</code> clears its bits, so if two different systems in your game
+    both need to know about the same button press this frame, read it once into a RAM variable
+    at the top of your input handling and let both systems consult the copy.
+  </div>
+
+  <p>Both registers are typically read from inside a VBlank handler, which Chapter&nbsp;17
+  covers in detail next.</p>
+</div>
+
+<div class="chapter" id="ch17">
+  <div class="chapter-kicker">CHAPTER 17 &middot; PART V</div>
+  <h1 class="chapter-title">Interrupts &amp; the IRQ Controller</h1>
+
+  <p class="lede">Four interrupt sources share one IRQ controller: VBlank, the raster
+  comparator, and the two interval timers. All of them OR onto the 6502's single, level-sensitive
+  IRQ pin, so your handler decides what matters first by checking bits in whatever order suits
+  your game.</p>
+
+  <table>
+    <tr><th>Bit</th><th>Mask</th><th>Source</th></tr>
+    <tr><td>0</td><td><code>$01</code></td><td>Vertical blank begins</td></tr>
+    <tr><td>1</td><td><code>$02</code></td><td>Raster X/Y comparison matches</td></tr>
+    <tr><td>2</td><td><code>$04</code></td><td>Timer 0 reaches zero</td></tr>
+    <tr><td>3</td><td><code>$08</code></td><td>Timer 1 reaches zero</td></tr>
+  </table>
+  <p><code>IRQ_ENABLE</code> (<code>$C003</code>) chooses which sources can assert the CPU's
+  IRQ line at all; <code>IRQ_PENDING</code> (<code>$C002</code>) is read/write-one-to-clear
+  &mdash; writing a 1 to a pending bit acknowledges that source, writing 0 leaves it alone, and
+  disabling a source does not erase its already-pending state. Nothing is acknowledged
+  automatically on interrupt entry; your handler always acknowledges explicitly, so it can tell
+  apart which of possibly several simultaneously pending sources it needs to service.</p>
+
+  <h2>A complete VBlank handler</h2>
+  <p>The vast majority of Fanticon games structure almost everything &mdash; input, animation,
+  sound, VRAM updates &mdash; inside one VBlank handler, because VBlank is the one moment
+  guaranteed not to race the visible raster:</p>
+  <pre class="code"><span class="lbl">IRQPEND</span>  <span class="dir">EQU</span>   <span class="num">$C002</span>
+<span class="lbl">IRQEN</span>    <span class="dir">EQU</span>   <span class="num">$C003</span>
+
+         <span class="dir">ORG</span>   <span class="num">$FFFA</span>
+         <span class="dir">DA</span>    RESET,RESET,IRQHANDLER
+
+<span class="lbl">IRQHANDLER</span>
+         <span class="op">PHA</span>
+         <span class="op">TXA</span>
+         <span class="op">PHA</span>
+         <span class="op">TYA</span>
+         <span class="op">PHA</span>
+
+         <span class="op">LDA</span>   IRQPEND
+         <span class="op">AND</span>   <span class="dir">#%</span><span class="num">00000001</span>   <span class="cmt">; is this a VBlank event?</span>
+         <span class="op">BEQ</span>   NOTVBLANK
+
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000001</span>
+         <span class="op">STA</span>   IRQPEND     <span class="cmt">; acknowledge VBlank -- write-one-to-clear</span>
+         <span class="op">JSR</span>   READPADS
+         <span class="op">JSR</span>   UPDATEGAME
+         <span class="op">JSR</span>   MUSIC_TICK
+
+<span class="lbl">NOTVBLANK</span>
+         <span class="op">PLA</span>
+         <span class="op">TAY</span>
+         <span class="op">PLA</span>
+         <span class="op">TAX</span>
+         <span class="op">PLA</span>
+         <span class="op">RTI</span></pre>
+  <p>Preserving <code>A</code>, <code>X</code>, and <code>Y</code> on entry and restoring them
+  before <code>RTI</code> is not optional discipline &mdash; interrupts can land in the middle
+  of any instruction sequence in your main loop, and <code>RTI</code> restores the interrupted
+  status flags on its own, so the temporary flag changes from your own <code>PLA</code>/transfer
+  sequence never escape the handler.</p>
+
+  <div class="box hw">
+    <div class="box-title">NMI Is Reserved</div>
+    NMI (<code>$FFFA</code>) is falling-edge-sensitive and, on the 6502, cannot be masked
+    the way IRQ can. No standard v0.1 device drives it &mdash; it is explicitly reserved for a
+    future cartridge or debugging facility. Point the NMI vector at a safe handler (often the
+    same one as RESET, or a simple <code>RTI</code>) and otherwise ignore it for now.
+  </div>
+
+  <p>Combine sources by testing multiple bits, in priority order you choose:</p>
+  <pre class="code">         <span class="op">LDA</span>   IRQPEND
+         <span class="op">AND</span>   <span class="dir">#%</span><span class="num">00000100</span>   <span class="cmt">; Timer 0?</span>
+         <span class="op">BEQ</span>   SKIPTIMER0
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000100</span>
+         <span class="op">STA</span>   IRQPEND     <span class="cmt">; ack only this source</span>
+         <span class="op">JSR</span>   ONTIMER0
+<span class="lbl">SKIPTIMER0</span></pre>
+  <p>Because IRQ is level-sensitive rather than edge-sensitive, an unacknowledged source keeps
+  re-asserting the CPU's IRQ line &mdash; if you forget to acknowledge one, your handler simply
+  runs again immediately after <code>RTI</code>. That is a useful debugging signal in its own
+  right: a game that appears to hang inside its interrupt handler is almost always missing an
+  acknowledgment somewhere.</p>
+</div>
+
+<div class="chapter" id="ch18">
+  <div class="chapter-kicker">CHAPTER 18 &middot; PART V</div>
+  <h1 class="chapter-title">Timers</h1>
+
+  <p class="lede">Two independent 16-bit down-counters tick once every CPU cycle, entirely
+  apart from the raster &mdash; useful for music ticks, sub-frame scheduling, or timing input
+  that needs finer resolution than once per frame.</p>
+
+  <table>
+    <tr><th>Timer</th><th>Reload low</th><th>Reload high</th><th>Control</th><th>Count low</th><th>Count high</th></tr>
+    <tr><td>Timer 0</td><td><code>$C060</code></td><td><code>$C061</code></td><td><code>$C062</code></td><td><code>$C063</code></td><td><code>$C064</code></td></tr>
+    <tr><td>Timer 1</td><td><code>$C068</code></td><td><code>$C069</code></td><td><code>$C06A</code></td><td><code>$C06B</code></td><td><code>$C06C</code></td></tr>
+  </table>
+  <table>
+    <tr><th>Control mask</th><th>Meaning</th></tr>
+    <tr><td><code>$01</code></td><td>Enable counter</td></tr>
+    <tr><td><code>$02</code></td><td>Automatically reload after reaching zero</td></tr>
+  </table>
+  <p>Reading count-low latches count-high until you read it, giving a coherent 16-bit snapshot
+  the same way the frame counter does. Reload writes never disturb a running count &mdash; only
+  an enable transition from 0 to 1 loads the reload value and starts counting, beginning on the
+  following CPU cycle. Automatic mode reloads immediately at zero and keeps firing at an exact
+  interval; one-shot mode simply stops at zero. Disabling a timer preserves its current count,
+  so re-enabling later restarts cleanly from the reload value, not from wherever it happened to
+  stop. A reload of zero means the maximum interval: 65,536 cycles.</p>
+
+  <pre class="code"><span class="lbl">T0_RELO</span>  <span class="dir">EQU</span>   <span class="num">$C060</span>
+<span class="lbl">T0_RELH</span>  <span class="dir">EQU</span>   <span class="num">$C061</span>
+<span class="lbl">T0_CTRL</span>  <span class="dir">EQU</span>   <span class="num">$C062</span>
+
+<span class="cmt">; Fire roughly every 1 ms: 3,144,000 / 1000 = 3144 cycles = $0C48</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$48</span>
+         <span class="op">STA</span>   T0_RELO
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$0C</span>
+         <span class="op">STA</span>   T0_RELH
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000011</span>   <span class="cmt">; enable + auto-reload</span>
+         <span class="op">STA</span>   T0_CTRL</pre>
+
+  <div class="box tip">
+    <div class="box-title">Why Reach for a Timer Instead of VBlank</div>
+    VBlank gives you exactly one tick per 60&nbsp;Hz frame &mdash; fine for animation and input,
+    too coarse for a metronome-accurate rhythm game, a UART-like protocol, or any effect that
+    needs to subdivide a frame precisely. A hardware timer's IRQ fires on its own schedule,
+    completely decoupled from the raster, and is the right tool whenever "once per frame" is
+    the wrong granularity.
+  </div>
+
+  <p>With controllers, the IRQ controller, and both timers under control, you have every input
+  and every clock a Fanticon game can see. Part VI turns to shipping: bank switching, packaging
+  a finished cartridge, and making sure it runs at full speed.</p>
+</div>

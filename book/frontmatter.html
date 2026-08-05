@@ -1,0 +1,91 @@
+<div class="cover-page">
+  <div class="cover-grid"></div>
+  <div class="cover-content">
+    <div class="cover-eyebrow">V0.1 &middot; NMOS 6502 &middot; 320&times;200 &middot; 4 VOICES</div>
+    <img class="cover-logo" src="assets/logo_transparent.png">
+    <div class="cover-tagline">DEVELOPER'S GUIDE</div>
+    <div class="cover-badge">MACHINE REFERENCE &amp; PROGRAMMING MANUAL</div>
+  </div>
+  <div class="cover-footer">SYSTEM VERSION 1.0</div>
+</div>
+
+<div class="frontmatter colophon">
+  <h2>Fanticon Developer's Guide</h2>
+  <p>The complete reference for programming the Fanticon system &mdash; the console, its
+  tools, and every register in between.</p>
+  <hr>
+  <p>Covers the Fanticon hardware, the native editor and command console, the macro assembler,
+  the graphics and music editors, and the complete memory map, opcode, and file-format
+  references, organized as a path from first power-on to a finished cartridge.</p>
+</div>
+
+<div class="frontmatter toc">
+  <div class="toc-kicker">TABLE OF CONTENTS</div>
+  <h1>Contents</h1>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part I &mdash; Welcome to the Console</div>
+    <div class="toc-row"><span class="t">Chapter 0. What Is Fanticon?</span><span class="p" href="#ch0"></span></div>
+    <div class="toc-row"><span class="t">Chapter 1. Launching Fanticon &amp; Finding Your Way Around</span><span class="p" href="#ch1"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part II &mdash; Your First Cartridge</div>
+    <div class="toc-row"><span class="t">Chapter 2. The Command Console</span><span class="p" href="#ch2"></span></div>
+    <div class="toc-row"><span class="t">Chapter 3. Meet the 6502</span><span class="p" href="#ch3"></span></div>
+    <div class="toc-row"><span class="t">Chapter 4. Hello, Fanticon!</span><span class="p" href="#ch4"></span></div>
+    <div class="toc-row"><span class="t">Chapter 5. Your First Cartridge</span><span class="p" href="#ch5"></span></div>
+    <div class="toc-row"><span class="t">Chapter 6. The Debugger</span><span class="p" href="#ch6"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part III &mdash; Graphics Programming</div>
+    <div class="toc-row"><span class="t">Chapter 7. Video Hardware Tour</span><span class="p" href="#ch7"></span></div>
+    <div class="toc-row"><span class="t">Chapter 8. The Graphics Editor</span><span class="p" href="#ch8"></span></div>
+    <div class="toc-row"><span class="t">Chapter 9. Tiles &amp; Scrolling Worlds</span><span class="p" href="#ch9"></span></div>
+    <div class="toc-row"><span class="t">Chapter 10. Sprites</span><span class="p" href="#ch10"></span></div>
+    <div class="toc-row"><span class="t">Chapter 11. Bitmap Mode</span><span class="p" href="#ch11"></span></div>
+    <div class="toc-row"><span class="t">Chapter 12. Raster Tricks</span><span class="p" href="#ch12"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part IV &mdash; Sound</div>
+    <div class="toc-row"><span class="t">Chapter 13. Audio Hardware Tour</span><span class="p" href="#ch13"></span></div>
+    <div class="toc-row"><span class="t">Chapter 14. Programming Sound Directly</span><span class="p" href="#ch14"></span></div>
+    <div class="toc-row"><span class="t">Chapter 15. The Music Tracker</span><span class="p" href="#ch15"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part V &mdash; Input, Interrupts &amp; Timing</div>
+    <div class="toc-row"><span class="t">Chapter 16. Controllers</span><span class="p" href="#ch16"></span></div>
+    <div class="toc-row"><span class="t">Chapter 17. Interrupts &amp; the IRQ Controller</span><span class="p" href="#ch17"></span></div>
+    <div class="toc-row"><span class="t">Chapter 18. Timers</span><span class="p" href="#ch18"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part VI &mdash; Shipping a Game</div>
+    <div class="toc-row"><span class="t">Chapter 19. Bank Switching &amp; Memory Management</span><span class="p" href="#ch19"></span></div>
+    <div class="toc-row"><span class="t">Chapter 20. Packaging &amp; Save Files</span><span class="p" href="#ch20"></span></div>
+    <div class="toc-row"><span class="t">Chapter 21. Cycle-Accurate Optimization</span><span class="p" href="#ch21"></span></div>
+    <div class="toc-row"><span class="t">Chapter 22. Testing &amp; Shipping</span><span class="p" href="#ch22"></span></div>
+  </div>
+
+  <div class="toc-part pagebreak">
+    <div class="toc-part-title">Part VII &mdash; Game Development Patterns</div>
+    <div class="toc-row"><span class="t">Chapter 23. Game Loops, States &amp; Building a Main Menu</span><span class="p" href="#ch23"></span></div>
+    <div class="toc-row"><span class="t">Chapter 24. Side-Scrolling Games</span><span class="p" href="#ch24"></span></div>
+    <div class="toc-row"><span class="t">Chapter 25. Top-Down &amp; RPG-Style Games</span><span class="p" href="#ch25"></span></div>
+    <div class="toc-row"><span class="t">Chapter 26. Raster Effects in Practice</span><span class="p" href="#ch26"></span></div>
+    <div class="toc-row"><span class="t">Chapter 27. Palette Swapping &amp; Color Tricks</span><span class="p" href="#ch27"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Reference Appendices</div>
+    <div class="toc-row"><span class="t">Appendix A. Complete 6502 Opcode &amp; Cycle Reference</span><span class="p" href="#appA"></span></div>
+    <div class="toc-row"><span class="t">Appendix B. Complete Memory Map</span><span class="p" href="#appB"></span></div>
+    <div class="toc-row"><span class="t">Appendix C. Assembler Directive &amp; Macro Reference</span><span class="p" href="#appC"></span></div>
+    <div class="toc-row"><span class="t">Appendix D. Cartridge &amp; Save File Formats</span><span class="p" href="#appD"></span></div>
+    <div class="toc-row"><span class="t">Appendix E. Demo Cartridge Index</span><span class="p" href="#appE"></span></div>
+    <div class="toc-row"><span class="t">Appendix F. Glossary</span><span class="p" href="#appF"></span></div>
+  </div>
+</div>

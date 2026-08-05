@@ -1,0 +1,103 @@
+<div class="chapter dense" id="appC">
+  <div class="chapter-kicker">APPENDIX C</div>
+  <h1 class="chapter-title">Assembler Directive &amp; Macro Reference</h1>
+  <p class="lede">The complete syntax reference for Fanticon's native two-pass 6502 assembler
+  &mdash; Merlin-inspired source, raw <code>.BIN</code> output, project-aware <code>BANK</code>/<code>FIXED</code>
+  extensions.</p>
+
+  <h2>Source layout</h2>
+  <p>Source is case-insensitive; string contents are preserved. Merlin-style fields: label at
+  column&nbsp;1, operation at column&nbsp;10, operand at column&nbsp;16, comment at
+  column&nbsp;27 &mdash; whitespace-separated source is also accepted. A semicolon starts a
+  comment outside a quoted string; a line beginning with <code>*</code> or <code>;</code> is a
+  full-line comment. Labels are global, case-insensitive, and may end in a colon.</p>
+
+  <h2>Numbers and expressions</h2>
+  <p>Decimal integers, <code>$</code>/<code>0x</code> hexadecimal, <code>%</code> binary, and
+  single-character literals. <code>*</code> is the address at the current source line. Unary
+  operators: <code>+ - ~ &lt;</code>(low byte)<code> &gt;</code>(high byte). Binary operators,
+  highest to lowest precedence: <code>* /</code>, then <code>+ -</code>, then <code>&lt;&lt; &gt;&gt;</code>,
+  then <code>&amp;</code>, then <code>^</code>, then <code>|</code>. Parentheses override
+  precedence. <code>EQU</code> and layout-determining directives must resolve when encountered
+  &mdash; define those constants first; ordinary instruction/data operands may reference labels
+  defined later.</p>
+
+  <h2>Addressing modes accepted</h2>
+  <table>
+    <tr><th>Mode</th><th>Example</th></tr>
+    <tr><td>Implied</td><td><code>RTS</code></td></tr>
+    <tr><td>Accumulator</td><td><code>ASL A</code></td></tr>
+    <tr><td>Immediate</td><td><code>LDA #$20</code></td></tr>
+    <tr><td>Zero page or absolute</td><td><code>LDA ADDRESS</code></td></tr>
+    <tr><td>Indexed</td><td><code>LDA ADDRESS,X</code> or <code>LDX ADDRESS,Y</code></td></tr>
+    <tr><td>Indirect jump</td><td><code>JMP (VECTOR)</code></td></tr>
+    <tr><td>Indexed indirect</td><td><code>LDA (POINTER,X)</code></td></tr>
+    <tr><td>Indirect indexed</td><td><code>LDA (POINTER),Y</code></td></tr>
+    <tr><td>Relative</td><td><code>BNE LABEL</code></td></tr>
+  </table>
+  <p>Also accepted: Fanticon's stable NMOS undocumented mnemonics <code>SLO, RLA, SRE, RRA,
+  SAX, LAX, DCP, ISC/ISB, ANC, ALR, ARR, XAA, AXS/SBX, AHX, SHY, SHX, TAS, LAS,</code> and
+  <code>KIL/JAM</code>, plus addressed undocumented <code>NOP</code> forms (Appendix&nbsp;A).</p>
+
+  <h2>Directives</h2>
+  <table>
+    <tr><th>Directive</th><th>Purpose</th></tr>
+    <tr><td><code>ORG expr</code></td><td>Set the address for following output</td></tr>
+    <tr><td><code>name EQU expr</code> / <code>EQ</code></td><td>Define a constant</td></tr>
+    <tr><td><code>DFB, DB, BYTE</code></td><td>Emit comma-separated bytes or strings</td></tr>
+    <tr><td><code>DW, DA, WORD</code></td><td>Emit comma-separated 16-bit values, low byte first</td></tr>
+    <tr><td><code>ASC, TEXT</code></td><td>Emit quoted ASCII strings or byte expressions</td></tr>
+    <tr><td><code>HEX</code></td><td>Emit hexadecimal byte pairs, spaces or commas allowed</td></tr>
+    <tr><td><code>DS expr</code></td><td>Reserve and zero-fill a number of bytes</td></tr>
+    <tr><td><code>PUT, USE, INCLUDE</code></td><td>Assemble another file at this point (nested up to 16 levels)</td></tr>
+    <tr><td><code>END</code></td><td>Mark the logical end of source</td></tr>
+  </table>
+  <p>Multiple <code>ORG</code> regions are allowed only in increasing address order; gaps are
+  zero-filled. Moving backward over already-written output is an error.</p>
+
+  <h2>Cartridge-project extensions</h2>
+  <table>
+    <tr><th>Directive</th><th>Purpose</th></tr>
+    <tr><td><code>BANK 0&ndash;255</code></td><td>Select a switchable 16 KiB image at $8000&ndash;$BFFF</td></tr>
+    <tr><td><code>FIXED</code></td><td>Select the 16 KiB image always mapped at $C000&ndash;$FFFF</td></tr>
+    <tr><td><code>BANKOF(label)</code></td><td>Resolve a switchable-ROM label's bank number, 0&ndash;255</td></tr>
+  </table>
+  <p>Code or data crossing its own section, overlapping earlier output, writing the hidden
+  I/O-shadowed page ($C000&ndash;$C0FF within FIXED), selecting an invalid bank, or omitting
+  any CPU vector is a build error. Every unwritten ROM byte is <code>$FF</code>.</p>
+
+  <h2>Merlin-style macros</h2>
+  <p>Define a macro with its name in the label field and <code>MAC</code> in the operation
+  field; end with <code>EOM</code> or <code>&lt;&lt;&lt;</code>. Parameters <code>]1</code>
+  through <code>]8</code> substitute on expansion:</p>
+  <pre class="code"><span class="lbl">LOADIMM</span>  <span class="dir">MAC</span>
+         <span class="op">LDA</span>   <span class="dir">#</span>]1
+         <span class="op">STA</span>   ]2
+         <span class="dir">EOM</span>
+
+         <span class="dir">ORG</span>   <span class="num">$8000</span>
+         <span class="dir">PMC</span>   LOADIMM;$42;$20</pre>
+  <p><code>PMC name;arg1;arg2</code> and <code>&gt;&gt;&gt; name;arg1;arg2</code> both invoke a
+  macro; a macro name may also appear directly in the operation field. Expansion nests up to 32
+  levels. Duplicate names, unterminated definitions, invalid expanded source, and unknown macro
+  calls are all reported with their exact source location.</p>
+
+  <h2>Output and limits</h2>
+  <p>Output may span at most the 6502's full 64 KiB address space. Byte and immediate values
+  must fit 8 bits; word and address values must fit 16 bits; branch targets must be in the
+  signed &minus;128..+127 range from the address immediately after the operand &mdash; a common
+  workaround for a too-far branch inverts the condition and jumps:</p>
+  <pre class="code">         <span class="op">BEQ</span>   NEARBY      <span class="cmt">; original intent: BNE FAR_AWAY</span>
+         <span class="op">JMP</span>   FAR_AWAY
+<span class="lbl">NEARBY</span></pre>
+
+  <h2>Building</h2>
+  <table>
+    <tr><th>Where</th><th>How</th></tr>
+    <tr><td>Console, raw file</td><td><code>ASM GAME.ASM [OUTPUT.BIN]</code></td></tr>
+    <tr><td>Console, project</td><td><code>BUILD</code> (package), <code>RUN</code> (build &amp; launch), <code>RUN GAME.FCN</code> (launch existing)</td></tr>
+    <tr><td>Editor</td><td><span class="kbd">F5</span>/<span class="kbd">Ctrl+B</span> assemble; <span class="kbd">Shift+F5</span> Build &amp; Run</td></tr>
+  </table>
+  <p>Console diagnostics print as <code>source:line:column message</code>. No new binary is
+  ever written on a failed build.</p>
+</div>

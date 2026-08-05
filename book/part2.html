@@ -1,0 +1,411 @@
+<div class="divider-page hue-cyan" id="part2">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 02</div>
+  <div class="divider-number">02</div>
+  <div class="divider-title">Your First<br>Cartridge</div>
+  <div class="divider-sub">The command console, the 6502 in brief, your first assembled program, a running cartridge, and the debugger that watches it think.</div>
+  <div class="divider-contents">CH 2 CONSOLE &middot; CH 3 THE 6502 &middot; CH 4 HELLO FANTICON &middot; CH 5 FIRST CARTRIDGE &middot; CH 6 DEBUGGER</div>
+</div>
+
+<div class="chapter" id="ch2">
+  <div class="chapter-kicker">CHAPTER 2 &middot; PART II</div>
+  <h1 class="chapter-title">The Command Console</h1>
+
+  <p class="lede">Everything in Fanticon starts at the prompt. The console is a native tool
+  &mdash; it never runs on the emulated 6502 &mdash; so it stays fast and responsive no matter
+  what your cartridge is doing.</p>
+
+  <h2>The filesystem</h2>
+  <p>Console paths are lowercase and accept either <code>/</code> or <code>\</code> as a
+  separator. Every file and directory name follows the classic 8.3 rule: 1&ndash;8 characters,
+  an optional dot, and a 1&ndash;3 character extension, using letters, digits, <code>_</code>,
+  and <code>-</code> only. New names are created lowercase; an existing mixed-case folder such
+  as <code>MyGame</code> is matched case-insensitively as <code>mygame</code>. Absolute paths
+  begin at Fanticon's <code>/</code>, and <code>..</code> can never climb above it.</p>
+
+  <table>
+    <tr><th>Command</th><th>Effect</th></tr>
+    <tr><td><code>HELP</code></td><td>List current commands</td></tr>
+    <tr><td><code>CLS</code> / <code>CLEAR</code></td><td>Clear the terminal</td></tr>
+    <tr><td><code>MODE</code></td><td>Print the active application mode</td></tr>
+    <tr><td><code>EDITOR</code> / <code>GAME</code></td><td>Switch application mode</td></tr>
+    <tr><td><code>ECHO text</code></td><td>Print text</td></tr>
+    <tr><td><code>VERSION</code></td><td>Print the Fanticon host version</td></tr>
+    <tr><td><code>COLOR [BG FG]</code></td><td>Show or set the console's background/foreground palette indexes</td></tr>
+    <tr><td><code>EDIT [file]</code></td><td>Open the text editor</td></tr>
+    <tr><td><code>CD [path]</code></td><td>Change directory, or print the current one</td></tr>
+    <tr><td><code>MKDIR</code> / <code>RMDIR path</code></td><td>Create / remove an empty directory</td></tr>
+    <tr><td><code>RM</code> / <code>DEL file</code></td><td>Remove one file</td></tr>
+    <tr><td><code>DIR [path]</code> / <code>LS [path]</code></td><td>List a directory</td></tr>
+    <tr><td><code>ASM source [output]</code> / <code>BUILD</code></td><td>Assemble source, or build the current project</td></tr>
+    <tr><td><code>RUN [file.fcn]</code></td><td>Build &amp; launch the project, or launch an image</td></tr>
+    <tr><td><code>DUMP file [offset [length]]</code></td><td>Hex/ASCII dump of a file</td></tr>
+  </table>
+
+  <p>Unknown commands print a visible error and return you to the prompt &mdash; nothing is
+  silent. Backspace edits the current line, Enter submits it, and output scrolls once it
+  reaches the bottom row.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It: DUMP</div>
+    <code>DUMP</code> shows any file eight bytes per row, sized to the 40-column display, with
+    addresses, byte values, and printable ASCII in distinct colors. Zero-filled regions are
+    dimmed so they visually recede. Try <code>DUMP /demos/sprites/MAIN.ASM</code> or, once you
+    have built something, <code>DUMP HELLO.BIN $80 64</code> to inspect 64 bytes starting at
+    offset <code>$80</code>. Numeric arguments accept decimal, <code>$hex</code>, or
+    <code>0xhex</code>.
+  </div>
+
+  <h2>The text editor</h2>
+  <p>Run <code>EDIT</code> for a blank document or <code>EDIT NOTES.TXT</code> to load a file
+  from the current directory. It is Fanticon's own tool, drawn with the same character display
+  as the console &mdash; not your operating system's native text box.</p>
+
+  <p>The menu bar has six menus, opened with <span class="kbd">F10</span>/<span class="kbd">Alt</span>
+  or their own hotkey: <strong>File</strong> (<span class="kbd">Alt+F</span>), <strong>Edit</strong>
+  (<span class="kbd">Alt+E</span>), <strong>Build</strong> (<span class="kbd">Alt+B</span>),
+  <strong>Debug</strong> (<span class="kbd">Alt+D</span>), <strong>Music</strong>
+  (<span class="kbd">Alt+M</span>), and <strong>Help</strong> (<span class="kbd">Alt+H</span>).
+  On macOS, <span class="kbd">Option+F</span>/<span class="kbd">Option+E</span> work the same
+  way and <span class="kbd">Cmd</span> doubles for <span class="kbd">Ctrl</span> shortcuts.</p>
+
+  <table>
+    <tr><th>Shortcut</th><th>Action</th></tr>
+    <tr><td><span class="kbd">Ctrl/Cmd+N</span> / <span class="kbd">O</span> / <span class="kbd">S</span></td><td>New / Open / Save</td></tr>
+    <tr><td><span class="kbd">F2</span> / <span class="kbd">F3</span></td><td>Save / Open shortcut</td></tr>
+    <tr><td><span class="kbd">Ctrl/Cmd+A/C/X/V/Z</span></td><td>Select All / Copy / Cut / Paste / Undo</td></tr>
+    <tr><td><span class="kbd">F5</span> or <span class="kbd">Ctrl/Cmd+B</span></td><td>Assemble the current buffer</td></tr>
+    <tr><td><span class="kbd">F4</span> / <span class="kbd">Shift+F4</span></td><td>Next / previous build diagnostic</td></tr>
+    <tr><td><span class="kbd">Shift+F5</span></td><td>Build &amp; Run</td></tr>
+  </table>
+
+  <p>Opening or saving a file ending in <code>.ASM</code> or <code>.INC</code> automatically
+  switches on <strong>6502 assembly mode</strong>: a Merlin-inspired four-column layout
+  (label, opcode, operand, comment, at fixed columns), Catppuccin Mocha syntax coloring, and
+  Tab-to-next-field editing. This is the mode you will live in for the rest of the book.</p>
+
+  <div class="box tip">
+    <div class="box-title">Tip</div>
+    In assembly mode, pressing Enter at the end of a line reformats it into the four-column
+    layout immediately. Selecting text with Shift deliberately suppresses reformatting, so you
+    can select and copy source without Fanticon rewriting it out from under you.
+  </div>
+</div>
+
+<div class="chapter" id="ch3">
+  <div class="chapter-kicker">CHAPTER 3 &middot; PART II</div>
+  <h1 class="chapter-title">Meet the 6502</h1>
+
+  <p class="lede">This chapter is a working primer, not the complete reference &mdash; the
+  full opcode and cycle tables, addressing-mode formulas, and undocumented-instruction
+  catalog live in Appendix&nbsp;A for when you need exact answers.</p>
+
+  <h2>Registers</h2>
+  <table>
+    <tr><th>Register</th><th>Width</th><th>Purpose</th></tr>
+    <tr><td><code>A</code></td><td>8 bits</td><td>Accumulator &mdash; arithmetic, logic, most data movement</td></tr>
+    <tr><td><code>X</code>, <code>Y</code></td><td>8 bits</td><td>Index registers &mdash; indexed addressing, loop counters</td></tr>
+    <tr><td><code>SP</code></td><td>8 bits</td><td>Stack pointer; the physical stack address is <code>$0100 + SP</code></td></tr>
+    <tr><td><code>PC</code></td><td>16 bits</td><td>Address of the next instruction byte</td></tr>
+    <tr><td><code>P</code></td><td>8 bits</td><td>Status flags, written <code>NV-BDIZC</code></td></tr>
+  </table>
+  <p>The 6502 is an 8-bit, little-endian processor addressing 65,536 bytes, <code>$0000</code>
+  through <code>$FFFF</code>. All arithmetic wraps: incrementing <code>$FF</code> yields
+  <code>$00</code>. A 16-bit value stored at address <code>$2000</code> keeps its low byte at
+  <code>$2000</code> and high byte at <code>$2001</code>.</p>
+
+  <h2>Status flags (<code>NV-BDIZC</code>)</h2>
+  <table>
+    <tr><th>Bit</th><th>Flag</th><th>Set means&hellip;</th></tr>
+    <tr><td>7</td><td><code>N</code> Negative</td><td>Result bit 7 is 1</td></tr>
+    <tr><td>6</td><td><code>V</code> Overflow</td><td>Signed arithmetic overflowed</td></tr>
+    <tr><td>3</td><td><code>D</code> Decimal</td><td><code>ADC</code>/<code>SBC</code> use BCD adjustment</td></tr>
+    <tr><td>2</td><td><code>I</code> Interrupt disable</td><td>Maskable IRQ is ignored</td></tr>
+    <tr><td>1</td><td><code>Z</code> Zero</td><td>The result was zero</td></tr>
+    <tr><td>0</td><td><code>C</code> Carry</td><td>Carry / no-borrow / shifted-out bit</td></tr>
+  </table>
+  <p>For subtraction and comparison, <code>C=1</code> means <strong>no borrow</strong> &mdash;
+  after <code>CMP value</code>, <code>C=1</code> means <code>A &gt;= value</code> unsigned.</p>
+
+  <h2>Zero page, the stack, and vectors</h2>
+  <p>Every 6502 program leans on three fixed regions:</p>
+  <table>
+    <tr><th>Address</th><th>Purpose</th></tr>
+    <tr><td><code>$0000&ndash;$00FF</code></td><td>Zero page &mdash; shorter, faster addressing</td></tr>
+    <tr><td><code>$0100&ndash;$01FF</code></td><td>Hardware stack</td></tr>
+    <tr><td><code>$FFFA&ndash;$FFFB</code></td><td>NMI vector</td></tr>
+    <tr><td><code>$FFFC&ndash;$FFFD</code></td><td>RESET vector</td></tr>
+    <tr><td><code>$FFFE&ndash;$FFFF</code></td><td>IRQ/BRK vector</td></tr>
+  </table>
+  <p>Reset does <em>not</em> give you a known <code>A</code>, <code>X</code>, or <code>Y</code>.
+  Every program should establish its own starting state explicitly:</p>
+  <pre class="code"><span class="lbl">RESET</span>    <span class="op">SEI</span>             <span class="cmt">; mask IRQ while initializing</span>
+         <span class="op">CLD</span>             <span class="cmt">; use binary arithmetic</span>
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">$FF</span>
+         <span class="op">TXS</span>             <span class="cmt">; begin with a known stack position</span>
+         <span class="cmt">; ...initialize RAM and Fanticon devices here...</span>
+         <span class="op">CLI</span>             <span class="cmt">; enable interrupts only once handlers are ready</span>
+<span class="lbl">MAIN</span>     <span class="op">JMP</span>   MAIN</pre>
+
+  <h2>Addressing modes, briefly</h2>
+  <table>
+    <tr><th>Mode</th><th>Example</th><th>What it addresses</th></tr>
+    <tr><td>Immediate</td><td><code>LDA #$40</code></td><td>The literal byte <code>$40</code></td></tr>
+    <tr><td>Zero page</td><td><code>LDA $40</code></td><td>Address <code>$0040</code></td></tr>
+    <tr><td>Zero page,X</td><td><code>LDA $40,X</code></td><td><code>($40+X) &amp; $FF</code> &mdash; wraps in zero page</td></tr>
+    <tr><td>Absolute</td><td><code>LDA $2040</code></td><td>Address <code>$2040</code></td></tr>
+    <tr><td>Absolute,X/Y</td><td><code>LDA $2040,X</code></td><td><code>$2040 + X</code></td></tr>
+    <tr><td>Indirect indexed</td><td><code>LDA ($40),Y</code></td><td>Read a pointer from zero page, then add Y &mdash; the classic buffer-walking mode</td></tr>
+    <tr><td>Indexed indirect</td><td><code>LDA ($40,X)</code></td><td>Read a pointer from <code>($40+X)&amp;$FF</code> &mdash; selects among adjacent pointers</td></tr>
+  </table>
+
+  <h2>The instruction families</h2>
+  <p>You do not need to memorize all 151 official mnemonics before writing your first program
+  &mdash; most 6502 code leans on a small working set:</p>
+  <ul>
+    <li><strong>Move data:</strong> <code>LDA/LDX/LDY</code>, <code>STA/STX/STY</code>, <code>TAX/TAY/TXA/TYA/TSX/TXS</code></li>
+    <li><strong>Do arithmetic:</strong> <code>ADC</code>, <code>SBC</code>, <code>INC/DEC</code>, <code>INX/INY/DEX/DEY</code> &mdash; remember to <code>CLC</code>/<code>SEC</code> before a chain</li>
+    <li><strong>Compare and branch:</strong> <code>CMP/CPX/CPY</code>, then <code>BEQ/BNE/BCC/BCS/BMI/BPL/BVC/BVS</code></li>
+    <li><strong>Logic and shifts:</strong> <code>AND/ORA/EOR</code>, <code>ASL/LSR/ROL/ROR</code>, and <code>BIT</code> for testing memory without touching <code>A</code></li>
+    <li><strong>Control flow:</strong> <code>JMP</code>, <code>JSR</code>/<code>RTS</code> for subroutines, <code>BRK</code>/<code>RTI</code> for interrupts</li>
+    <li><strong>Stack and flags:</strong> <code>PHA/PLA</code>, <code>PHP/PLP</code>, <code>SEI/CLI</code>, <code>SEC/CLC</code>, <code>SED/CLD</code></li>
+  </ul>
+
+  <div class="box warn">
+    <div class="box-title">A Cycle-Accurate CPU</div>
+    Fanticon emulates exact NMOS bus timing, including page-crossing penalties, dummy reads
+    before indexed stores, and the famous <code>JMP ($12FF)</code> page-wrap bug. This matters
+    the moment you memory-map a device register: never use a read-modify-write instruction
+    (like <code>INC</code> or <code>ASL</code>) on a hardware register unless its documentation
+    explicitly allows the extra reads and writes that instruction performs. Chapters 7
+    onward call this out wherever it applies.
+  </div>
+
+  <p>With registers, flags, addressing, and a safe reset routine in hand, you have everything
+  needed to write and assemble code &mdash; which is exactly what Chapter&nbsp;4 does.</p>
+</div>
+
+<div class="chapter" id="ch4">
+  <div class="chapter-kicker">CHAPTER 4 &middot; PART II</div>
+  <h1 class="chapter-title">Hello, Fanticon!</h1>
+
+  <p class="lede">Every Fanticon program starts life the same way: as source text assembled
+  into raw bytes. This chapter builds your first one and gets comfortable with the
+  assemble-fail-fix loop before Chapter&nbsp;5 turns it into something that runs on
+  screen.</p>
+
+  <h2>Write the source</h2>
+  <p>Type <code>EDIT HELLO.ASM</code> at the console. Assembly mode switches on automatically
+  because of the <code>.ASM</code> extension. Enter this short program:</p>
+  <pre class="code">         <span class="dir">ORG</span>   <span class="num">$8000</span>
+<span class="lbl">START</span>    <span class="op">LDX</span>   <span class="dir">#</span><span class="num">0</span>
+<span class="lbl">LOOP</span>     <span class="op">LDA</span>   MESSAGE,X
+         <span class="op">BEQ</span>   DONE
+         <span class="op">INX</span>
+         <span class="op">BNE</span>   LOOP
+<span class="lbl">DONE</span>     <span class="op">RTS</span>
+<span class="lbl">MESSAGE</span>  <span class="dir">ASC</span>   <span class="str">"HELLO, FANTICON"</span>
+         <span class="dir">DFB</span>   <span class="num">0</span>
+         <span class="dir">END</span></pre>
+  <p>This does not draw anything yet &mdash; it is a raw subroutine that walks a
+  null-terminated string in <code>X</code> until it hits the zero byte written by
+  <code>DFB 0</code>. That is deliberate. The goal here is the assembler workflow itself:
+  labels, <code>ORG</code>, string data, and a clean assemble.</p>
+
+  <h2>Assemble it</h2>
+  <p>Press <span class="kbd">F5</span> (or <span class="kbd">Ctrl/Cmd+B</span>). Fanticon shows
+  a progress dialog, then a success dialog reporting the output filename, its origin address,
+  and its byte count &mdash; <code>HELLO.BIN</code>, origin <code>$8000</code>, 21 bytes. The
+  same thing happens from the console with:</p>
+  <pre class="code">ASM HELLO.ASM</pre>
+  <p>By default the output file swaps the source extension for <code>.BIN</code>. Now look at
+  the bytes you produced:</p>
+  <pre class="code">DUMP HELLO.BIN</pre>
+  <p>You should see <code>A2 00 BD 09 80 F0 06 E8 D0 F7 60 48 45 4C 4C 4F...</code> &mdash;
+  <code>LDX #0</code> as opcode <code>$A2</code>, immediate operand <code>$00</code>, then the
+  absolute-indexed <code>LDA MESSAGE,X</code> as <code>$BD</code> with the resolved address of
+  <code>MESSAGE</code>, and finally your ASCII string. The assembler turned your labels into
+  addresses and your text into raw bytes &mdash; nothing more.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It: Break It on Purpose</div>
+    Change <code>BEQ DONE</code> to <code>BEQ NOWHERE</code> (a label that does not exist) and
+    assemble again. A build-error dialog appears with the exact diagnostic, the editor jumps to
+    the offending line, and that line turns red. Press <span class="kbd">F4</span> to jump
+    between multiple errors. Fix the typo and the red tint clears the moment you edit the line.
+    At the console, the same failure prints as <code>source:line:column message</code> and no
+    new binary is written &mdash; a bad build never silently overwrites a good one.
+  </div>
+
+  <h2>Numbers, strings, and directives you just used</h2>
+  <table>
+    <tr><th>Directive</th><th>Purpose</th></tr>
+    <tr><td><code>ORG expr</code></td><td>Set the address for the bytes that follow</td></tr>
+    <tr><td><code>name EQU expr</code></td><td>Define a named constant</td></tr>
+    <tr><td><code>DFB</code> / <code>DB</code> / <code>BYTE</code></td><td>Emit bytes or strings</td></tr>
+    <tr><td><code>DW</code> / <code>DA</code> / <code>WORD</code></td><td>Emit 16-bit values, low byte first</td></tr>
+    <tr><td><code>ASC</code> / <code>TEXT</code></td><td>Emit a quoted ASCII string</td></tr>
+    <tr><td><code>HEX</code></td><td>Emit hex byte pairs directly</td></tr>
+    <tr><td><code>DS expr</code></td><td>Reserve and zero-fill a number of bytes</td></tr>
+    <tr><td><code>PUT</code> / <code>USE</code> / <code>INCLUDE</code></td><td>Assemble another file at this point</td></tr>
+    <tr><td><code>END</code></td><td>Mark the logical end of source</td></tr>
+  </table>
+  <p><code>$</code> or <code>0x</code> prefixes hexadecimal, <code>%</code> prefixes binary,
+  and bare digits are decimal. <code>&lt;</code> and <code>&gt;</code> extract the low and high
+  byte of an expression &mdash; you will use those constantly once you start loading 16-bit
+  pointers. The full directive, expression, and Merlin-style macro reference is in
+  Appendix&nbsp;C.</p>
+
+  <p>You now have a working assemble loop. Chapter&nbsp;5 wraps a program like this one in a
+  cartridge project, points the CPU at it on reset, and puts a color on screen for the
+  first time.</p>
+</div>
+
+<div class="chapter" id="ch5">
+  <div class="chapter-kicker">CHAPTER 5 &middot; PART II</div>
+  <h1 class="chapter-title">Your First Cartridge</h1>
+
+  <p class="lede">A raw <code>.BIN</code> is code and data. A cartridge is a game. This
+  chapter builds the smallest possible one: a project that boots straight to a solid color on
+  the emulated 320&times;200 display.</p>
+
+  <h2>The project manifest</h2>
+  <p>A cartridge project is simply a directory containing <code>FANTICON.CFG</code>: plain
+  ASCII, one <code>KEY=VALUE</code> line at a time. Create a folder &mdash; say
+  <code>/hello</code> &mdash; and inside it a manifest:</p>
+  <pre class="code"><span class="dir">TITLE</span>=HELLO FANTICON
+<span class="dir">ID</span>=1A2B3C4D5E6F7788
+<span class="dir">MAIN</span>=MAIN.ASM
+<span class="dir">OUTPUT</span>=HELLO.FCN
+<span class="dir">SAVE_BANKS</span>=0
+<span class="dir">MACHINE</span>=1.0</pre>
+  <table>
+    <tr><th>Key</th><th>Rule</th></tr>
+    <tr><td><code>TITLE</code></td><td>1&ndash;22 printable ASCII characters; spaces allowed</td></tr>
+    <tr><td><code>ID</code></td><td>Exactly 16 hex digits, never zero &mdash; a stable save-file identity</td></tr>
+    <tr><td><code>MAIN</code></td><td>8.3 path to the root assembly source</td></tr>
+    <tr><td><code>OUTPUT</code></td><td>8.3 <code>.FCN</code> output filename</td></tr>
+    <tr><td><code>SAVE_BANKS</code></td><td>0&ndash;4 battery-backed 16&nbsp;KiB banks</td></tr>
+    <tr><td><code>MACHINE</code></td><td>Required hardware version &mdash; <code>1.0</code> for v0.1</td></tr>
+  </table>
+  <p>Inside Fanticon, <code>NEW PROJECT</code> scaffolds this manifest for you and generates a
+  cryptographically random, nonzero 64-bit <code>ID</code> once; ordinary rebuilds never change
+  it, because that ID is what ties a save file to this game for life. Unknown keys are a build
+  error, so keep the manifest to exactly these six.</p>
+
+  <h2>Sections: BANK and FIXED</h2>
+  <p>Cartridge assembly adds two section directives on top of everything from
+  Chapter&nbsp;4. <code>FIXED</code> selects the 16&nbsp;KiB image that is always mapped at
+  <code>$C000&ndash;$FFFF</code> &mdash; your reset code and vectors live here.
+  <code>BANK 0&ndash;255</code> selects a switchable 16&nbsp;KiB image at
+  <code>$8000&ndash;$BFFF</code> for everything too big to fit in fixed ROM. A minimal
+  cartridge only needs <code>FIXED</code>.</p>
+
+  <h2>MAIN.ASM</h2>
+  <p>Create <code>MAIN.ASM</code> next to the manifest:</p>
+  <pre class="code"><span class="lbl">VCTRL</span>    <span class="dir">EQU</span>   <span class="num">$C011</span>
+<span class="lbl">BGCOLOR</span>  <span class="dir">EQU</span>   <span class="num">$C012</span>
+
+         <span class="dir">FIXED</span>
+         <span class="dir">ORG</span>   <span class="num">$C100</span>
+<span class="lbl">RESET</span>    <span class="op">SEI</span>
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">$FF</span>
+         <span class="op">TXS</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   VCTRL       <span class="cmt">; background + sprites off</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$3B</span>
+         <span class="op">STA</span>   BGCOLOR     <span class="cmt">; backdrop shows through -- pick any RGB332 byte</span>
+         <span class="op">CLI</span>
+<span class="lbl">IDLE</span>     <span class="op">JMP</span>   IDLE
+
+         <span class="dir">ORG</span>   <span class="num">$FFFA</span>
+         <span class="dir">DA</span>    RESET,RESET,RESET   <span class="cmt">; NMI, RESET, IRQ/BRK</span></pre>
+  <p>Every cartridge's fixed ROM must supply all three CPU vectors, even ones it never uses.
+  With <code>VIDEO_CONTROL</code> (<code>$C011</code>) set to zero, both the background and
+  sprite layers are disabled and the display shows nothing but <code>BACKDROP_COLOR</code>
+  (<code>$C012</code>) &mdash; a full 8-bit palette index, so all 256 programmable colors are
+  available even with everything else turned off. <code>RESET</code> must live in fixed ROM or
+  main RAM, and reset code cannot assume any switchable bank other than bank&nbsp;0 is mapped
+  yet &mdash; which is exactly why this program never touches <code>BANK_NUMBER</code> at all.</p>
+
+  <h2>Build and run it</h2>
+  <p>From <code>/hello</code>, type:</p>
+  <pre class="code">RUN</pre>
+  <p>This builds the manifest into a validated <code>HELLO.FCN</code> and launches it
+  immediately &mdash; the same action as <strong>Build &amp; Run</strong> (<span class="kbd">Shift+F5</span>)
+  in the editor. The window switches to the 320&times;200 game display and fills with your
+  chosen color. Press <span class="kbd">Escape</span> to return to the editor.</p>
+  <p>Use <code>BUILD</code> alone to package without launching, and
+  <code>RUN GAME.FCN</code> to validate and launch an existing image directly &mdash; useful
+  once you start keeping built cartridges around separately from their source projects.</p>
+
+  <div class="box tip">
+    <div class="box-title">What Just Got Validated</div>
+    Building a project does more than assemble source. The packager writes the fixed image
+    followed by every referenced bank, fills every unwritten ROM byte with <code>$FF</code>,
+    and writes a 64-byte header containing bank counts, the machine version, your title, your
+    cartridge ID, and CRC-32 checksums of the fixed and banked ROM. A loader validates all of
+    it &mdash; magic bytes, version, flags, bank counts, a nonzero ID, exact file size, every
+    checksum, and the presence of all three vectors &mdash; before a single byte reaches the
+    CPU. Chapter&nbsp;20 covers the full format.
+  </div>
+
+  <p>You have a running cartridge. The rest of this book is almost entirely about what
+  you can put inside <code>RESET</code> and the interrupt handlers next to it &mdash;
+  graphics, sound, input, and timing. First, meet the tool that lets you watch this program
+  think, one instruction at a time.</p>
+</div>
+
+<div class="chapter" id="ch6">
+  <div class="chapter-kicker">CHAPTER 6 &middot; PART II</div>
+  <h1 class="chapter-title">The Debugger</h1>
+
+  <p class="lede">Fanticon's debugger is editor-owned: it starts with Build &amp; Run, stops
+  the entire virtual machine cold at a breakpoint, and never advances CPU, video, timer, input,
+  or audio state while you are looking at it &mdash; so nothing keeps running behind your back.</p>
+
+  <h2>Starting a session</h2>
+  <p>Open <code>MAIN.ASM</code> from Chapter&nbsp;5 and press <span class="kbd">F9</span> on
+  the <code>STA BGCOLOR</code> line to set a breakpoint &mdash; the source gutter marks it with
+  <code>@</code>. Press <span class="kbd">F5</span> (Build &amp; Run). The VM runs at full
+  speed and immediately stops on your breakpoint, marked with an arrow in the gutter.</p>
+
+  <table>
+    <tr><th>Key</th><th>Debug action</th></tr>
+    <tr><td><span class="kbd">F5</span></td><td>Build &amp; Run when stopped; continue when paused</td></tr>
+    <tr><td><span class="kbd">F6</span></td><td>Pause a running editor-owned game</td></tr>
+    <tr><td><span class="kbd">Shift+F5</span></td><td>Stop the debug session</td></tr>
+    <tr><td><span class="kbd">F9</span></td><td>Toggle a source breakpoint on the current line</td></tr>
+    <tr><td><span class="kbd">F10</span></td><td>Step over <code>JSR</code>, or step one instruction otherwise</td></tr>
+    <tr><td><span class="kbd">F11</span></td><td>Step one 6502 instruction</td></tr>
+    <tr><td><span class="kbd">Shift+F11</span></td><td>Run until the current subroutine returns</td></tr>
+    <tr><td><span class="kbd">Ctrl/Cmd+F11</span></td><td>Step one CPU/bus cycle</td></tr>
+  </table>
+  <p>A breakpoint placed on a label or other non-emitting line resolves forward to the next
+  line that emits bytes, so you can drop breakpoints on labels without thinking about it.</p>
+
+  <h2>What the paused panel tells you</h2>
+  <p>While stopped, Fanticon shows CPU registers and flags, stack bytes, memory around the
+  program counter, the currently mapped bank, IRQ state, raster position, every APU channel's
+  control/timer state and current output, the stop reason, and the eight most recently
+  executed instructions. Step with <span class="kbd">F11</span> and watch <code>BGCOLOR</code>'s
+  value land in <code>A</code>, then get written on the following <code>STA</code>.</p>
+
+  <h2>Watchpoints and raster breakpoints</h2>
+  <p>The <strong>Debug</strong> menu also creates 16-bit memory-read and memory-write
+  watchpoints, plus raster breakpoints entered as <code>LINE,DOT</code> &mdash; useful once you
+  are chasing an effect timed to an exact scanline in Chapter&nbsp;12. Debugger raster stops
+  land on CPU cycle boundaries: every two video dots in machine&nbsp;1.0.</p>
+
+  <div class="box hw">
+    <div class="box-title">What the Debugger Gives You</div>
+    CPU instruction breakpoints, memory read/write watchpoints, single-instruction and
+    single-cycle stepping, full register/stack/bank/IRQ/raster/APU inspection, raster-position
+    breakpoints, and a complete VM pause &mdash; enough to build a debugging workflow
+    around any cartridge you are developing.
+  </div>
+
+  <p>You can now write, assemble, run, and step through 6502 code with confidence. Part III
+  puts something worth looking at on that screen &mdash; starting with how Fanticon's video
+  hardware works.</p>
+</div>

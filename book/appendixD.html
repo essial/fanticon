@@ -1,0 +1,103 @@
+<div class="chapter dense" id="appD">
+  <div class="chapter-kicker">APPENDIX D</div>
+  <h1 class="chapter-title">Cartridge &amp; Save File Formats</h1>
+  <p class="lede">Both formats are little-endian and independently versioned. Byte-for-byte
+  detail; the narrative version is Chapter&nbsp;20.</p>
+
+  <h2>Cartridge capacity</h2>
+  <p>One fixed 16 KiB ROM image, 0&ndash;256 switchable 16 KiB ROM banks, and a declaration for
+  0&ndash;4 battery-backed 16 KiB RAM banks. Maximum banked ROM is 4 MiB; the largest possible
+  <code>.FCN</code> file, including the fixed image and 64-byte header, is
+  <code>$404040</code> bytes (4,210,752). Battery RAM is 0, 16, 32, 48, or 64 KiB, selected with
+  <code>BANK_KIND=$03</code>.</p>
+
+  <h2>.FCN file layout</h2>
+  <pre class="code">offset $000000  64-byte FCN header
+offset $000040  16 KiB fixed ROM image
+offset $004040  banked ROM bank 0
+offset $008040  banked ROM bank 1
+                ...</pre>
+  <p>Banks are stored uncompressed in ascending order. The file must be exactly the size implied
+  by its header &mdash; trailing bytes are an error.</p>
+
+  <h2>FCN header (64 bytes)</h2>
+  <table class="dense">
+    <tr><th>Off</th><th>Size</th><th>Type</th><th>Field</th><th>Meaning</th></tr>
+    <tr><td>$00</td><td>8</td><td>bytes</td><td>MAGIC</td><td>ASCII <code>FANTICON</code></td></tr>
+    <tr><td>$08</td><td>1</td><td>u8</td><td>FORMAT_MAJOR</td><td>$01</td></tr>
+    <tr><td>$09</td><td>1</td><td>u8</td><td>FORMAT_MINOR</td><td>$00</td></tr>
+    <tr><td>$0A</td><td>2</td><td>u16</td><td>HEADER_SIZE</td><td>$0040</td></tr>
+    <tr><td>$0C</td><td>4</td><td>u32</td><td>FLAGS</td><td>Bit 0: BATTERY_RAM</td></tr>
+    <tr><td>$10</td><td>2</td><td>u16</td><td>ROM_BANKS</td><td>Switchable banks, 0&ndash;256</td></tr>
+    <tr><td>$12</td><td>1</td><td>u8</td><td>SAVE_BANKS</td><td>Battery RAM banks, 0&ndash;4</td></tr>
+    <tr><td>$13</td><td>1</td><td>u8</td><td>MAPPER</td><td>$00 for the v0.1 mapper</td></tr>
+    <tr><td>$14</td><td>4</td><td>u32</td><td>FIXED_CRC32</td><td>CRC-32 of the fixed ROM image</td></tr>
+    <tr><td>$18</td><td>4</td><td>u32</td><td>BANKED_CRC32</td><td>CRC-32 of all banked ROM bytes</td></tr>
+    <tr><td>$1C</td><td>8</td><td>u64</td><td>CARTRIDGE_ID</td><td>Stable, nonzero game identifier</td></tr>
+    <tr><td>$24</td><td>22</td><td>bytes</td><td>TITLE</td><td>Printable ASCII, NUL-padded</td></tr>
+    <tr><td>$3A</td><td>1</td><td>u8</td><td>MACHINE_MAJOR</td><td>Required hardware major version</td></tr>
+    <tr><td>$3B</td><td>1</td><td>u8</td><td>MACHINE_MINOR</td><td>Minimum required minor version</td></tr>
+    <tr><td>$3C</td><td>4</td><td>u32</td><td>HEADER_CRC32</td><td>CRC-32 of header bytes $00&ndash;$3B</td></tr>
+  </table>
+  <p>All CRC fields use CRC-32/ISO-HDLC: polynomial <code>$04C11DB7</code>, initial value
+  <code>$FFFFFFFF</code>, reflected input/output, final XOR <code>$FFFFFFFF</code>.
+  <code>BANKED_CRC32</code> is zero when <code>ROM_BANKS</code> is zero. Hardware major
+  versions must match exactly; a loader accepts a cartridge only when its own minor version is
+  at least <code>MACHINE_MINOR</code>. v0.1 cartridges require machine version 1.0.</p>
+
+  <h3>Fixed ROM image layout</h3>
+  <p>A complete 16 KiB logical image for <code>$C000&ndash;$FFFF</code>. Its first 256 bytes
+  correspond to <code>$C000&ndash;$C0FF</code>, hidden by the I/O page &mdash; packagers fill
+  those bytes with <code>$FF</code>.</p>
+  <table>
+    <tr><th>CPU address</th><th>Fixed-image offset</th></tr>
+    <tr><td>$C100</td><td>$0100</td></tr>
+    <tr><td>$FFFA NMI vector</td><td>$3FFA</td></tr>
+    <tr><td>$FFFC RESET vector</td><td>$3FFC</td></tr>
+    <tr><td>$FFFE IRQ/BRK vector</td><td>$3FFE</td></tr>
+  </table>
+
+  <h2>Save file naming and layout</h2>
+  <p>Native: <code>ASTRO.FCN &rarr; ASTRO.SAV</code>, beside the cartridge, keyed by path.
+  Browser: persistent storage keyed by <code>CARTRIDGE_ID</code>.</p>
+  <pre class="code">offset $0000  32-byte SAV header
+offset $0020  battery-backed RAM bytes</pre>
+  <table class="dense">
+    <tr><th>Off</th><th>Size</th><th>Type</th><th>Field</th><th>Meaning</th></tr>
+    <tr><td>$00</td><td>8</td><td>bytes</td><td>MAGIC</td><td><code>FCNSAVE</code> + $1A</td></tr>
+    <tr><td>$08</td><td>1</td><td>u8</td><td>FORMAT_MAJOR</td><td>$01</td></tr>
+    <tr><td>$09</td><td>1</td><td>u8</td><td>FORMAT_MINOR</td><td>$00</td></tr>
+    <tr><td>$0A</td><td>2</td><td>u16</td><td>HEADER_SIZE</td><td>$0020</td></tr>
+    <tr><td>$0C</td><td>8</td><td>u64</td><td>CARTRIDGE_ID</td><td>Must match the loaded cartridge</td></tr>
+    <tr><td>$14</td><td>4</td><td>u32</td><td>RAM_SIZE</td><td>Exact payload length</td></tr>
+    <tr><td>$18</td><td>4</td><td>u32</td><td>DATA_CRC32</td><td>CRC-32 of RAM payload</td></tr>
+    <tr><td>$1C</td><td>4</td><td>u32</td><td>HEADER_CRC32</td><td>CRC-32 of header bytes $00&ndash;$1B</td></tr>
+  </table>
+  <p><code>RAM_SIZE</code> must be 16, 32, 48, or 64 KiB, and the file must be exactly
+  <code>HEADER_SIZE + RAM_SIZE</code> bytes. If a valid save's <code>RAM_SIZE</code> does not
+  match <code>SAVE_BANKS &times; $4000</code> for the loading cartridge, Fanticon deletes it and
+  creates a fresh zero-filled save at the correct size.</p>
+
+  <h2>Mapper 0 (the only mapper in format 1.0)</h2>
+  <table>
+    <tr><th>BANK_KIND</th><th>Meaning</th><th>Bank range</th></tr>
+    <tr><td>$00</td><td>Cartridge ROM</td><td>0 to ROM_BANKS&minus;1</td></tr>
+    <tr><td>$01</td><td>Work RAM</td><td>0&ndash;3</td></tr>
+    <tr><td>$02</td><td>Video RAM</td><td>0&ndash;2</td></tr>
+    <tr><td>$03</td><td>Battery-backed save RAM</td><td>0 to SAVE_BANKS&minus;1</td></tr>
+  </table>
+
+  <h2>Loader validation order</h2>
+  <ol>
+    <li>Minimum length and magic</li>
+    <li>Supported major/minor version and header size</li>
+    <li>Known flags and mapper</li>
+    <li>ROM and save bank-count limits</li>
+    <li>Nonzero cartridge ID, valid title bytes, compatible machine version</li>
+    <li>Exact total file size</li>
+    <li>Header, fixed-ROM, and banked-ROM CRC values</li>
+    <li>Fixed-ROM vector presence</li>
+  </ol>
+  <p>This format stores no host paths, no executable host code, no compression stream, and no
+  embedded save data.</p>
+</div>

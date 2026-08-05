@@ -1,0 +1,154 @@
+<div class="divider-page hue-purple" id="part1">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 01</div>
+  <div class="divider-number">01</div>
+  <div class="divider-title">Welcome to<br>the Console</div>
+  <div class="divider-sub">What Fanticon is, why it is built this way, and how to get the host running on your machine.</div>
+  <div class="divider-contents">CH 0 WHAT IS FANTICON &middot; CH 1 INSTALL &amp; RUN THE HOST</div>
+</div>
+
+<div class="chapter" id="ch0">
+  <div class="chapter-kicker">CHAPTER 0 &middot; PART I</div>
+  <h1 class="chapter-title">What Is Fanticon?</h1>
+
+  <p class="lede">Fanticon is a fantasy console: an imaginary late-1980s home computer, emulated
+  down to the cycle. There was no 1988 Fanticon on store shelves, but every register, every
+  cycle, and every scanline in this machine behaves as documented here. You program it the way
+  developers programmed 8-bit hardware of that era: directly, in 6502 machine code, against
+  memory-mapped chips, with no operating system standing between your program and the metal.</p>
+
+  <p>That is the whole idea. Modern engines hide the machine from you. Fanticon hands it back.
+  Learning Fanticon means learning the NMOS 6502 CPU, a tile-and-sprite graphics architecture
+  in the tradition of the NES and similar consoles of its era, and a small PSG-style sound
+  architecture. Skills you build here transfer directly to retro game programming, emulator
+  development, and low-level systems work in general.</p>
+
+  <div class="box hw">
+    <div class="box-title">Hardware Snapshot</div>
+    NMOS 6502 CPU at 3.144 MHz &middot; 320&times;200 indexed-color video at 60 Hz &middot;
+    256-color palette (16 banks of 16) &middot; 32 hardware sprites &middot; two pulse, one
+    triangle, and one noise audio voice &middot; two controllers &middot; two interval timers
+    &middot; up to 4 MiB of banked cartridge ROM &middot; up to 64 KiB of battery-backed save RAM.
+  </div>
+
+  <h2>Why a fantasy console, and why this one</h2>
+  <p>Fantasy consoles exist to make retro-style game programming approachable without
+  requiring a shelf of forty-year-old hardware or the quirks of one specific dead platform.
+  Fanticon leans further into authenticity than most: rather than offering a friendly
+  high-level scripting API, it puts you directly on the bus with the same NMOS 6502 that
+  powered the Apple II, Commodore 64, NES, and Atari machines of the era, undocumented
+  opcodes and all, so code that depends on exact NMOS behavior works exactly as it would on
+  original hardware.</p>
+
+  <p>Fanticon borrows its mental model from several historical machines rather than cloning
+  any one of them:</p>
+  <ul>
+    <li>The 6502 and its memory-mapped I/O philosophy come from MOS Technology's own
+    documentation for the 6500 family.</li>
+    <li>Simple timers and shared interrupt flags follow the precedent set by the 6522 VIA,
+    a companion chip found in countless 6502-based machines.</li>
+    <li>The display borrows the programmable-raster philosophy of controllers like the
+    MC6845, combined with game-oriented tile and sprite fetchers.</li>
+    <li>The audio processing unit has the recognizable two-pulse, triangle, and noise shape
+    of the Nintendo Entertainment System, with a simpler, more direct register model.</li>
+  </ul>
+
+  <h2>Six design principles</h2>
+  <p>Every part of how Fanticon's hardware is put together follows from six principles baked
+  into the system architecture:</p>
+
+  <table>
+    <tr><th>Principle</th><th>What it means in practice</th></tr>
+    <tr><td>Small enough to memorize</td><td>The entire I/O map fits on one page. Every
+    standard device lives inside the 256-byte <code>$C000</code> page.</td></tr>
+    <tr><td>Hardware-shaped games</td><td>Tiles, sprites, palette banks, scanline timing,
+    interrupts, and bank switching are things your code actively manages &mdash; not
+    details an engine papers over.</td></tr>
+    <tr><td>No accidental bottlenecks</td><td>The CPU never has to redraw 64,000 pixels just
+    to move a character. Tile and sprite hardware does that work.</td></tr>
+    <tr><td>Cycle-deterministic</td><td>A cartridge behaves identically on every host and
+    can intentionally race the raster beam for effects like palette splits.</td></tr>
+    <tr><td>Friendly constraints</td><td>Direct registers replace historical interface
+    rituals (like serial controller strobing) that added cost without adding creative
+    value.</td></tr>
+    <tr><td>Room to grow</td><td>Reserved addresses read <code>$FF</code> and ignore writes
+    until a future hardware revision assigns them, so software written today keeps working.</td></tr>
+  </table>
+
+  <p>Fanticon is built around one tile-or-bitmap background layer plus 32 hardware sprites, a
+  direct 6502-driven bus, and a fixed 60&nbsp;Hz NTSC-rate timing model. Design around those
+  constraints deliberately &mdash; they are the same kind of constraints that shaped a
+  generation of 8-bit games, and Part&nbsp;VII of this book is dedicated to working with
+  them by genre.</p>
+
+  <p>The rest of this book walks the whole path: finding your way around the console, writing and
+  assembling your first program, drawing tiles and sprites, making sound, handling input and
+  interrupts, and finally packaging, optimizing, and shipping a cartridge. Reference
+  appendices at the back collect the complete opcode tables, memory map, and file formats for
+  when you need exact answers fast.</p>
+</div>
+
+<div class="chapter" id="ch1">
+  <div class="chapter-kicker">CHAPTER 1 &middot; PART I</div>
+  <h1 class="chapter-title">Launching Fanticon &amp; Finding Your Way Around</h1>
+
+  <p class="lede">This chapter assumes Fanticon is already installed on your machine. It is a
+  quick orientation to the app you are about to live inside for the rest of this book &mdash;
+  not a build guide.</p>
+
+  <h2>Starting up</h2>
+  <p>Open the Fanticon application. A resizable window appears at an 8:5 aspect ratio, the
+  centered Fanticon logo displays for five seconds, and then Fanticon drops you into the native
+  <strong>Editor mode</strong> command console &mdash; an 80&times;50 character-grid terminal
+  that is your home base for everything in this book. The logo ignores keyboard and mouse input
+  for its first 500&nbsp;ms so an accidental keypress on launch cannot skip past it; after that,
+  any key or click dismisses it early.</p>
+
+  <div class="box hw">
+    <div class="box-title">Two Modes, One Window</div>
+    <strong>Editor mode</strong> runs native host tools (the console, text editor, graphics
+    editor, music tracker, debugger) at 640&times;400. <strong>Game mode</strong> runs a
+    cartridge through the emulated 320&times;200 machine. Editor tools never execute on
+    the 6502 &mdash; they are ordinary native code, which keeps development responsive and
+    keeps Game mode's behavior accurate to cartridge execution. Press <span class="kbd">F1</span>
+    for Editor mode and <span class="kbd">F2</span> for Game mode at any time, or type
+    <code>EDITOR</code> / <code>GAME</code> at the prompt.
+  </div>
+
+  <h2>Launching a cartridge directly</h2>
+  <p>Most of the time you will build and launch a project from inside the editor with
+  <code>RUN</code> (Chapter&nbsp;5). Fanticon can also open one specific cartridge straight from
+  your operating system's command line, bypassing the editor entirely:</p>
+  <pre class="code">fanticon-app /path/to/GAME.FCN</pre>
+  <p>A cartridge launched this way ignores <span class="kbd">Escape</span> &mdash; there is no
+  editor to return to. A game launched from inside the editor with <code>RUN</code>, by
+  contrast, returns to the editor when you press <span class="kbd">Escape</span>, after
+  flushing any battery-backed save RAM to disk. Use whichever entry point matches what you are
+  doing: the direct launch for showing someone a finished game, <code>RUN</code> for everything
+  you are actively building.</p>
+
+  <h2>Your project folder</h2>
+  <p>The console's root directory (<code>/</code> at the <code>/&gt;</code> prompt) maps to a
+  folder on your computer: your operating system's Documents folder, inside a
+  <code>Fanticon</code> subdirectory. Fanticon creates it automatically the first time it runs
+  and never lets console paths escape it &mdash; everything you build and save lives there in
+  ordinary files you can also browse from outside Fanticon.</p>
+
+  <p>Fanticon ships with its example cartridges built in and mirrors them into that folder under
+  <code>/demos</code> the first time it runs, leaving anything else you have already created
+  elsewhere in the folder untouched. That gives you eight complete, working cartridges to read,
+  run, and take apart from day one.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It: Tour the Demos</div>
+    Once the console appears, type <code>DIR /demos</code> to list the eight example
+    cartridges installed with Fanticon: <code>audio</code>, <code>bitmap</code>,
+    <code>graphics</code>, <code>music</code>, <code>raster</code>, <code>sprites</code>,
+    <code>tiles</code>, and <code>wave</code>. Later chapters walk through every one of them.
+    Change into any folder and type <code>RUN</code> to build and launch it on the spot.
+  </div>
+
+  <hr class="rule">
+  <p>With Fanticon running and the demo cartridges in view, you are ready to meet the console
+  from the inside: the command prompt itself, in Chapter&nbsp;2.</p>
+</div>

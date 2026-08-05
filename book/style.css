@@ -1,0 +1,458 @@
+/* ============================================================
+   FANTICON DEVELOPER'S GUIDE -- retro 90s spiral-manual styles
+   ============================================================ */
+
+@page {
+  size: 8.5in 11in;
+  margin-top: 1in;
+  margin-bottom: 1in;
+  margin-left: 1.35in;
+  margin-right: 0.85in;
+  background-color: #f3ead9;
+
+  @top-right {
+    content: string(chapter);
+    font-family: "URW Gothic", sans-serif;
+    font-size: 8.5pt;
+    letter-spacing: 1.5px;
+    color: #6a5a3a;
+    text-transform: uppercase;
+    vertical-align: bottom;
+    padding-bottom: 6px;
+  }
+  @top-left {
+    content: "FANTICON DEVELOPER'S GUIDE";
+    font-family: "URW Gothic", sans-serif;
+    font-size: 8.5pt;
+    letter-spacing: 1.5px;
+    color: #6a5a3a;
+    vertical-align: bottom;
+    padding-bottom: 6px;
+  }
+  @bottom-center {
+    content: counter(page);
+    font-family: "Liberation Mono", monospace;
+    font-size: 9pt;
+    color: #6a5a3a;
+  }
+}
+
+/* Divider / part-opener pages: full bleed color, no spiral art showing through */
+@page divider {
+  margin: 0;
+  background-color: #17123a;
+  background-image: none;
+  @top-right { content: none; }
+  @top-left { content: none; }
+  @bottom-center { content: none; }
+}
+
+/* Cover page */
+@page cover {
+  margin: 0;
+  background-color: #050414;
+  background-image: none;
+  @top-right { content: none; }
+  @top-left { content: none; }
+  @bottom-center { content: none; }
+}
+
+/* Front-matter pages (colophon, TOC): spiral art, no running header text yet */
+@page frontmatter {
+  margin-top: 1in;
+  margin-bottom: 1in;
+  margin-left: 1.35in;
+  margin-right: 0.85in;
+  background-color: #f3ead9;
+  @top-right { content: none; }
+  @top-left { content: "FANTICON DEVELOPER'S GUIDE"; font-family:"URW Gothic",sans-serif; font-size:8.5pt; letter-spacing:1.5px; color:#6a5a3a; vertical-align: bottom; padding-bottom:6px; }
+  @bottom-center { content: counter(page); font-family:"Liberation Mono",monospace; font-size:9pt; color:#6a5a3a; }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #f3ead9;
+  color: #1c1730;
+  font-family: "Lato", "DejaVu Sans", sans-serif;
+  font-size: 10.6pt;
+  line-height: 1.5;
+}
+
+/* ---------- palette variables (kept as comments for reference) ----------
+   ink       #1c1730
+   paper     #f3ead9
+   paper-alt #ece0c8
+   cyan      #04b8c4
+   cyan-bright #03d8e4
+   purple    #5b3fe0
+   pink      #d63f9e
+   mustard   #e08a1e
+   green     #2f8f5b
+   term-bg   #12101f
+---------------------------------------------------------------------- */
+
+h1, h2, h3, h4 {
+  font-family: "URW Gothic", "Poppins", sans-serif;
+  font-weight: bold;
+  color: #3a1f8a;
+  letter-spacing: 0.5px;
+}
+
+/* ---------------- Cover ---------------- */
+.cover-page {
+  page: cover;
+  width: 8.5in;
+  height: 11in;
+  position: relative;
+  color: #f3ead9;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 30% 18%, rgba(214,63,158,0.35), transparent 42%),
+    radial-gradient(circle at 75% 78%, rgba(4,184,196,0.30), transparent 45%),
+    linear-gradient(160deg, #0a0724 0%, #1a1140 55%, #240f3a 100%);
+}
+.cover-grid {
+  position: absolute;
+  left: 0; right: 0; bottom: 0; height: 38%;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(4,216,228,0.32) 0, rgba(4,216,228,0.32) 2px, transparent 2px, transparent 56px),
+    repeating-linear-gradient(0deg, rgba(4,216,228,0.28) 0, rgba(4,216,228,0.28) 2px, transparent 2px, transparent 26px);
+  opacity: 0.55;
+  -webkit-mask-image: linear-gradient(to top, black, transparent);
+}
+.cover-content {
+  position: relative;
+  z-index: 2;
+  padding: 0.9in 0.9in 0 0.9in;
+  text-align: center;
+}
+.cover-eyebrow {
+  font-family: "Liberation Mono", monospace;
+  letter-spacing: 5px;
+  font-size: 11pt;
+  color: #6de8f2;
+  margin-bottom: 0.35in;
+}
+.cover-logo { width: 5.4in; margin: 0 auto 0.25in auto; display: block; }
+.cover-tagline {
+  font-family: "URW Gothic", sans-serif;
+  font-size: 15pt;
+  letter-spacing: 1px;
+  color: #f6c9ea;
+  margin-top: 0.05in;
+}
+.cover-badge {
+  margin: 0.55in auto 0 auto;
+  display: inline-block;
+  border: 2px solid #04d8e4;
+  color: #04d8e4;
+  font-family: "Liberation Mono", monospace;
+  padding: 8px 22px;
+  letter-spacing: 3px;
+  font-size: 10.5pt;
+  border-radius: 3px;
+}
+.cover-footer {
+  position: absolute;
+  bottom: 0.55in;
+  left: 0; right: 0;
+  text-align: center;
+  font-family: "Liberation Mono", monospace;
+  color: #9a8fc4;
+  font-size: 9.5pt;
+  letter-spacing: 2px;
+}
+
+/* ---------------- Divider / part-opener pages ---------------- */
+.divider-page {
+  page: divider;
+  width: 8.5in;
+  height: 11in;
+  position: relative;
+  color: #f3ead9;
+  overflow: hidden;
+}
+.divider-page.hue-cyan   { background: linear-gradient(150deg,#07242c 0%,#0a3b45 60%,#0a4a52 100%); }
+.divider-page.hue-purple { background: linear-gradient(150deg,#180b36 0%,#2c1360 60%,#37167a 100%); }
+.divider-page.hue-pink   { background: linear-gradient(150deg,#360b2e 0%,#5c1450 60%,#711660 100%); }
+.divider-page.hue-mustard{ background: linear-gradient(150deg,#33220a 0%,#553611 60%,#6b430f 100%); }
+.divider-page.hue-green  { background: linear-gradient(150deg,#0a2a1c 0%,#134a2f 60%,#155c38 100%); }
+.divider-page.hue-slate  { background: linear-gradient(150deg,#141626 0%,#232849 60%,#2b3160 100%); }
+.divider-page.hue-ink    { background: linear-gradient(150deg,#0c0c12 0%,#1a1a24 55%,#23232f 100%); }
+.divider-page.hue-coral  { background: linear-gradient(150deg,#3a0f12 0%,#5c151b 55%,#7a1f1f 100%); }
+
+.opcode-table th, .opcode-table td { border-bottom: 1px solid #d9c7a0; }
+.dense table { font-size: 8pt; }
+.dense td, .dense th { padding: 3px 5px; }
+
+.divider-scanlines {
+  position: absolute; inset: 0;
+  background-image: repeating-linear-gradient(0deg, rgba(0,0,0,0.16) 0, rgba(0,0,0,0.16) 1px, transparent 1px, transparent 4px);
+}
+.divider-cart {
+  position: absolute; top: 0.9in; left: 0.9in;
+  font-family: "Liberation Mono", monospace;
+  font-size: 11pt;
+  letter-spacing: 4px;
+  color: rgba(243,234,217,0.75);
+  border: 1.5px solid rgba(243,234,217,0.55);
+  padding: 5px 14px;
+  border-radius: 2px;
+}
+.divider-number {
+  position: absolute;
+  top: 2.0in; left: 0.85in;
+  font-family: "URW Gothic", sans-serif;
+  font-weight: bold;
+  font-size: 120pt;
+  color: rgba(243,234,217,0.12);
+  line-height: 1;
+}
+.divider-title {
+  position: absolute;
+  left: 0.9in; right: 0.9in; bottom: 2.35in;
+  font-family: "URW Gothic", sans-serif;
+  font-weight: bold;
+  font-size: 40pt;
+  line-height: 1.05;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.divider-sub {
+  position: absolute;
+  left: 0.9in; right: 0.9in; bottom: 1.55in;
+  font-family: "Lato", sans-serif;
+  font-size: 13pt;
+  color: rgba(243,234,217,0.85);
+  line-height: 1.5;
+}
+.divider-contents {
+  position: absolute;
+  left: 0.9in; right: 0.9in; bottom: 0.75in;
+  font-family: "Liberation Mono", monospace;
+  font-size: 9pt;
+  color: rgba(243,234,217,0.65);
+  letter-spacing: 1px;
+}
+
+/* ---------------- Front matter ---------------- */
+.frontmatter { page: frontmatter; }
+.colophon {
+  padding-top: 2.6in;
+  font-size: 9.6pt;
+  color: #4a4066;
+}
+.colophon h2 { font-size: 13pt; margin-bottom: 4px; }
+.colophon p { margin: 4px 0; }
+.colophon hr { border: none; border-top: 1px solid #cbb98f; margin: 14px 0; }
+
+.toc h1 { font-size: 22pt; margin-bottom: 4px; }
+.toc .toc-kicker { font-family:"Liberation Mono",monospace; letter-spacing:3px; color:#a05c9c; font-size:9pt; margin-bottom:14px;}
+.toc-part { margin-top: 18px; }
+.toc-part-title {
+  font-family: "URW Gothic", sans-serif;
+  font-weight: bold;
+  font-size: 12.5pt;
+  color: #5b3fe0;
+  border-bottom: 2px solid #5b3fe0;
+  padding-bottom: 3px;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.toc-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10pt;
+  padding: 2.5px 0;
+  border-bottom: 1px dotted #c9b98f;
+}
+.toc-row .t { color: #1c1730; }
+.toc-row .p {
+  font-family: "Liberation Mono", monospace;
+  color: #a05c9c;
+}
+.toc-row .p::after { content: target-counter(attr(href), page); }
+
+/* ---------------- Chapter body ---------------- */
+.chapter { break-before: page; }
+.chapter-kicker {
+  font-family: "Liberation Mono", monospace;
+  letter-spacing: 3px;
+  font-size: 9pt;
+  color: #a05c9c;
+  margin-bottom: 2px;
+  string-set: chapter content();
+}
+h1.chapter-title {
+  font-size: 21pt;
+  margin: 0 0 14px 0;
+  color: #241259;
+  border-bottom: 3px solid #04b8c4;
+  padding-bottom: 8px;
+}
+h2 {
+  font-size: 13.5pt;
+  margin: 20px 0 8px 0;
+  color: #7a1f6e;
+}
+h3 {
+  font-size: 11.5pt;
+  margin: 14px 0 6px 0;
+  color: #b5691a;
+}
+p { margin: 7px 0; text-align: left; orphans:3; widows:3; break-inside: avoid; }
+strong { color: #241259; }
+ul, ol { margin: 6px 0 10px 22px; padding: 0; }
+li { margin: 3px 0; break-inside: avoid; }
+
+.lede {
+  font-size: 11.5pt;
+  color: #3a1f8a;
+  border-left: 3px solid #d63f9e;
+  padding-left: 12px;
+  margin: 6px 0 16px 0;
+}
+
+/* callout boxes */
+.box {
+  border: 1.5px solid #cbb98f;
+  background: #ece0c8;
+  border-radius: 3px;
+  padding: 10px 14px;
+  margin: 12px 0;
+  font-size: 9.8pt;
+  break-inside: avoid;
+}
+.box-title {
+  font-family: "URW Gothic", sans-serif;
+  font-weight: bold;
+  letter-spacing: 1px;
+  font-size: 9.5pt;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.box.tip { border-color: #2f8f5b; background: #e4f0e5; }
+.box.tip .box-title { color: #2f8f5b; }
+.box.warn { border-color: #b5691a; background: #f4e6d3; }
+.box.warn .box-title { color: #b5691a; }
+.box.hw { border-color: #04b8c4; background: #dff2f3; }
+.box.hw .box-title { color: #067a83; }
+.box.try { border-color: #5b3fe0; background: #e8e2fb; }
+.box.try .box-title { color: #5b3fe0; }
+
+/* code blocks -- editor-accurate palette */
+pre.code {
+  background: #12101f;
+  color: #cdd6f4;
+  font-family: "Liberation Mono", monospace;
+  font-size: 8.6pt;
+  line-height: 1.45;
+  padding: 10px 12px;
+  border-radius: 3px;
+  margin: 10px 0;
+  white-space: pre-wrap;
+  border-left: 4px solid #04b8c4;
+  break-inside: avoid;
+}
+pre.code .lbl { color: #b4befe; }     /* labels - lavender */
+pre.code .op  { color: #89b4fa; }     /* instructions - blue */
+pre.code .dir { color: #cba6f7; }     /* directives - mauve */
+pre.code .num { color: #fab387; }     /* numeric literals - peach */
+pre.code .cmt { color: #9399b2; }     /* comments - muted */
+pre.code .str { color: #a6e3a1; }     /* strings - green */
+
+code, .kbd {
+  font-family: "Liberation Mono", monospace;
+  background: #ece0c8;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 9.4pt;
+  color: #7a1f6e;
+}
+.kbd {
+  background: #1c1730; color: #f3ead9; border-bottom: 2px solid #04b8c4;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 9pt;
+  break-inside: avoid;
+}
+table caption {
+  text-align: left;
+  font-family: "Liberation Mono", monospace;
+  font-size: 8.3pt;
+  color: #a05c9c;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+th {
+  background: #3a1f8a;
+  color: #f3ead9;
+  text-align: left;
+  padding: 5px 7px;
+  font-family: "URW Gothic", sans-serif;
+  letter-spacing: 0.5px;
+  font-size: 8.6pt;
+}
+td {
+  padding: 4px 7px;
+  border-bottom: 1px solid #d9c7a0;
+  vertical-align: top;
+}
+tr { break-inside: avoid; }
+/* Plain tables (tr as direct table children, header included in the count)
+   shade every even row. Tables split into thead/tbody -- so a repeated
+   header can survive a page break -- count from the first body row
+   instead, so the shading lands on the same rows either way. */
+table > tr:nth-child(even) td { background: #ece0c8; }
+tbody tr:nth-child(odd) td { background: #ece0c8; }
+thead { display: table-header-group; }
+
+/* Reference tables that legitimately run longer than one page (the opcode
+   appendix, the memory map) are allowed to split between rows -- a clean
+   row boundary, never mid-row -- rather than forcing a huge blank gap
+   while the whole table waits for a page it can never fully fit on. */
+.dense table, .opcode-table { break-inside: auto; }
+
+.reg-table th { background: #04889a; }
+.audio-table th { background: #a03f8e; }
+.opcode-table th { background: #b5691a; }
+.opcode-table td, .opcode-table th { text-align:center; padding: 3px 5px; font-size:8pt; }
+
+hr.rule { border: none; border-top: 2px dashed #cbb98f; margin: 18px 0; }
+
+.figure {
+  margin: 12px 0;
+  padding: 10px;
+  background: #ece0c8;
+  border: 1px solid #cbb98f;
+  border-radius: 3px;
+  font-family: "Liberation Mono", monospace;
+  font-size: 8.3pt;
+  white-space: pre;
+  color: #1c1730;
+  break-inside: avoid;
+}
+.figure-cap {
+  font-family: "Lato", sans-serif;
+  font-size: 8.6pt;
+  color: #6a5a3a;
+  margin-top: 6px;
+  font-style: italic;
+  white-space: normal;
+}
+
+.two-col { display: flex; gap: 18px; }
+.two-col > div { flex: 1; }
+
+.pagebreak { break-before: page; }
+.avoid-break { break-inside: avoid; }
+h1, h2 { break-after: avoid; }
+h3 { break-after: avoid; }

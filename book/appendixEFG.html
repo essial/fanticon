@@ -1,0 +1,48 @@
+<div class="chapter dense" id="appE">
+  <div class="chapter-kicker">APPENDIX E</div>
+  <h1 class="chapter-title">Demo Cartridge Index</h1>
+  <p class="lede">Every example cartridge ships under <code>/demos</code> the moment the host
+  boots. Each is small enough to read end to end in one sitting.</p>
+
+  <table>
+    <tr><th>Folder</th><th>Demonstrates</th><th>See</th></tr>
+    <tr><td><code>graphics</code></td><td>The complete .GFX/.PAL asset pipeline: edit patterns, a 64&times;32 map, attributes, and 16&times;16 sprite art, then load all of it into VRAM at runtime</td><td>Ch. 8</td></tr>
+    <tr><td><code>tiles</code></td><td>A full tilemap scroller driven by a VBlank IRQ reading controller 1; scroll registers wrap around a 320&times;200 map</td><td>Ch. 9</td></tr>
+    <tr><td><code>sprites</code></td><td>One hardware sprite, VBlank-driven movement, edge clipping, and signed coordinates</td><td>Ch. 10</td></tr>
+    <tr><td><code>bitmap</code></td><td>Filling the packed 320&times;200 bitmap across VRAM banks 1&ndash;2; visible multi-frame startup cost</td><td>Ch. 11</td></tr>
+    <tr><td><code>raster</code></td><td>Four horizontal color bands from raster IRQs alone, with zero framebuffer writes</td><td>Ch. 12</td></tr>
+    <tr><td><code>wave</code></td><td>A per-scanline raster IRQ bending tilemap scroll along a 128-step sine curve, timed against HBlank</td><td>Ch. 12</td></tr>
+    <tr><td><code>audio</code></td><td>All four voices together, with a VBlank IRQ changing the lead note and backdrop color in lockstep</td><td>Ch. 14</td></tr>
+    <tr><td><code>music</code></td><td>A complete tracker song ("Ode to Joy") plus <code>PLAYER.INC</code>, a reference cartridge music player</td><td>Ch. 15</td></tr>
+  </table>
+
+  <p>Every demo folder also carries its own <code>FANTICON.CFG</code> and <code>readme.txt</code>
+  &mdash; from any of them, <code>RUN</code> or <span class="kbd">F5</span> builds and launches
+  it on the spot.</p>
+</div>
+
+<div class="chapter dense" id="appF">
+  <div class="chapter-kicker">APPENDIX F</div>
+  <h1 class="chapter-title">Glossary</h1>
+
+  <table>
+    <tr><th>Term</th><th>Meaning</th></tr>
+    <tr><td>Bank</td><td>One 16 KiB slice of ROM, work RAM, VRAM, or save RAM, selectable into the $8000&ndash;$BFFF window</td></tr>
+    <tr><td>BCD</td><td>Binary-coded decimal; the NMOS decimal-mode arithmetic adjustment</td></tr>
+    <tr><td>Cartridge</td><td>A validated .FCN image: fixed ROM, banked ROM, and metadata</td></tr>
+    <tr><td>Fantasy console</td><td>An emulated machine with no historical hardware counterpart, built and documented as if it had one</td></tr>
+    <tr><td>Fixed ROM</td><td>The 16 KiB image always mapped at $C000&ndash;$FFFF, holding RESET and the CPU vectors</td></tr>
+    <tr><td>HBlank</td><td>Horizontal blanking; dots 320&ndash;399 of each scanline</td></tr>
+    <tr><td>IRQ</td><td>Maskable interrupt request; shared and software-prioritized among four sources</td></tr>
+    <tr><td>LFSR</td><td>Linear-feedback shift register; drives the noise channel's pseudo-random output</td></tr>
+    <tr><td>NMI</td><td>Non-maskable interrupt; reserved by v0.1, undriven by standard devices</td></tr>
+    <tr><td>NMOS 6502</td><td>The original MOS Technology 6502 variant Fanticon emulates, including undocumented opcodes, as distinct from the later CMOS 65C02</td></tr>
+    <tr><td>Page crossing</td><td>An indexed address whose high byte differs from its unindexed base &mdash; costs an extra CPU cycle on affected instructions</td></tr>
+    <tr><td>RGB332</td><td>An 8-bit color encoding: 3 bits red, 3 bits green, 2 bits blue</td></tr>
+    <tr><td>Raster</td><td>The simulated scanning beam that paints the display top to bottom, left to right, whose exact position code can read and race</td></tr>
+    <tr><td>VBlank</td><td>Vertical blanking; scanlines 200&ndash;261, when nothing visible is being drawn</td></tr>
+    <tr><td>VRAM</td><td>Video RAM; 48 KiB across three banks, holding patterns, maps, attributes, sprite records, or bitmap pixels</td></tr>
+    <tr><td>W1C</td><td>Write-one-to-clear; the acknowledgment pattern used by IRQ_PENDING</td></tr>
+    <tr><td>Zero page</td><td>Addresses $0000&ndash;$00FF, with shorter and faster addressing modes than the rest of memory</td></tr>
+  </table>
+</div>

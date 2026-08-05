@@ -1,0 +1,2987 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Fanticon Developer's Guide</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="cover-page">
+  <div class="cover-grid"></div>
+  <div class="cover-content">
+    <div class="cover-eyebrow">V0.1 &middot; NMOS 6502 &middot; 320&times;200 &middot; 4 VOICES</div>
+    <img class="cover-logo" src="assets/logo_transparent.png">
+    <div class="cover-tagline">DEVELOPER'S GUIDE</div>
+    <div class="cover-badge">MACHINE REFERENCE &amp; PROGRAMMING MANUAL</div>
+  </div>
+  <div class="cover-footer">SYSTEM VERSION 1.0</div>
+</div>
+
+<div class="frontmatter colophon">
+  <h2>Fanticon Developer's Guide</h2>
+  <p>The complete reference for programming the Fanticon system &mdash; the console, its
+  tools, and every register in between.</p>
+  <hr>
+  <p>Covers the Fanticon hardware, the native editor and command console, the macro assembler,
+  the graphics and music editors, and the complete memory map, opcode, and file-format
+  references, organized as a path from first power-on to a finished cartridge.</p>
+</div>
+
+<div class="frontmatter toc">
+  <div class="toc-kicker">TABLE OF CONTENTS</div>
+  <h1>Contents</h1>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part I &mdash; Welcome to the Console</div>
+    <div class="toc-row"><span class="t">Chapter 0. What Is Fanticon?</span><span class="p" href="#ch0"></span></div>
+    <div class="toc-row"><span class="t">Chapter 1. Launching Fanticon &amp; Finding Your Way Around</span><span class="p" href="#ch1"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part II &mdash; Your First Cartridge</div>
+    <div class="toc-row"><span class="t">Chapter 2. The Command Console</span><span class="p" href="#ch2"></span></div>
+    <div class="toc-row"><span class="t">Chapter 3. Meet the 6502</span><span class="p" href="#ch3"></span></div>
+    <div class="toc-row"><span class="t">Chapter 4. Hello, Fanticon!</span><span class="p" href="#ch4"></span></div>
+    <div class="toc-row"><span class="t">Chapter 5. Your First Cartridge</span><span class="p" href="#ch5"></span></div>
+    <div class="toc-row"><span class="t">Chapter 6. The Debugger</span><span class="p" href="#ch6"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part III &mdash; Graphics Programming</div>
+    <div class="toc-row"><span class="t">Chapter 7. Video Hardware Tour</span><span class="p" href="#ch7"></span></div>
+    <div class="toc-row"><span class="t">Chapter 8. The Graphics Editor</span><span class="p" href="#ch8"></span></div>
+    <div class="toc-row"><span class="t">Chapter 9. Tiles &amp; Scrolling Worlds</span><span class="p" href="#ch9"></span></div>
+    <div class="toc-row"><span class="t">Chapter 10. Sprites</span><span class="p" href="#ch10"></span></div>
+    <div class="toc-row"><span class="t">Chapter 11. Bitmap Mode</span><span class="p" href="#ch11"></span></div>
+    <div class="toc-row"><span class="t">Chapter 12. Raster Tricks</span><span class="p" href="#ch12"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part IV &mdash; Sound</div>
+    <div class="toc-row"><span class="t">Chapter 13. Audio Hardware Tour</span><span class="p" href="#ch13"></span></div>
+    <div class="toc-row"><span class="t">Chapter 14. Programming Sound Directly</span><span class="p" href="#ch14"></span></div>
+    <div class="toc-row"><span class="t">Chapter 15. The Music Tracker</span><span class="p" href="#ch15"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part V &mdash; Input, Interrupts &amp; Timing</div>
+    <div class="toc-row"><span class="t">Chapter 16. Controllers</span><span class="p" href="#ch16"></span></div>
+    <div class="toc-row"><span class="t">Chapter 17. Interrupts &amp; the IRQ Controller</span><span class="p" href="#ch17"></span></div>
+    <div class="toc-row"><span class="t">Chapter 18. Timers</span><span class="p" href="#ch18"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Part VI &mdash; Shipping a Game</div>
+    <div class="toc-row"><span class="t">Chapter 19. Bank Switching &amp; Memory Management</span><span class="p" href="#ch19"></span></div>
+    <div class="toc-row"><span class="t">Chapter 20. Packaging &amp; Save Files</span><span class="p" href="#ch20"></span></div>
+    <div class="toc-row"><span class="t">Chapter 21. Cycle-Accurate Optimization</span><span class="p" href="#ch21"></span></div>
+    <div class="toc-row"><span class="t">Chapter 22. Testing &amp; Shipping</span><span class="p" href="#ch22"></span></div>
+  </div>
+
+  <div class="toc-part pagebreak">
+    <div class="toc-part-title">Part VII &mdash; Game Development Patterns</div>
+    <div class="toc-row"><span class="t">Chapter 23. Game Loops, States &amp; Building a Main Menu</span><span class="p" href="#ch23"></span></div>
+    <div class="toc-row"><span class="t">Chapter 24. Side-Scrolling Games</span><span class="p" href="#ch24"></span></div>
+    <div class="toc-row"><span class="t">Chapter 25. Top-Down &amp; RPG-Style Games</span><span class="p" href="#ch25"></span></div>
+    <div class="toc-row"><span class="t">Chapter 26. Raster Effects in Practice</span><span class="p" href="#ch26"></span></div>
+    <div class="toc-row"><span class="t">Chapter 27. Palette Swapping &amp; Color Tricks</span><span class="p" href="#ch27"></span></div>
+  </div>
+
+  <div class="toc-part">
+    <div class="toc-part-title">Reference Appendices</div>
+    <div class="toc-row"><span class="t">Appendix A. Complete 6502 Opcode &amp; Cycle Reference</span><span class="p" href="#appA"></span></div>
+    <div class="toc-row"><span class="t">Appendix B. Complete Memory Map</span><span class="p" href="#appB"></span></div>
+    <div class="toc-row"><span class="t">Appendix C. Assembler Directive &amp; Macro Reference</span><span class="p" href="#appC"></span></div>
+    <div class="toc-row"><span class="t">Appendix D. Cartridge &amp; Save File Formats</span><span class="p" href="#appD"></span></div>
+    <div class="toc-row"><span class="t">Appendix E. Demo Cartridge Index</span><span class="p" href="#appE"></span></div>
+    <div class="toc-row"><span class="t">Appendix F. Glossary</span><span class="p" href="#appF"></span></div>
+  </div>
+</div>
+
+<div class="divider-page hue-purple" id="part1">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 01</div>
+  <div class="divider-number">01</div>
+  <div class="divider-title">Welcome to<br>the Console</div>
+  <div class="divider-sub">What Fanticon is, why it is built this way, and how to get the host running on your machine.</div>
+  <div class="divider-contents">CH 0 WHAT IS FANTICON &middot; CH 1 INSTALL &amp; RUN THE HOST</div>
+</div>
+
+<div class="chapter" id="ch0">
+  <div class="chapter-kicker">CHAPTER 0 &middot; PART I</div>
+  <h1 class="chapter-title">What Is Fanticon?</h1>
+
+  <p class="lede">Fanticon is a fantasy console: an imaginary late-1980s home computer, emulated
+  down to the cycle. There was no 1988 Fanticon on store shelves, but every register, every
+  cycle, and every scanline in this machine behaves as documented here. You program it the way
+  developers programmed 8-bit hardware of that era: directly, in 6502 machine code, against
+  memory-mapped chips, with no operating system standing between your program and the metal.</p>
+
+  <p>That is the whole idea. Modern engines hide the machine from you. Fanticon hands it back.
+  Learning Fanticon means learning the NMOS 6502 CPU, a tile-and-sprite graphics architecture
+  in the tradition of the NES and similar consoles of its era, and a small PSG-style sound
+  architecture. Skills you build here transfer directly to retro game programming, emulator
+  development, and low-level systems work in general.</p>
+
+  <div class="box hw">
+    <div class="box-title">Hardware Snapshot</div>
+    NMOS 6502 CPU at 3.144 MHz &middot; 320&times;200 indexed-color video at 60 Hz &middot;
+    256-color palette (16 banks of 16) &middot; 32 hardware sprites &middot; two pulse, one
+    triangle, and one noise audio voice &middot; two controllers &middot; two interval timers
+    &middot; up to 4 MiB of banked cartridge ROM &middot; up to 64 KiB of battery-backed save RAM.
+  </div>
+
+  <h2>Why a fantasy console, and why this one</h2>
+  <p>Fantasy consoles exist to make retro-style game programming approachable without
+  requiring a shelf of forty-year-old hardware or the quirks of one specific dead platform.
+  Fanticon leans further into authenticity than most: rather than offering a friendly
+  high-level scripting API, it puts you directly on the bus with the same NMOS 6502 that
+  powered the Apple II, Commodore 64, NES, and Atari machines of the era, undocumented
+  opcodes and all, so code that depends on exact NMOS behavior works exactly as it would on
+  original hardware.</p>
+
+  <p>Fanticon borrows its mental model from several historical machines rather than cloning
+  any one of them:</p>
+  <ul>
+    <li>The 6502 and its memory-mapped I/O philosophy come from MOS Technology's own
+    documentation for the 6500 family.</li>
+    <li>Simple timers and shared interrupt flags follow the precedent set by the 6522 VIA,
+    a companion chip found in countless 6502-based machines.</li>
+    <li>The display borrows the programmable-raster philosophy of controllers like the
+    MC6845, combined with game-oriented tile and sprite fetchers.</li>
+    <li>The audio processing unit has the recognizable two-pulse, triangle, and noise shape
+    of the Nintendo Entertainment System, with a simpler, more direct register model.</li>
+  </ul>
+
+  <h2>Six design principles</h2>
+  <p>Every part of how Fanticon's hardware is put together follows from six principles baked
+  into the system architecture:</p>
+
+  <table>
+    <tr><th>Principle</th><th>What it means in practice</th></tr>
+    <tr><td>Small enough to memorize</td><td>The entire I/O map fits on one page. Every
+    standard device lives inside the 256-byte <code>$C000</code> page.</td></tr>
+    <tr><td>Hardware-shaped games</td><td>Tiles, sprites, palette banks, scanline timing,
+    interrupts, and bank switching are things your code actively manages &mdash; not
+    details an engine papers over.</td></tr>
+    <tr><td>No accidental bottlenecks</td><td>The CPU never has to redraw 64,000 pixels just
+    to move a character. Tile and sprite hardware does that work.</td></tr>
+    <tr><td>Cycle-deterministic</td><td>A cartridge behaves identically on every host and
+    can intentionally race the raster beam for effects like palette splits.</td></tr>
+    <tr><td>Friendly constraints</td><td>Direct registers replace historical interface
+    rituals (like serial controller strobing) that added cost without adding creative
+    value.</td></tr>
+    <tr><td>Room to grow</td><td>Reserved addresses read <code>$FF</code> and ignore writes
+    until a future hardware revision assigns them, so software written today keeps working.</td></tr>
+  </table>
+
+  <p>Fanticon is built around one tile-or-bitmap background layer plus 32 hardware sprites, a
+  direct 6502-driven bus, and a fixed 60&nbsp;Hz NTSC-rate timing model. Design around those
+  constraints deliberately &mdash; they are the same kind of constraints that shaped a
+  generation of 8-bit games, and Part&nbsp;VII of this book is dedicated to working with
+  them by genre.</p>
+
+  <p>The rest of this book walks the whole path: finding your way around the console, writing and
+  assembling your first program, drawing tiles and sprites, making sound, handling input and
+  interrupts, and finally packaging, optimizing, and shipping a cartridge. Reference
+  appendices at the back collect the complete opcode tables, memory map, and file formats for
+  when you need exact answers fast.</p>
+</div>
+
+<div class="chapter" id="ch1">
+  <div class="chapter-kicker">CHAPTER 1 &middot; PART I</div>
+  <h1 class="chapter-title">Launching Fanticon &amp; Finding Your Way Around</h1>
+
+  <p class="lede">This chapter assumes Fanticon is already installed on your machine. It is a
+  quick orientation to the app you are about to live inside for the rest of this book &mdash;
+  not a build guide.</p>
+
+  <h2>Starting up</h2>
+  <p>Open the Fanticon application. A resizable window appears at an 8:5 aspect ratio, the
+  centered Fanticon logo displays for five seconds, and then Fanticon drops you into the native
+  <strong>Editor mode</strong> command console &mdash; an 80&times;50 character-grid terminal
+  that is your home base for everything in this book. The logo ignores keyboard and mouse input
+  for its first 500&nbsp;ms so an accidental keypress on launch cannot skip past it; after that,
+  any key or click dismisses it early.</p>
+
+  <div class="box hw">
+    <div class="box-title">Two Modes, One Window</div>
+    <strong>Editor mode</strong> runs native host tools (the console, text editor, graphics
+    editor, music tracker, debugger) at 640&times;400. <strong>Game mode</strong> runs a
+    cartridge through the emulated 320&times;200 machine. Editor tools never execute on
+    the 6502 &mdash; they are ordinary native code, which keeps development responsive and
+    keeps Game mode's behavior accurate to cartridge execution. Press <span class="kbd">F1</span>
+    for Editor mode and <span class="kbd">F2</span> for Game mode at any time, or type
+    <code>EDITOR</code> / <code>GAME</code> at the prompt.
+  </div>
+
+  <h2>Launching a cartridge directly</h2>
+  <p>Most of the time you will build and launch a project from inside the editor with
+  <code>RUN</code> (Chapter&nbsp;5). Fanticon can also open one specific cartridge straight from
+  your operating system's command line, bypassing the editor entirely:</p>
+  <pre class="code">fanticon-app /path/to/GAME.FCN</pre>
+  <p>A cartridge launched this way ignores <span class="kbd">Escape</span> &mdash; there is no
+  editor to return to. A game launched from inside the editor with <code>RUN</code>, by
+  contrast, returns to the editor when you press <span class="kbd">Escape</span>, after
+  flushing any battery-backed save RAM to disk. Use whichever entry point matches what you are
+  doing: the direct launch for showing someone a finished game, <code>RUN</code> for everything
+  you are actively building.</p>
+
+  <h2>Your project folder</h2>
+  <p>The console's root directory (<code>/</code> at the <code>/&gt;</code> prompt) maps to a
+  folder on your computer: your operating system's Documents folder, inside a
+  <code>Fanticon</code> subdirectory. Fanticon creates it automatically the first time it runs
+  and never lets console paths escape it &mdash; everything you build and save lives there in
+  ordinary files you can also browse from outside Fanticon.</p>
+
+  <p>Fanticon ships with its example cartridges built in and mirrors them into that folder under
+  <code>/demos</code> the first time it runs, leaving anything else you have already created
+  elsewhere in the folder untouched. That gives you eight complete, working cartridges to read,
+  run, and take apart from day one.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It: Tour the Demos</div>
+    Once the console appears, type <code>DIR /demos</code> to list the eight example
+    cartridges installed with Fanticon: <code>audio</code>, <code>bitmap</code>,
+    <code>graphics</code>, <code>music</code>, <code>raster</code>, <code>sprites</code>,
+    <code>tiles</code>, and <code>wave</code>. Later chapters walk through every one of them.
+    Change into any folder and type <code>RUN</code> to build and launch it on the spot.
+  </div>
+
+  <hr class="rule">
+  <p>With Fanticon running and the demo cartridges in view, you are ready to meet the console
+  from the inside: the command prompt itself, in Chapter&nbsp;2.</p>
+</div>
+
+<div class="divider-page hue-cyan" id="part2">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 02</div>
+  <div class="divider-number">02</div>
+  <div class="divider-title">Your First<br>Cartridge</div>
+  <div class="divider-sub">The command console, the 6502 in brief, your first assembled program, a running cartridge, and the debugger that watches it think.</div>
+  <div class="divider-contents">CH 2 CONSOLE &middot; CH 3 THE 6502 &middot; CH 4 HELLO FANTICON &middot; CH 5 FIRST CARTRIDGE &middot; CH 6 DEBUGGER</div>
+</div>
+
+<div class="chapter" id="ch2">
+  <div class="chapter-kicker">CHAPTER 2 &middot; PART II</div>
+  <h1 class="chapter-title">The Command Console</h1>
+
+  <p class="lede">Everything in Fanticon starts at the prompt. The console is a native tool
+  &mdash; it never runs on the emulated 6502 &mdash; so it stays fast and responsive no matter
+  what your cartridge is doing.</p>
+
+  <h2>The filesystem</h2>
+  <p>Console paths are lowercase and accept either <code>/</code> or <code>\</code> as a
+  separator. Every file and directory name follows the classic 8.3 rule: 1&ndash;8 characters,
+  an optional dot, and a 1&ndash;3 character extension, using letters, digits, <code>_</code>,
+  and <code>-</code> only. New names are created lowercase; an existing mixed-case folder such
+  as <code>MyGame</code> is matched case-insensitively as <code>mygame</code>. Absolute paths
+  begin at Fanticon's <code>/</code>, and <code>..</code> can never climb above it.</p>
+
+  <table>
+    <tr><th>Command</th><th>Effect</th></tr>
+    <tr><td><code>HELP</code></td><td>List current commands</td></tr>
+    <tr><td><code>CLS</code> / <code>CLEAR</code></td><td>Clear the terminal</td></tr>
+    <tr><td><code>MODE</code></td><td>Print the active application mode</td></tr>
+    <tr><td><code>EDITOR</code> / <code>GAME</code></td><td>Switch application mode</td></tr>
+    <tr><td><code>ECHO text</code></td><td>Print text</td></tr>
+    <tr><td><code>VERSION</code></td><td>Print the Fanticon host version</td></tr>
+    <tr><td><code>COLOR [BG FG]</code></td><td>Show or set the console's background/foreground palette indexes</td></tr>
+    <tr><td><code>EDIT [file]</code></td><td>Open the text editor</td></tr>
+    <tr><td><code>CD [path]</code></td><td>Change directory, or print the current one</td></tr>
+    <tr><td><code>MKDIR</code> / <code>RMDIR path</code></td><td>Create / remove an empty directory</td></tr>
+    <tr><td><code>RM</code> / <code>DEL file</code></td><td>Remove one file</td></tr>
+    <tr><td><code>DIR [path]</code> / <code>LS [path]</code></td><td>List a directory</td></tr>
+    <tr><td><code>ASM source [output]</code> / <code>BUILD</code></td><td>Assemble source, or build the current project</td></tr>
+    <tr><td><code>RUN [file.fcn]</code></td><td>Build &amp; launch the project, or launch an image</td></tr>
+    <tr><td><code>DUMP file [offset [length]]</code></td><td>Hex/ASCII dump of a file</td></tr>
+  </table>
+
+  <p>Unknown commands print a visible error and return you to the prompt &mdash; nothing is
+  silent. Backspace edits the current line, Enter submits it, and output scrolls once it
+  reaches the bottom row.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It: DUMP</div>
+    <code>DUMP</code> shows any file eight bytes per row, sized to the 40-column display, with
+    addresses, byte values, and printable ASCII in distinct colors. Zero-filled regions are
+    dimmed so they visually recede. Try <code>DUMP /demos/sprites/MAIN.ASM</code> or, once you
+    have built something, <code>DUMP HELLO.BIN $80 64</code> to inspect 64 bytes starting at
+    offset <code>$80</code>. Numeric arguments accept decimal, <code>$hex</code>, or
+    <code>0xhex</code>.
+  </div>
+
+  <h2>The text editor</h2>
+  <p>Run <code>EDIT</code> for a blank document or <code>EDIT NOTES.TXT</code> to load a file
+  from the current directory. It is Fanticon's own tool, drawn with the same character display
+  as the console &mdash; not your operating system's native text box.</p>
+
+  <p>The menu bar has six menus, opened with <span class="kbd">F10</span>/<span class="kbd">Alt</span>
+  or their own hotkey: <strong>File</strong> (<span class="kbd">Alt+F</span>), <strong>Edit</strong>
+  (<span class="kbd">Alt+E</span>), <strong>Build</strong> (<span class="kbd">Alt+B</span>),
+  <strong>Debug</strong> (<span class="kbd">Alt+D</span>), <strong>Music</strong>
+  (<span class="kbd">Alt+M</span>), and <strong>Help</strong> (<span class="kbd">Alt+H</span>).
+  On macOS, <span class="kbd">Option+F</span>/<span class="kbd">Option+E</span> work the same
+  way and <span class="kbd">Cmd</span> doubles for <span class="kbd">Ctrl</span> shortcuts.</p>
+
+  <table>
+    <tr><th>Shortcut</th><th>Action</th></tr>
+    <tr><td><span class="kbd">Ctrl/Cmd+N</span> / <span class="kbd">O</span> / <span class="kbd">S</span></td><td>New / Open / Save</td></tr>
+    <tr><td><span class="kbd">F2</span> / <span class="kbd">F3</span></td><td>Save / Open shortcut</td></tr>
+    <tr><td><span class="kbd">Ctrl/Cmd+A/C/X/V/Z</span></td><td>Select All / Copy / Cut / Paste / Undo</td></tr>
+    <tr><td><span class="kbd">F5</span> or <span class="kbd">Ctrl/Cmd+B</span></td><td>Assemble the current buffer</td></tr>
+    <tr><td><span class="kbd">F4</span> / <span class="kbd">Shift+F4</span></td><td>Next / previous build diagnostic</td></tr>
+    <tr><td><span class="kbd">Shift+F5</span></td><td>Build &amp; Run</td></tr>
+  </table>
+
+  <p>Opening or saving a file ending in <code>.ASM</code> or <code>.INC</code> automatically
+  switches on <strong>6502 assembly mode</strong>: a Merlin-inspired four-column layout
+  (label, opcode, operand, comment, at fixed columns), Catppuccin Mocha syntax coloring, and
+  Tab-to-next-field editing. This is the mode you will live in for the rest of the book.</p>
+
+  <div class="box tip">
+    <div class="box-title">Tip</div>
+    In assembly mode, pressing Enter at the end of a line reformats it into the four-column
+    layout immediately. Selecting text with Shift deliberately suppresses reformatting, so you
+    can select and copy source without Fanticon rewriting it out from under you.
+  </div>
+</div>
+
+<div class="chapter" id="ch3">
+  <div class="chapter-kicker">CHAPTER 3 &middot; PART II</div>
+  <h1 class="chapter-title">Meet the 6502</h1>
+
+  <p class="lede">This chapter is a working primer, not the complete reference &mdash; the
+  full opcode and cycle tables, addressing-mode formulas, and undocumented-instruction
+  catalog live in Appendix&nbsp;A for when you need exact answers.</p>
+
+  <h2>Registers</h2>
+  <table>
+    <tr><th>Register</th><th>Width</th><th>Purpose</th></tr>
+    <tr><td><code>A</code></td><td>8 bits</td><td>Accumulator &mdash; arithmetic, logic, most data movement</td></tr>
+    <tr><td><code>X</code>, <code>Y</code></td><td>8 bits</td><td>Index registers &mdash; indexed addressing, loop counters</td></tr>
+    <tr><td><code>SP</code></td><td>8 bits</td><td>Stack pointer; the physical stack address is <code>$0100 + SP</code></td></tr>
+    <tr><td><code>PC</code></td><td>16 bits</td><td>Address of the next instruction byte</td></tr>
+    <tr><td><code>P</code></td><td>8 bits</td><td>Status flags, written <code>NV-BDIZC</code></td></tr>
+  </table>
+  <p>The 6502 is an 8-bit, little-endian processor addressing 65,536 bytes, <code>$0000</code>
+  through <code>$FFFF</code>. All arithmetic wraps: incrementing <code>$FF</code> yields
+  <code>$00</code>. A 16-bit value stored at address <code>$2000</code> keeps its low byte at
+  <code>$2000</code> and high byte at <code>$2001</code>.</p>
+
+  <h2>Status flags (<code>NV-BDIZC</code>)</h2>
+  <table>
+    <tr><th>Bit</th><th>Flag</th><th>Set means&hellip;</th></tr>
+    <tr><td>7</td><td><code>N</code> Negative</td><td>Result bit 7 is 1</td></tr>
+    <tr><td>6</td><td><code>V</code> Overflow</td><td>Signed arithmetic overflowed</td></tr>
+    <tr><td>3</td><td><code>D</code> Decimal</td><td><code>ADC</code>/<code>SBC</code> use BCD adjustment</td></tr>
+    <tr><td>2</td><td><code>I</code> Interrupt disable</td><td>Maskable IRQ is ignored</td></tr>
+    <tr><td>1</td><td><code>Z</code> Zero</td><td>The result was zero</td></tr>
+    <tr><td>0</td><td><code>C</code> Carry</td><td>Carry / no-borrow / shifted-out bit</td></tr>
+  </table>
+  <p>For subtraction and comparison, <code>C=1</code> means <strong>no borrow</strong> &mdash;
+  after <code>CMP value</code>, <code>C=1</code> means <code>A &gt;= value</code> unsigned.</p>
+
+  <h2>Zero page, the stack, and vectors</h2>
+  <p>Every 6502 program leans on three fixed regions:</p>
+  <table>
+    <tr><th>Address</th><th>Purpose</th></tr>
+    <tr><td><code>$0000&ndash;$00FF</code></td><td>Zero page &mdash; shorter, faster addressing</td></tr>
+    <tr><td><code>$0100&ndash;$01FF</code></td><td>Hardware stack</td></tr>
+    <tr><td><code>$FFFA&ndash;$FFFB</code></td><td>NMI vector</td></tr>
+    <tr><td><code>$FFFC&ndash;$FFFD</code></td><td>RESET vector</td></tr>
+    <tr><td><code>$FFFE&ndash;$FFFF</code></td><td>IRQ/BRK vector</td></tr>
+  </table>
+  <p>Reset does <em>not</em> give you a known <code>A</code>, <code>X</code>, or <code>Y</code>.
+  Every program should establish its own starting state explicitly:</p>
+  <pre class="code"><span class="lbl">RESET</span>    <span class="op">SEI</span>             <span class="cmt">; mask IRQ while initializing</span>
+         <span class="op">CLD</span>             <span class="cmt">; use binary arithmetic</span>
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">$FF</span>
+         <span class="op">TXS</span>             <span class="cmt">; begin with a known stack position</span>
+         <span class="cmt">; ...initialize RAM and Fanticon devices here...</span>
+         <span class="op">CLI</span>             <span class="cmt">; enable interrupts only once handlers are ready</span>
+<span class="lbl">MAIN</span>     <span class="op">JMP</span>   MAIN</pre>
+
+  <h2>Addressing modes, briefly</h2>
+  <table>
+    <tr><th>Mode</th><th>Example</th><th>What it addresses</th></tr>
+    <tr><td>Immediate</td><td><code>LDA #$40</code></td><td>The literal byte <code>$40</code></td></tr>
+    <tr><td>Zero page</td><td><code>LDA $40</code></td><td>Address <code>$0040</code></td></tr>
+    <tr><td>Zero page,X</td><td><code>LDA $40,X</code></td><td><code>($40+X) &amp; $FF</code> &mdash; wraps in zero page</td></tr>
+    <tr><td>Absolute</td><td><code>LDA $2040</code></td><td>Address <code>$2040</code></td></tr>
+    <tr><td>Absolute,X/Y</td><td><code>LDA $2040,X</code></td><td><code>$2040 + X</code></td></tr>
+    <tr><td>Indirect indexed</td><td><code>LDA ($40),Y</code></td><td>Read a pointer from zero page, then add Y &mdash; the classic buffer-walking mode</td></tr>
+    <tr><td>Indexed indirect</td><td><code>LDA ($40,X)</code></td><td>Read a pointer from <code>($40+X)&amp;$FF</code> &mdash; selects among adjacent pointers</td></tr>
+  </table>
+
+  <h2>The instruction families</h2>
+  <p>You do not need to memorize all 151 official mnemonics before writing your first program
+  &mdash; most 6502 code leans on a small working set:</p>
+  <ul>
+    <li><strong>Move data:</strong> <code>LDA/LDX/LDY</code>, <code>STA/STX/STY</code>, <code>TAX/TAY/TXA/TYA/TSX/TXS</code></li>
+    <li><strong>Do arithmetic:</strong> <code>ADC</code>, <code>SBC</code>, <code>INC/DEC</code>, <code>INX/INY/DEX/DEY</code> &mdash; remember to <code>CLC</code>/<code>SEC</code> before a chain</li>
+    <li><strong>Compare and branch:</strong> <code>CMP/CPX/CPY</code>, then <code>BEQ/BNE/BCC/BCS/BMI/BPL/BVC/BVS</code></li>
+    <li><strong>Logic and shifts:</strong> <code>AND/ORA/EOR</code>, <code>ASL/LSR/ROL/ROR</code>, and <code>BIT</code> for testing memory without touching <code>A</code></li>
+    <li><strong>Control flow:</strong> <code>JMP</code>, <code>JSR</code>/<code>RTS</code> for subroutines, <code>BRK</code>/<code>RTI</code> for interrupts</li>
+    <li><strong>Stack and flags:</strong> <code>PHA/PLA</code>, <code>PHP/PLP</code>, <code>SEI/CLI</code>, <code>SEC/CLC</code>, <code>SED/CLD</code></li>
+  </ul>
+
+  <div class="box warn">
+    <div class="box-title">A Cycle-Accurate CPU</div>
+    Fanticon emulates exact NMOS bus timing, including page-crossing penalties, dummy reads
+    before indexed stores, and the famous <code>JMP ($12FF)</code> page-wrap bug. This matters
+    the moment you memory-map a device register: never use a read-modify-write instruction
+    (like <code>INC</code> or <code>ASL</code>) on a hardware register unless its documentation
+    explicitly allows the extra reads and writes that instruction performs. Chapters 7
+    onward call this out wherever it applies.
+  </div>
+
+  <p>With registers, flags, addressing, and a safe reset routine in hand, you have everything
+  needed to write and assemble code &mdash; which is exactly what Chapter&nbsp;4 does.</p>
+</div>
+
+<div class="chapter" id="ch4">
+  <div class="chapter-kicker">CHAPTER 4 &middot; PART II</div>
+  <h1 class="chapter-title">Hello, Fanticon!</h1>
+
+  <p class="lede">Every Fanticon program starts life the same way: as source text assembled
+  into raw bytes. This chapter builds your first one and gets comfortable with the
+  assemble-fail-fix loop before Chapter&nbsp;5 turns it into something that runs on
+  screen.</p>
+
+  <h2>Write the source</h2>
+  <p>Type <code>EDIT HELLO.ASM</code> at the console. Assembly mode switches on automatically
+  because of the <code>.ASM</code> extension. Enter this short program:</p>
+  <pre class="code">         <span class="dir">ORG</span>   <span class="num">$8000</span>
+<span class="lbl">START</span>    <span class="op">LDX</span>   <span class="dir">#</span><span class="num">0</span>
+<span class="lbl">LOOP</span>     <span class="op">LDA</span>   MESSAGE,X
+         <span class="op">BEQ</span>   DONE
+         <span class="op">INX</span>
+         <span class="op">BNE</span>   LOOP
+<span class="lbl">DONE</span>     <span class="op">RTS</span>
+<span class="lbl">MESSAGE</span>  <span class="dir">ASC</span>   <span class="str">"HELLO, FANTICON"</span>
+         <span class="dir">DFB</span>   <span class="num">0</span>
+         <span class="dir">END</span></pre>
+  <p>This does not draw anything yet &mdash; it is a raw subroutine that walks a
+  null-terminated string in <code>X</code> until it hits the zero byte written by
+  <code>DFB 0</code>. That is deliberate. The goal here is the assembler workflow itself:
+  labels, <code>ORG</code>, string data, and a clean assemble.</p>
+
+  <h2>Assemble it</h2>
+  <p>Press <span class="kbd">F5</span> (or <span class="kbd">Ctrl/Cmd+B</span>). Fanticon shows
+  a progress dialog, then a success dialog reporting the output filename, its origin address,
+  and its byte count &mdash; <code>HELLO.BIN</code>, origin <code>$8000</code>, 21 bytes. The
+  same thing happens from the console with:</p>
+  <pre class="code">ASM HELLO.ASM</pre>
+  <p>By default the output file swaps the source extension for <code>.BIN</code>. Now look at
+  the bytes you produced:</p>
+  <pre class="code">DUMP HELLO.BIN</pre>
+  <p>You should see <code>A2 00 BD 09 80 F0 06 E8 D0 F7 60 48 45 4C 4C 4F...</code> &mdash;
+  <code>LDX #0</code> as opcode <code>$A2</code>, immediate operand <code>$00</code>, then the
+  absolute-indexed <code>LDA MESSAGE,X</code> as <code>$BD</code> with the resolved address of
+  <code>MESSAGE</code>, and finally your ASCII string. The assembler turned your labels into
+  addresses and your text into raw bytes &mdash; nothing more.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It: Break It on Purpose</div>
+    Change <code>BEQ DONE</code> to <code>BEQ NOWHERE</code> (a label that does not exist) and
+    assemble again. A build-error dialog appears with the exact diagnostic, the editor jumps to
+    the offending line, and that line turns red. Press <span class="kbd">F4</span> to jump
+    between multiple errors. Fix the typo and the red tint clears the moment you edit the line.
+    At the console, the same failure prints as <code>source:line:column message</code> and no
+    new binary is written &mdash; a bad build never silently overwrites a good one.
+  </div>
+
+  <h2>Numbers, strings, and directives you just used</h2>
+  <table>
+    <tr><th>Directive</th><th>Purpose</th></tr>
+    <tr><td><code>ORG expr</code></td><td>Set the address for the bytes that follow</td></tr>
+    <tr><td><code>name EQU expr</code></td><td>Define a named constant</td></tr>
+    <tr><td><code>DFB</code> / <code>DB</code> / <code>BYTE</code></td><td>Emit bytes or strings</td></tr>
+    <tr><td><code>DW</code> / <code>DA</code> / <code>WORD</code></td><td>Emit 16-bit values, low byte first</td></tr>
+    <tr><td><code>ASC</code> / <code>TEXT</code></td><td>Emit a quoted ASCII string</td></tr>
+    <tr><td><code>HEX</code></td><td>Emit hex byte pairs directly</td></tr>
+    <tr><td><code>DS expr</code></td><td>Reserve and zero-fill a number of bytes</td></tr>
+    <tr><td><code>PUT</code> / <code>USE</code> / <code>INCLUDE</code></td><td>Assemble another file at this point</td></tr>
+    <tr><td><code>END</code></td><td>Mark the logical end of source</td></tr>
+  </table>
+  <p><code>$</code> or <code>0x</code> prefixes hexadecimal, <code>%</code> prefixes binary,
+  and bare digits are decimal. <code>&lt;</code> and <code>&gt;</code> extract the low and high
+  byte of an expression &mdash; you will use those constantly once you start loading 16-bit
+  pointers. The full directive, expression, and Merlin-style macro reference is in
+  Appendix&nbsp;C.</p>
+
+  <p>You now have a working assemble loop. Chapter&nbsp;5 wraps a program like this one in a
+  cartridge project, points the CPU at it on reset, and puts a color on screen for the
+  first time.</p>
+</div>
+
+<div class="chapter" id="ch5">
+  <div class="chapter-kicker">CHAPTER 5 &middot; PART II</div>
+  <h1 class="chapter-title">Your First Cartridge</h1>
+
+  <p class="lede">A raw <code>.BIN</code> is code and data. A cartridge is a game. This
+  chapter builds the smallest possible one: a project that boots straight to a solid color on
+  the emulated 320&times;200 display.</p>
+
+  <h2>The project manifest</h2>
+  <p>A cartridge project is simply a directory containing <code>FANTICON.CFG</code>: plain
+  ASCII, one <code>KEY=VALUE</code> line at a time. Create a folder &mdash; say
+  <code>/hello</code> &mdash; and inside it a manifest:</p>
+  <pre class="code"><span class="dir">TITLE</span>=HELLO FANTICON
+<span class="dir">ID</span>=1A2B3C4D5E6F7788
+<span class="dir">MAIN</span>=MAIN.ASM
+<span class="dir">OUTPUT</span>=HELLO.FCN
+<span class="dir">SAVE_BANKS</span>=0
+<span class="dir">MACHINE</span>=1.0</pre>
+  <table>
+    <tr><th>Key</th><th>Rule</th></tr>
+    <tr><td><code>TITLE</code></td><td>1&ndash;22 printable ASCII characters; spaces allowed</td></tr>
+    <tr><td><code>ID</code></td><td>Exactly 16 hex digits, never zero &mdash; a stable save-file identity</td></tr>
+    <tr><td><code>MAIN</code></td><td>8.3 path to the root assembly source</td></tr>
+    <tr><td><code>OUTPUT</code></td><td>8.3 <code>.FCN</code> output filename</td></tr>
+    <tr><td><code>SAVE_BANKS</code></td><td>0&ndash;4 battery-backed 16&nbsp;KiB banks</td></tr>
+    <tr><td><code>MACHINE</code></td><td>Required hardware version &mdash; <code>1.0</code> for v0.1</td></tr>
+  </table>
+  <p>Inside Fanticon, <code>NEW PROJECT</code> scaffolds this manifest for you and generates a
+  cryptographically random, nonzero 64-bit <code>ID</code> once; ordinary rebuilds never change
+  it, because that ID is what ties a save file to this game for life. Unknown keys are a build
+  error, so keep the manifest to exactly these six.</p>
+
+  <h2>Sections: BANK and FIXED</h2>
+  <p>Cartridge assembly adds two section directives on top of everything from
+  Chapter&nbsp;4. <code>FIXED</code> selects the 16&nbsp;KiB image that is always mapped at
+  <code>$C000&ndash;$FFFF</code> &mdash; your reset code and vectors live here.
+  <code>BANK 0&ndash;255</code> selects a switchable 16&nbsp;KiB image at
+  <code>$8000&ndash;$BFFF</code> for everything too big to fit in fixed ROM. A minimal
+  cartridge only needs <code>FIXED</code>.</p>
+
+  <h2>MAIN.ASM</h2>
+  <p>Create <code>MAIN.ASM</code> next to the manifest:</p>
+  <pre class="code"><span class="lbl">VCTRL</span>    <span class="dir">EQU</span>   <span class="num">$C011</span>
+<span class="lbl">BGCOLOR</span>  <span class="dir">EQU</span>   <span class="num">$C012</span>
+
+         <span class="dir">FIXED</span>
+         <span class="dir">ORG</span>   <span class="num">$C100</span>
+<span class="lbl">RESET</span>    <span class="op">SEI</span>
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">$FF</span>
+         <span class="op">TXS</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   VCTRL       <span class="cmt">; background + sprites off</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$3B</span>
+         <span class="op">STA</span>   BGCOLOR     <span class="cmt">; backdrop shows through -- pick any RGB332 byte</span>
+         <span class="op">CLI</span>
+<span class="lbl">IDLE</span>     <span class="op">JMP</span>   IDLE
+
+         <span class="dir">ORG</span>   <span class="num">$FFFA</span>
+         <span class="dir">DA</span>    RESET,RESET,RESET   <span class="cmt">; NMI, RESET, IRQ/BRK</span></pre>
+  <p>Every cartridge's fixed ROM must supply all three CPU vectors, even ones it never uses.
+  With <code>VIDEO_CONTROL</code> (<code>$C011</code>) set to zero, both the background and
+  sprite layers are disabled and the display shows nothing but <code>BACKDROP_COLOR</code>
+  (<code>$C012</code>) &mdash; a full 8-bit palette index, so all 256 programmable colors are
+  available even with everything else turned off. <code>RESET</code> must live in fixed ROM or
+  main RAM, and reset code cannot assume any switchable bank other than bank&nbsp;0 is mapped
+  yet &mdash; which is exactly why this program never touches <code>BANK_NUMBER</code> at all.</p>
+
+  <h2>Build and run it</h2>
+  <p>From <code>/hello</code>, type:</p>
+  <pre class="code">RUN</pre>
+  <p>This builds the manifest into a validated <code>HELLO.FCN</code> and launches it
+  immediately &mdash; the same action as <strong>Build &amp; Run</strong> (<span class="kbd">Shift+F5</span>)
+  in the editor. The window switches to the 320&times;200 game display and fills with your
+  chosen color. Press <span class="kbd">Escape</span> to return to the editor.</p>
+  <p>Use <code>BUILD</code> alone to package without launching, and
+  <code>RUN GAME.FCN</code> to validate and launch an existing image directly &mdash; useful
+  once you start keeping built cartridges around separately from their source projects.</p>
+
+  <div class="box tip">
+    <div class="box-title">What Just Got Validated</div>
+    Building a project does more than assemble source. The packager writes the fixed image
+    followed by every referenced bank, fills every unwritten ROM byte with <code>$FF</code>,
+    and writes a 64-byte header containing bank counts, the machine version, your title, your
+    cartridge ID, and CRC-32 checksums of the fixed and banked ROM. A loader validates all of
+    it &mdash; magic bytes, version, flags, bank counts, a nonzero ID, exact file size, every
+    checksum, and the presence of all three vectors &mdash; before a single byte reaches the
+    CPU. Chapter&nbsp;20 covers the full format.
+  </div>
+
+  <p>You have a running cartridge. The rest of this book is almost entirely about what
+  you can put inside <code>RESET</code> and the interrupt handlers next to it &mdash;
+  graphics, sound, input, and timing. First, meet the tool that lets you watch this program
+  think, one instruction at a time.</p>
+</div>
+
+<div class="chapter" id="ch6">
+  <div class="chapter-kicker">CHAPTER 6 &middot; PART II</div>
+  <h1 class="chapter-title">The Debugger</h1>
+
+  <p class="lede">Fanticon's debugger is editor-owned: it starts with Build &amp; Run, stops
+  the entire virtual machine cold at a breakpoint, and never advances CPU, video, timer, input,
+  or audio state while you are looking at it &mdash; so nothing keeps running behind your back.</p>
+
+  <h2>Starting a session</h2>
+  <p>Open <code>MAIN.ASM</code> from Chapter&nbsp;5 and press <span class="kbd">F9</span> on
+  the <code>STA BGCOLOR</code> line to set a breakpoint &mdash; the source gutter marks it with
+  <code>@</code>. Press <span class="kbd">F5</span> (Build &amp; Run). The VM runs at full
+  speed and immediately stops on your breakpoint, marked with an arrow in the gutter.</p>
+
+  <table>
+    <tr><th>Key</th><th>Debug action</th></tr>
+    <tr><td><span class="kbd">F5</span></td><td>Build &amp; Run when stopped; continue when paused</td></tr>
+    <tr><td><span class="kbd">F6</span></td><td>Pause a running editor-owned game</td></tr>
+    <tr><td><span class="kbd">Shift+F5</span></td><td>Stop the debug session</td></tr>
+    <tr><td><span class="kbd">F9</span></td><td>Toggle a source breakpoint on the current line</td></tr>
+    <tr><td><span class="kbd">F10</span></td><td>Step over <code>JSR</code>, or step one instruction otherwise</td></tr>
+    <tr><td><span class="kbd">F11</span></td><td>Step one 6502 instruction</td></tr>
+    <tr><td><span class="kbd">Shift+F11</span></td><td>Run until the current subroutine returns</td></tr>
+    <tr><td><span class="kbd">Ctrl/Cmd+F11</span></td><td>Step one CPU/bus cycle</td></tr>
+  </table>
+  <p>A breakpoint placed on a label or other non-emitting line resolves forward to the next
+  line that emits bytes, so you can drop breakpoints on labels without thinking about it.</p>
+
+  <h2>What the paused panel tells you</h2>
+  <p>While stopped, Fanticon shows CPU registers and flags, stack bytes, memory around the
+  program counter, the currently mapped bank, IRQ state, raster position, every APU channel's
+  control/timer state and current output, the stop reason, and the eight most recently
+  executed instructions. Step with <span class="kbd">F11</span> and watch <code>BGCOLOR</code>'s
+  value land in <code>A</code>, then get written on the following <code>STA</code>.</p>
+
+  <h2>Watchpoints and raster breakpoints</h2>
+  <p>The <strong>Debug</strong> menu also creates 16-bit memory-read and memory-write
+  watchpoints, plus raster breakpoints entered as <code>LINE,DOT</code> &mdash; useful once you
+  are chasing an effect timed to an exact scanline in Chapter&nbsp;12. Debugger raster stops
+  land on CPU cycle boundaries: every two video dots in machine&nbsp;1.0.</p>
+
+  <div class="box hw">
+    <div class="box-title">What the Debugger Gives You</div>
+    CPU instruction breakpoints, memory read/write watchpoints, single-instruction and
+    single-cycle stepping, full register/stack/bank/IRQ/raster/APU inspection, raster-position
+    breakpoints, and a complete VM pause &mdash; enough to build a debugging workflow
+    around any cartridge you are developing.
+  </div>
+
+  <p>You can now write, assemble, run, and step through 6502 code with confidence. Part III
+  puts something worth looking at on that screen &mdash; starting with how Fanticon's video
+  hardware works.</p>
+</div>
+
+<div class="divider-page hue-pink" id="part3">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 03</div>
+  <div class="divider-number">03</div>
+  <div class="divider-title">Graphics<br>Programming</div>
+  <div class="divider-sub">The video hardware, the visual graphics editor, tile worlds, sprites, bitmap mode, and racing the raster beam.</div>
+  <div class="divider-contents">CH 7 VIDEO TOUR &middot; CH 8 GRAPHICS EDITOR &middot; CH 9 TILES &amp; SCROLLING &middot; CH 10 SPRITES &middot; CH 11 BITMAP MODE &middot; CH 12 RASTER TRICKS</div>
+</div>
+
+<div class="chapter" id="ch7">
+  <div class="chapter-kicker">CHAPTER 7 &middot; PART III</div>
+  <h1 class="chapter-title">Video Hardware Tour</h1>
+
+  <p class="lede">Fanticon always outputs a fixed 320&times;200 indexed-color image at 60&nbsp;Hz.
+  Every game picks one background mode and may overlay the same 32 hardware sprites over
+  either of them.</p>
+
+  <table class="reg-table">
+    <caption>TABLE 7.1 &mdash; VIDEO_MODE ($C010)</caption>
+    <tr><th>Value</th><th>Mode</th></tr>
+    <tr><td>0</td><td>Blank &mdash; backdrop color only</td></tr>
+    <tr><td>1</td><td>320&times;200 viewport into a 64&times;32 map of 8&times;8, 4-bpp tiles</td></tr>
+    <tr><td>2</td><td>Packed 320&times;200, 4-bpp bitmap</td></tr>
+  </table>
+  <p>This is one background layer. Tile mode is the
+  efficient default for action games; bitmap mode suits illustration-heavy adventures,
+  paint-style games, and software-rendered effects. Sprites work identically over either one.</p>
+
+  <h2>The palette</h2>
+  <p>There are 256 palette entries, arranged as 16 banks of 16 colors, each entry one RGB332
+  byte. Tile and sprite pixels store a 4-bit color number and select one of the 16 banks; a
+  whole bitmap shares a single bank chosen by <code>BITMAP_PALETTE</code>. Color 0 is
+  <strong>transparent</strong> for sprites but <strong>opaque</strong> for backgrounds.</p>
+  <pre class="code"><span class="lbl">PALINDEX</span> <span class="dir">EQU</span>   <span class="num">$C01B</span>
+<span class="lbl">PALDATA</span>  <span class="dir">EQU</span>   <span class="num">$C01C</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$20</span>       <span class="cmt">; start at bank 2, entry 0</span>
+         <span class="op">STA</span>   PALINDEX
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">11100000</span> <span class="cmt">; RGB332: R=7 G=0 B=0 -- bright red</span>
+         <span class="op">STA</span>   PALDATA    <span class="cmt">; index auto-increments after every read or write</span></pre>
+  <p>At reset, entry <code>N</code> already contains RGB332 byte <code>N</code> &mdash; an
+  identity palette. Components expand to full 8-bit color with rounding:
+  <code>R=round(R3&times;255/7)</code>, <code>G=round(G3&times;255/7)</code>,
+  <code>B=round(B2&times;255/3)</code>, before the host's CRT presentation pass runs.</p>
+
+  <h2>Video registers at a glance</h2>
+  <table>
+    <tr><th>Address</th><th>Name</th><th>Purpose</th></tr>
+    <tr><td><code>$C010</code></td><td><code>VIDEO_MODE</code></td><td>Blank, tile, or bitmap background</td></tr>
+    <tr><td><code>$C011</code></td><td><code>VIDEO_CONTROL</code></td><td>Bit 0 background enable, bit 1 sprite enable</td></tr>
+    <tr><td><code>$C012</code></td><td><code>BACKDROP_COLOR</code></td><td>Full 8-bit palette index shown when the background is off</td></tr>
+    <tr><td><code>$C013&ndash;$C016</code></td><td><code>SCROLL_X</code>/<code>SCROLL_Y</code></td><td>Signed 16-bit tilemap scroll</td></tr>
+    <tr><td><code>$C017&ndash;$C01A</code></td><td><code>RASTER_X</code>/<code>RASTER_Y</code></td><td>Raster-compare target</td></tr>
+    <tr><td><code>$C01B/$C01C</code></td><td><code>PALETTE_INDEX</code>/<code>DATA</code></td><td>Palette read/write with auto-increment</td></tr>
+    <tr><td><code>$C01D</code></td><td><code>BITMAP_PALETTE</code></td><td>Palette bank for the whole bitmap</td></tr>
+    <tr><td><code>$C01E</code></td><td><code>VIDEO_STATUS</code></td><td>Live VBlank/HBlank, latched sprite overflow</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th><code>VIDEO_STATUS</code> field</th></tr>
+    <tr><td>0</td><td>Live VBlank</td></tr>
+    <tr><td>1</td><td>Live HBlank</td></tr>
+    <tr><td>2</td><td>Sprite overflow, latched for the current frame</td></tr>
+    <tr><td>7&ndash;3</td><td>Reserved</td></tr>
+  </table>
+  <p>HBlank covers dots 320&ndash;399; VBlank covers lines 200&ndash;261; overflow clears at
+  line 0, dot 0. Reading the register clears nothing &mdash; you explicitly acknowledge
+  interrupt sources instead, as Chapter&nbsp;17 covers.</p>
+
+  <div class="box hw">
+    <div class="box-title">Master Timing</div>
+    60&nbsp;Hz frames, 262 scanlines each, 400 dots per scanline, 320&times;200 visible. The
+    video dot clock is 6.288&nbsp;MHz &mdash; exactly two dots per 3.144&nbsp;MHz CPU cycle
+    &mdash; giving 200 CPU cycles per scanline and 52,400 per frame. VRAM is dual-ported: v0.1
+    has no CPU wait states or display-induced bus contention, so writes land exactly where you
+    time them, and never stall your program.
+  </div>
+
+  <p>Chapter&nbsp;8 introduces the visual tool you will use to author tiles, maps,
+  sprite art, and palettes, before Chapters 9&ndash;11 put each mode to work.</p>
+</div>
+
+<div class="chapter" id="ch8">
+  <div class="chapter-kicker">CHAPTER 8 &middot; PART III</div>
+  <h1 class="chapter-title">The Graphics Editor</h1>
+
+  <p class="lede">Fanticon graphics are edited as <code>.GFX</code> documents, right in the
+  normal editor tab strip, alongside a shared <code>.PAL</code> palette document that every
+  image can reference. Both are plain ASCII, valid assembler input, and editable visually
+  <em>or</em> as source with <span class="kbd">Ctrl/Cmd+G</span>.</p>
+
+  <h2>Creating one</h2>
+  <p>Choose <strong>File &gt; New Graphics</strong> (<span class="kbd">Ctrl/Cmd+Shift+N</span>).
+  A new <code>.GFX</code> file references <code>GAME.PAL</code>; if that file does not exist
+  yet, the editor creates a default DawnBringer DB16 palette automatically. DB16 color 0 maps
+  to RGB332 <code>$00</code> (true black) rather than quantizing DB16's very dark purple, which
+  would otherwise pick up an unwanted red cast.</p>
+
+  <h2>One shared library, three views</h2>
+  <p>There is exactly one library of 256 reusable 8&times;8 patterns shared by everything on
+  screen:</p>
+  <ol>
+    <li><strong>Pattern</strong> edits one reusable 8&times;8 image.</li>
+    <li><strong>Map</strong> places those patterns into the 64&times;32 circular background.</li>
+    <li><strong>16&times;16 Sprite</strong> edits four consecutive patterns together as one composite.</li>
+  </ol>
+  <p>Change a pattern and every map cell and sprite referencing it updates &mdash; there is
+  only one copy. Press number keys to switch views: <span class="kbd">1</span> pattern sheet,
+  <span class="kbd">2</span> the pannable 40&times;25 map viewport, <span class="kbd">3</span>
+  the 16&times;16 sprite composite, <span class="kbd">4</span> the palette, <span class="kbd">5</span>
+  the packed 320&times;200 bitmap. Drawing tools are <span class="kbd">P</span> Pencil,
+  <span class="kbd">F</span> connected Fill, and <span class="kbd">I</span> Eyedropper, with
+  <span class="kbd">H</span>/<span class="kbd">V</span> flips and <span class="kbd">R</span>
+  rotation in Pattern view.</p>
+
+  <div class="box tip">
+    <div class="box-title">The Circular Map</div>
+    In Map view, arrow keys pan the viewport one tile at a time and <strong>wrap at all four
+    map edges</strong> &mdash; every one of the 64&times;32 cells is directly reachable and
+    editable, including the seam. That circularity is not just an editor convenience; it is
+    exactly how the hardware scroll registers work, which is what makes infinite scrolling
+    possible in Chapter&nbsp;9.
+  </div>
+
+  <h2>Palette banks in practice</h2>
+  <p>A typical project assigns palette banks by role, not by image:</p>
+  <pre class="code">bank 0  UI and text
+bank 1  player
+bank 2  enemies
+bank 3  current level
+bank 8  title bitmap</pre>
+  <p>Palette view offers <code>DB16</code>, <code>PICO-8</code>, <code>C64</code>, and
+  <code>EGA</code> presets &mdash; click one or press <span class="kbd">N</span>/<span class="kbd">Shift+N</span>
+  to replace just the selected bank. <span class="kbd">R</span>/<span class="kbd">G</span>/<span class="kbd">B</span>
+  nudge a color's RGB332 component up, Shift down. Every edit is undoable.</p>
+
+  <h2>What gets saved</h2>
+  <p>A new tilemap-mode <code>.GFX</code> file begins:</p>
+  <pre class="code"><span class="cmt">;@FANTICON-GFX 3</span>
+<span class="cmt">;@PALETTE-FILE GAME.PAL</span>
+<span class="cmt">;@MODE TILEMAP</span></pre>
+  <p>Saving <code>WORLD.GFX</code> generates three hardware-native blocks under
+  <code>;@TILES</code>, <code>;@MAP</code>, and <code>;@ATTRIBUTES</code> markers, exposed to
+  your code as the labels <code>WORLD_CHR</code>, <code>WORLD_MAP</code>, and
+  <code>WORLD_ATR</code>. A palette file exposes one label, e.g. <code>GAME_PAL</code>, after
+  its own <code>;@FANTICON-PAL 1</code> header. Because both are ordinary assembler source,
+  pulling them into a cartridge is one line each:</p>
+  <pre class="code">         <span class="dir">FIXED</span>
+         <span class="dir">ORG</span>   <span class="num">$D000</span>
+         <span class="dir">PUT</span>   GAME.PAL
+         <span class="dir">PUT</span>   WORLD.GFX</pre>
+  <p>Visual saves always produce canonical uppercase hex, and returning from the ASCII source
+  view validates every marker and block size &mdash; malformed data stays visible with a
+  readable error instead of being silently truncated. Because palette references are explicit
+  text, sharing and changing palettes stays visible in ordinary source control diffs.</p>
+
+  <h2>Loading the palette at runtime</h2>
+  <p><code>GAME_PAL</code> is the complete 256-byte table &mdash; all 16 banks, back to back
+  &mdash; so loading it is one pass through <code>PALINDEX</code>/<code>PALDATA</code>, letting
+  the auto-increment do the addressing for you. Unlike tile and sprite data, the palette
+  registers sit in the fixed <code>$C000&ndash;$C0FF</code> I/O page, not the bank window, so
+  no bank switch is needed before or during this loop:</p>
+  <pre class="code"><span class="lbl">PALINDEX</span> <span class="dir">EQU</span>   <span class="num">$C01B</span>
+<span class="lbl">PALDATA</span>  <span class="dir">EQU</span>   <span class="num">$C01C</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>       <span class="cmt">; start at bank 0, entry 0</span>
+         <span class="op">STA</span>   PALINDEX
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">$00</span>
+<span class="lbl">.LOOP</span>    <span class="op">LDA</span>   GAME_PAL,X
+         <span class="op">STA</span>   PALDATA     <span class="cmt">; writes entry X, then PALINDEX advances on its own</span>
+         <span class="op">INX</span>
+         <span class="op">BNE</span>   .LOOP       <span class="cmt">; X wraps 255-&gt;0, ending the loop after exactly 256 writes</span></pre>
+  <p>The <code>INX</code>/<code>BNE</code> pair is the standard 6502 idiom for a full 256-byte
+  pass: <code>X</code> counts <code>0</code> through <code>255</code> and wrapping back to
+  <code>0</code> clears the zero flag's complement, so <code>BNE</code> falls through exactly
+  once, after the 256th byte. The same loop works for a partial table &mdash; compare
+  <code>CPX</code> against the byte count instead of relying on the wrap &mdash; which is what
+  you want when loading just one or two banks rather than the whole file.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It</div>
+    Open <code>/demos/graphics/SCENE.GFX</code> and <code>GAME.PAL</code>. Pan the map with
+    arrow keys, then open <code>MAIN.ASM</code> in the same folder to see the complete runtime
+    path from ROM to screen: <code>PUT</code> the palette and graphics resources, upload the
+    palette through <code>PALDATA</code>, stage GFX pages through RAM, copy patterns/map/attributes
+    to VRAM, and finally build a sprite from patterns 4&ndash;7. Run it with <code>RUN</code>
+    or <span class="kbd">F5</span>.
+  </div>
+</div>
+
+<div class="chapter" id="ch9">
+  <div class="chapter-kicker">CHAPTER 9 &middot; PART III</div>
+  <h1 class="chapter-title">Tiles &amp; Scrolling Worlds</h1>
+
+  <p class="lede">Tile mode VRAM holds a pattern library, a 64&times;32 tile-number map, and a
+  matching attribute map &mdash; 12,288 bytes total, small enough to fit in a single 16&nbsp;KiB
+  cartridge bank.</p>
+
+  <table>
+    <tr><th>VRAM offset</th><th>Size</th><th>Contents</th></tr>
+    <tr><td><code>$0000&ndash;$1FFF</code></td><td>8 KiB</td><td>256 packed 4-bpp, 8&times;8 tile patterns</td></tr>
+    <tr><td><code>$2000&ndash;$27FF</code></td><td>2,048 B</td><td>64&times;32 tile-number map</td></tr>
+    <tr><td><code>$2800&ndash;$2FFF</code></td><td>2,048 B</td><td>64&times;32 tile-attribute map</td></tr>
+    <tr><td><code>$3000&ndash;$30FF</code></td><td>256 B</td><td>32 eight-byte sprite records</td></tr>
+  </table>
+  <p>Every pattern byte packs two pixels &mdash; high nibble left, low nibble right &mdash; so
+  no runtime unpacking is ever needed:</p>
+  <pre class="code">tile pattern offset = tile_number &times; 32
+tilemap offset      = tile_y &times; 64 + tile_x
+tile number byte    = $2000 + tilemap offset
+tile attribute byte = $2800 + tilemap offset</pre>
+  <p>Each attribute byte packs five fields:</p>
+  <table>
+    <tr><th>Bit</th><th>Field</th></tr>
+    <tr><td>7</td><td>Reserved</td></tr>
+    <tr><td>6</td><td>Foreground priority</td></tr>
+    <tr><td>5</td><td>Vertical flip</td></tr>
+    <tr><td>4</td><td>Horizontal flip</td></tr>
+    <tr><td>3&ndash;0</td><td>Palette bank, 0&ndash;15</td></tr>
+  </table>
+  <p>A tile's foreground-priority bit lets it cover every sprite regardless of that sprite's own
+  behind-background flag &mdash; the one hard rule for layering platforms above characters.</p>
+
+  <h2>Loading a set at runtime</h2>
+  <p>Copy <code>WORLD_CHR</code> to VRAM <code>$0000</code>, <code>WORLD_MAP</code> to
+  <code>$2000</code>, and <code>WORLD_ATR</code> to <code>$2800</code> &mdash; exact sizes
+  <code>$2000</code>, <code>$0800</code>, and <code>$0800</code>. All three live in VRAM bank
+  0, alongside the sprite table from Chapter&nbsp;10. Because banked ROM and VRAM share the same
+  <code>$8000&ndash;$BFFF</code> window, a loader stages each piece through main RAM: map the
+  ROM bank in, copy it out to RAM, map VRAM bank 0 in, copy from RAM into it. Chapter&nbsp;19
+  builds a small reusable <code>PAGECOPY</code> routine for exactly this relay; here it is
+  loading <code>WORLD_MAP</code> from a switchable cartridge bank, the way a full multi-level
+  game would keep its tile sets:</p>
+  <pre class="code"><span class="lbl">BANKKIND</span> <span class="dir">EQU</span>   <span class="num">$C000</span>
+<span class="lbl">BANKNUM</span>  <span class="dir">EQU</span>   <span class="num">$C001</span>
+<span class="lbl">VMODE</span>    <span class="dir">EQU</span>   <span class="num">$C010</span>
+<span class="lbl">VCTRL</span>    <span class="dir">EQU</span>   <span class="num">$C011</span>
+
+         <span class="cmt">; leg 1: WORLD_MAP's cartridge bank -&gt; the STAGE buffer in RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   BANKKIND     <span class="cmt">; cartridge ROM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span>BANKOF(WORLD_MAP)
+         <span class="op">STA</span>   BANKNUM
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;WORLD_MAP
+         <span class="op">STA</span>   SRC
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;WORLD_MAP
+         <span class="op">STA</span>   SRC+1
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;STAGE
+         <span class="op">STA</span>   DST
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;STAGE
+         <span class="op">STA</span>   DST+1
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>            <span class="cmt">; the tile-number map is 2,048 bytes = 8 pages</span>
+         <span class="op">JSR</span>   PAGECOPY
+
+         <span class="cmt">; leg 2: STAGE -&gt; the tile-number map in VRAM bank 0</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$02</span>
+         <span class="op">STA</span>   BANKKIND     <span class="cmt">; video RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   BANKNUM      <span class="cmt">; patterns, map, attributes, and sprites all live in bank 0</span>
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;STAGE
+         <span class="op">STA</span>   SRC
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;STAGE
+         <span class="op">STA</span>   SRC+1
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;<span class="num">$A000</span>    <span class="cmt">; $8000 + $2000, the tile-number map's offset</span>
+         <span class="op">STA</span>   DST
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;<span class="num">$A000</span>
+         <span class="op">STA</span>   DST+1
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>
+         <span class="op">JSR</span>   PAGECOPY
+
+         <span class="cmt">; WORLD_CHR (8 KiB = 32 pages, -&gt; $8000) and WORLD_ATR (8 pages,</span>
+         <span class="cmt">; -&gt; $A800) load the same way -- change SRC, DST, and the page count</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">1</span>
+         <span class="op">STA</span>   VMODE       <span class="cmt">; tilemap mode</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000011</span>
+         <span class="op">STA</span>   VCTRL       <span class="cmt">; background + sprites on</span></pre>
+
+  <h2>Scrolling that never ends</h2>
+  <p><code>SCROLL_X</code> and <code>SCROLL_Y</code> are independent signed 16-bit values that
+  wrap the viewport across a 512&times;256-pixel circular tile map. Increasing X moves the
+  viewport right; increasing Y moves it down. Decrementing zero to <code>$FFFF</code> scrolls
+  smoothly left or up by one pixel &mdash; the wrap is seamless in both directions.</p>
+  <p>Treat the 64&times;32 map as a ring buffer for a world larger than it: keep world-space
+  camera coordinates in RAM, write their low 16 bits to the scroll registers, and map a world
+  tile <code>(wx,wy)</code> to hardware cell <code>(wx &amp; 63, wy &amp; 31)</code>. A fully
+  scrolled 320&times;200 viewport occupies at most 41&times;26 cells, leaving at least 23
+  hidden columns and 6 hidden rows &mdash; plenty of room to repaint the next row or column of
+  the map during VBlank, just before it scrolls into view.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It</div>
+    <code>/demos/tiles</code> builds a full 64&times;32 tilemap and uses a VBlank IRQ to sample
+    controller&nbsp;1: arrow keys scroll freely in every direction, and the 16-bit scroll
+    registers wrap smoothly around the whole map with no visible seam. Read <code>MAIN.ASM</code>
+    to see the VBlank-driven input pattern you will reuse constantly starting in Chapter&nbsp;17.
+  </div>
+</div>
+
+<div class="chapter" id="ch10">
+  <div class="chapter-kicker">CHAPTER 10 &middot; PART III</div>
+  <h1 class="chapter-title">Sprites</h1>
+
+  <p class="lede">Fanticon gives you 32 hardware sprites, each an eight-byte record at VRAM
+  <code>$3000 + sprite_number &times; 8</code>, evaluated in record order every scanline.</p>
+
+  <table>
+    <tr><th>Offset</th><th>Name</th><th>Meaning</th></tr>
+    <tr><td>0</td><td><code>X_LOW</code></td><td>X position bits 0&ndash;7</td></tr>
+    <tr><td>1</td><td><code>X_FLAGS</code></td><td>Bit 0: X bit 8. Bit 1: behind-background priority</td></tr>
+    <tr><td>2</td><td><code>Y</code></td><td>Y position</td></tr>
+    <tr><td>3</td><td><code>TILE</code></td><td>First pattern tile</td></tr>
+    <tr><td>4</td><td><code>ATTR</code></td><td>Enable, size, flips, and palette &mdash; see below</td></tr>
+  </table>
+
+  <table>
+    <tr><th>Bit</th><th><code>ATTR</code> field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6</td><td>16&times;16 size (0 = 8&times;8)</td></tr>
+    <tr><td>5</td><td>Vertical flip</td></tr>
+    <tr><td>4</td><td>Horizontal flip</td></tr>
+    <tr><td>3&ndash;0</td><td>Palette bank, 0&ndash;15</td></tr>
+  </table>
+
+  <p>An 8&times;8 sprite uses one pattern tile. A 16&times;16 sprite uses four consecutive
+  tiles arranged <code>N,N+1</code> above <code>N+2,N+3</code>, where <code>N</code> must be
+  divisible by four; flips apply to the whole composite at once.</p>
+
+  <h2>Clipping and negative coordinates</h2>
+  <p>X values <code>$1F0&ndash;$1FF</code> mean &minus;16 through &minus;1; Y values
+  <code>$F0&ndash;$FF</code> mean the same. This lets an object enter smoothly from the left or
+  top edge without special-casing anything &mdash; sprites clip at all four screen edges and
+  never wrap. Here is a complete minimal sprite setup, in the same spirit as
+  <code>/demos/sprites</code>:</p>
+  <pre class="code"><span class="lbl">XPOS</span>     <span class="dir">EQU</span>   <span class="num">$20</span>
+<span class="lbl">XFLAG</span>    <span class="dir">EQU</span>   <span class="num">$21</span>
+<span class="lbl">YPOS</span>     <span class="dir">EQU</span>   <span class="num">$22</span>
+<span class="lbl">REC0</span>     <span class="dir">EQU</span>   <span class="num">$B000</span>   <span class="cmt">; sprite 0's record, bank window + $3000</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">156</span>
+         <span class="op">STA</span>   XPOS
+         <span class="op">STA</span>   REC0        <span class="cmt">; X_LOW</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   XFLAG
+         <span class="op">STA</span>   REC0+1      <span class="cmt">; X bit 8 clear, in front of background</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">96</span>
+         <span class="op">STA</span>   YPOS
+         <span class="op">STA</span>   REC0+2
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">1</span>
+         <span class="op">STA</span>   REC0+3      <span class="cmt">; first tile</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10000010</span>
+         <span class="op">STA</span>   REC0+4      <span class="cmt">; enabled, 8x8, palette bank 2</span></pre>
+  <p>Moving the sprite once per VBlank and letting <code>X</code> cross <code>$000</code> from
+  below naturally produces <code>$1FF</code> (&minus;1); the renderer clips it at the edge
+  rather than wrapping it around, the same way it would leave the visible edge of the
+  display.</p>
+
+  <h2>Priority and the eight-per-line limit</h2>
+  <p>Sprite color 0 is transparent. A background tile's foreground-priority attribute covers
+  every sprite outright; otherwise a sprite's own behind-background flag puts it under a
+  nonzero background pixel, and a front sprite simply wins ties. Background color 0 never
+  hides a sprite. Lower record numbers always win overlap ties against other sprites.</p>
+  <p>Only the <strong>first eight enabled sprites</strong> whose vertical range intersects a
+  scanline are drawn on it &mdash; every enabled sprite counts toward that limit even if it is
+  horizontally off-screen or fully transparent on that line. A ninth candidate sets the
+  sprite-overflow status bit (<code>VIDEO_STATUS</code> bit 2) and is simply skipped for that
+  line. Gameplay collision is handled in your own code, comparing object bounds against each
+  other rather than rendered pixels.</p>
+  <p>Sprite records are sampled at the <em>start</em> of each scanline, so writing a record
+  mid-line affects only the following scanline &mdash; a simple, deterministic rule once you
+  start multiplexing sprites for effects beyond 32 on-screen objects.</p>
+
+  <div class="box try">
+    <div class="box-title">Try It</div>
+    <code>/demos/sprites</code> shows exactly this pattern: one 8&times;8 sprite, moved once
+    per VBlank by arrow keys. Push it past any edge to watch clipping and the signed
+    coordinate wraparound in action.
+  </div>
+
+  <h2>Sprite limits and flicker</h2>
+  <p>Fanticon's sprite hardware has two separate limits, and they run out in different ways:</p>
+  <table>
+    <tr><th>Limit</th><th>What happens past it</th></tr>
+    <tr><td>32 records total</td><td>There is no 33rd record &mdash; an object with no
+    assigned record simply has no sprite to draw with</td></tr>
+    <tr><td>8 drawn per scanline</td><td>The ninth-and-later enabled, vertically-intersecting
+    record on a line is skipped for that line only, and <code>VIDEO_STATUS</code> bit&nbsp;2
+    latches</td></tr>
+  </table>
+  <p>Both limits count enabled records whose vertical range intersects a line, whether or not
+  they are horizontally visible or transparent there &mdash; a wide spread of off-screen bullets
+  can still burn through the eight-per-line budget of an on-screen line at the same height.</p>
+
+  <h3>Rotating who wins the race</h3>
+  <p>Because the hardware always favors the <em>lowest</em> record number on a contested
+  scanline, a fixed object-to-record assignment means the same low-priority objects silently
+  vanish every time a line gets crowded. Flicker fixes that by rotating which object occupies
+  which record every frame, so the dropout moves around instead of sitting permanently on one
+  object &mdash; the same technique NES games used to show more than eight objects on a busy
+  line. Each frame, one call before writing sprite records:</p>
+  <pre class="code"><span class="lbl">FLICKER</span>  <span class="dir">EQU</span>   <span class="num">$30</span>      <span class="cmt">; rotation offset, one byte</span>
+<span class="lbl">OBJCOUNT</span> <span class="dir">EQU</span>   <span class="num">$31</span>      <span class="cmt">; active objects this frame, 1-32</span>
+<span class="lbl">OBJIDX</span>   <span class="dir">EQU</span>   <span class="num">$32</span>      <span class="cmt">; which object goes into the record being written</span>
+
+<span class="cmt">; advance the rotation by one object per frame, wrapping at OBJCOUNT</span>
+         <span class="op">INC</span>   FLICKER
+         <span class="op">LDA</span>   FLICKER
+         <span class="op">CMP</span>   OBJCOUNT
+         <span class="op">BCC</span>   .SKIP
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   FLICKER
+<span class="lbl">.SKIP</span>
+         <span class="op">LDA</span>   FLICKER
+         <span class="op">STA</span>   OBJIDX
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">0</span>            <span class="cmt">; X = sprite record index, 0-31</span>
+<span class="lbl">.LOOP</span>    <span class="op">LDY</span>   OBJIDX
+         <span class="op">JSR</span>   WRITERECORD  <span class="cmt">; your routine: object Y -&gt; sprite record X</span>
+         <span class="op">INC</span>   OBJIDX
+         <span class="op">LDA</span>   OBJIDX
+         <span class="op">CMP</span>   OBJCOUNT
+         <span class="op">BCC</span>   .NOWRAP
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   OBJIDX
+<span class="lbl">.NOWRAP</span>  <span class="op">INX</span>
+         <span class="op">CPX</span>   OBJCOUNT
+         <span class="op">BCC</span>   .LOOP</pre>
+  <p>Record 0 &mdash; the one every contested scanline favors &mdash; holds a different object
+  each frame, so a crowded line drops a different object each time rather than always the last
+  one in the list. If <code>OBJCOUNT</code> is below 32, disable the leftover records
+  explicitly (clear <code>ATTR</code> bit&nbsp;7) once when the count drops, or a stale record
+  from a busier frame keeps drawing.</p>
+
+  <div class="box tip">
+    <div class="box-title">Cap the Problem Before You Rotate It</div>
+    Flicker distributes dropout; it does not remove it. A line that regularly needs 20 sprites
+    will still flicker heavily no matter how the rotation is arranged. Keep genuinely
+    high-density effects &mdash; explosions, bullet spreads &mdash; short-lived and staggered in
+    Y, and consider drawing the least important layer (dust, sparks) as tiles instead of
+    sprites when a scene is already sprite-heavy.
+  </div>
+</div>
+
+<div class="chapter" id="ch11">
+  <div class="chapter-kicker">CHAPTER 11 &middot; PART III</div>
+  <h1 class="chapter-title">Bitmap Mode</h1>
+
+  <p class="lede">Bitmap mode trades the tile grid for 32,000 directly addressable 4-bpp
+  pixels &mdash; the mode for illustration, paint tools, and effects that do not fit neatly
+  into 8&times;8 cells.</p>
+
+  <table>
+    <tr><th>VRAM offset</th><th>Bank</th><th>Contents</th></tr>
+    <tr><td><code>$4000&ndash;$7FFF</code></td><td>1</td><td>First bitmap section (16 KiB)</td></tr>
+    <tr><td><code>$8000&ndash;$BCFF</code></td><td>2</td><td>Remaining bitmap pixels (15,616 B)</td></tr>
+  </table>
+  <pre class="code">VRAM byte offset = $4000 + Y &times; 160 + (X / 2)
+even X pixel = high nibble
+odd  X pixel = low nibble</pre>
+  <p>The 4-bit pixel combines with <code>BITMAP_PALETTE</code> (<code>$C01D</code>, low
+  nibble) to select one of the 256 palette entries, the same bank for every pixel in the
+  bitmap. Sprite patterns and records stay in VRAM bank&nbsp;0, untouched by bitmap data, so
+  sprites composite over bitmap graphics exactly as they do over tiles. Scroll registers have
+  no effect in this mode.</p>
+
+  <h2>Loading a bitmap set</h2>
+  <p>The graphics editor packages a bitmap <code>.GFX</code> as three consecutive cartridge
+  banks. Starting at bank 7, for example:</p>
+  <table>
+    <tr><th>Cartridge bank</th><th>Label</th><th>Destination</th></tr>
+    <tr><td>7</td><td><code>TITLE_BM0</code></td><td>First bitmap portion &rarr; VRAM bank 1</td></tr>
+    <tr><td>8</td><td><code>TITLE_BM1</code></td><td>Remaining pixels &rarr; VRAM bank 2</td></tr>
+    <tr><td>9</td><td><code>TITLE_CHR</code></td><td>Resident sprite patterns &rarr; VRAM bank 0</td></tr>
+  </table>
+  <p>Include the bitmap <code>.GFX</code> before your program's <code>FIXED</code> section,
+  then explicitly restore <code>FIXED</code> afterward for ordinary code. Load its referenced
+  <code>.PAL</code>, set <code>BITMAP_PALETTE</code>, select <code>VIDEO_MODE=2</code>, and
+  enable sprites as needed &mdash; the editor limits the starting bank to 0&ndash;253 so all
+  three banks always fit.</p>
+
+  <div class="box warn">
+    <div class="box-title">Writing 32,000 Bytes Takes Time</div>
+    Filling a full-screen bitmap from the 6502 is substantial work: at roughly 4&ndash;6 cycles per
+    byte for a simple copy loop, painting all 32,000 bytes costs on the order of one to two
+    full frames. <code>/demos/bitmap</code> demonstrates exactly this &mdash; startup visibly
+    takes a few frames while the CPU writes the whole packed bitmap through both VRAM banks.
+    Budget for it, and consider painting during a loading or title screen rather than a moment
+    that needs to feel instant.
+  </div>
+
+  <p>Bitmap mode and tile mode are not exclusive within a project &mdash; a title screen in
+  bitmap mode and the rest of the game in tile mode is a completely normal combination, since
+  switching <code>VIDEO_MODE</code> is a single register write.</p>
+</div>
+
+<div class="chapter" id="ch12">
+  <div class="chapter-kicker">CHAPTER 12 &middot; PART III</div>
+  <h1 class="chapter-title">Raster Tricks</h1>
+
+  <p class="lede">Because Fanticon is cycle-deterministic, your code can race the raster beam
+  on purpose &mdash; changing colors or scroll position at an exact scanline, well before
+  general-purpose GPUs made that unnecessary.</p>
+
+  <h2>The raster comparator</h2>
+  <p><code>RASTER_X</code> (<code>$C017/$C018</code>, 0&ndash;399) and <code>RASTER_Y</code>
+  (<code>$C019/$C01A</code>, 0&ndash;261) name one exact dot. When the beam visits it,
+  <code>IRQ_PENDING</code> bit&nbsp;1 sets &mdash; once per visit. Clearing it while the beam
+  is still sitting on that coordinate does not retrigger it; programming a new target ahead of
+  the beam can still fire this frame, while a target the beam already passed waits for the next
+  one. Reset selects the unreachable target <code>(511,511)</code>, so a cartridge that never
+  touches these registers never gets a spurious raster interrupt.</p>
+  <pre class="code"><span class="lbl">RASTX_LO</span> <span class="dir">EQU</span> <span class="num">$C017</span>
+<span class="lbl">RASTY_LO</span> <span class="dir">EQU</span> <span class="num">$C019</span>
+<span class="lbl">IRQEN</span>    <span class="dir">EQU</span> <span class="num">$C003</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   RASTX_LO    <span class="cmt">; dot 0</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">50</span>
+         <span class="op">STA</span>   RASTY_LO    <span class="cmt">; line 50 -- high bytes stay 0 here</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000010</span>
+         <span class="op">STA</span>   IRQEN       <span class="cmt">; enable the raster-compare source</span></pre>
+
+  <h2>Color bands with zero framebuffer cost</h2>
+  <p>The simplest raster trick needs no VRAM writes at all: reprogram
+  <code>BACKDROP_COLOR</code> from a raster IRQ handler to paint horizontal bands. Each time the
+  handler fires, it writes a new color and re-arms the comparator for the next band boundary
+  &mdash; <code>/demos/raster</code> does exactly this to draw four solid bands using only the
+  dot/line comparator and raster IRQs, without touching a single framebuffer byte.</p>
+
+  <h2>Budgeting cycles against the beam</h2>
+  <p>Finer effects &mdash; a palette split mid-scanline, or bending scroll position along a
+  curve one line at a time &mdash; have to win a race against the beam itself. HBlank covers
+  dots 320&ndash;399, which at two dots per CPU cycle is exactly 40&nbsp;CPU cycles: enough for
+  IRQ entry, a table lookup, and one register write, but not much more.</p>
+  <p><code>/demos/wave</code> uses one raster IRQ per visible scanline to bend the tilemap's
+  horizontal scroll along a smooth 128-step sine table, with vertical scroll following the same
+  curve once per frame at a quarter-cycle offset &mdash; keeping both axes moving without ever
+  folding at a scanline boundary. Its raster comparator deliberately fires <em>before</em>
+  HBlank begins, so that IRQ entry and the table lookup consume exactly enough cycles that
+  <code>SCROLL_X</code> gets written during HBlank itself, before the next visible line starts
+  fetching. That is the general pattern for any per-scanline raster effect: trigger the
+  interrupt slightly early, and let the handler's own fixed cost land the write inside the
+  blanking window you are aiming for.</p>
+
+  <div class="box warn">
+    <div class="box-title">Same-Cycle Ordering Is a Guarantee, Not Luck</div>
+    Within every CPU cycle, the raster fetches the first dot, your bus transfer completes on
+    the second dot, mapped writes become visible, and only then does the raster fetch that
+    second dot &mdash; with new interrupt-pending bits set last of all. A same-cycle
+    <code>IRQ_PENDING</code> clear can never erase an event that just happened. This exact,
+    reproducible ordering is what makes racing the beam a reliable technique on Fanticon rather
+    than a fragile trick that only works on one host.
+  </div>
+
+  <p>You can now put pixels, characters, sprites, and beam-timed effects on screen. Part IV
+  turns to the other half of a console&rsquo;s personality &mdash; its four voices of sound.</p>
+</div>
+
+<div class="divider-page hue-mustard" id="part4">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 04</div>
+  <div class="divider-number">04</div>
+  <div class="divider-title">Sound</div>
+  <div class="divider-sub">Four deterministic voices, direct register programming, and the visual tracker that composes for them.</div>
+  <div class="divider-contents">CH 13 AUDIO TOUR &middot; CH 14 DIRECT REGISTERS &middot; CH 15 MUSIC TRACKER</div>
+</div>
+
+<div class="chapter" id="ch13">
+  <div class="chapter-kicker">CHAPTER 13 &middot; PART IV</div>
+  <h1 class="chapter-title">Audio Hardware Tour</h1>
+
+  <p class="lede">Fanticon has four deterministic, monophonic voices: two pulse channels, one
+  triangle channel, and one noise channel &mdash; the sound character of the NES. Envelopes,
+  sweeps, and note timing are all under direct control of your 6502 code, driven register by
+  register.</p>
+
+  <table class="audio-table">
+    <tr><th>Range</th><th>Voice</th></tr>
+    <tr><td><code>$C030&ndash;$C033</code></td><td>Pulse 1</td></tr>
+    <tr><td><code>$C034&ndash;$C037</code></td><td>Pulse 2</td></tr>
+    <tr><td><code>$C038&ndash;$C03B</code></td><td>Triangle</td></tr>
+    <tr><td><code>$C03C&ndash;$C03F</code></td><td>Noise</td></tr>
+    <tr><td><code>$C040</code></td><td>Master control</td></tr>
+  </table>
+
+  <h2>Pulse channels</h2>
+  <p>Pulse&nbsp;1 and Pulse&nbsp;2 are identical, each four registers: control, an 11-bit timer
+  split across two bytes, and a phase-reset register that any write resets. The control byte
+  packs three fields:</p>
+  <table>
+    <tr><th>Bit</th><th>Control field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6&ndash;5</td><td>Duty, 0&ndash;3 &mdash; see table below</td></tr>
+    <tr><td>4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Volume, 0&ndash;15</td></tr>
+  </table>
+  <p>Four duty sequences are available:</p>
+  <table>
+    <tr><th>Duty</th><th>Width</th><th>Sequence</th></tr>
+    <tr><td>0</td><td>12.5%</td><td><code>0 1 0 0 0 0 0 0</code></td></tr>
+    <tr><td>1</td><td>25%</td><td><code>0 1 1 0 0 0 0 0</code></td></tr>
+    <tr><td>2</td><td>50%</td><td><code>0 1 1 1 1 0 0 0</code></td></tr>
+    <tr><td>3</td><td>75%</td><td><code>1 0 0 1 1 1 1 1</code></td></tr>
+  </table>
+  <pre class="code">pulse Hz = 3,144,000 / (16 &times; (timer + 1))</pre>
+
+  <h2>Triangle</h2>
+  <p>One 32-step, 4-bit sequence at a fixed amplitude, scaled only by master volume &mdash;
+  matching its main historical inspiration exactly:</p>
+  <pre class="code">triangle Hz = 3,144,000 / (32 &times; (timer + 1))</pre>
+
+  <h2>Noise</h2>
+  <p>A 15-bit right-shifting LFSR, controlled by one <code>NOISE_CONTROL</code>
+  (<code>$C03C</code>) byte:</p>
+  <table>
+    <tr><th>Bit</th><th>Control field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6</td><td>Short mode (0 = long mode)</td></tr>
+    <tr><td>5&ndash;4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Volume, 0&ndash;15</td></tr>
+  </table>
+  <p>Long mode feeds <code>bit0 XOR bit1</code> back into bit 14 and repeats after 32,767 shifts
+  &mdash; ordinary percussion. Short mode feeds <code>bit0 XOR bit6</code> instead and repeats
+  after only 93 shifts from reset, giving a recognizably metallic, pitched noise. A set
+  bit&nbsp;0 of the LFSR outputs zero; a clear bit&nbsp;0 outputs the channel's 4-bit volume.
+  Sixteen fixed periods (index in <code>NOISE_PERIOD</code> bits 0&ndash;3) span roughly
+  440&nbsp;Hz to 449&nbsp;kHz shift rates, scaled from the NTSC NES table to Fanticon's clock.</p>
+
+  <h2>Enable, phase, and the divider</h2>
+  <p>A channel's enable bit only gates whether it reaches the mixer &mdash; the oscillator and
+  divider keep running underneath even while muted, so re-enabling resumes wherever the
+  hardware silently got to. Writing a timer half changes the reload value but does not reload
+  the running divider; only a phase-reset write snaps the waveform back to step zero and
+  reloads the divider from the current timer. Use phase reset whenever a note needs a
+  synchronized attack.</p>
+
+  <h2>Mixing</h2>
+  <p>One <code>AUDIO_MASTER</code> (<code>$C040</code>) byte gates and scales all four voices
+  together:</p>
+  <table>
+    <tr><th>Bit</th><th>Control field</th></tr>
+    <tr><td>7</td><td>Master enable</td></tr>
+    <tr><td>6&ndash;4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Master volume, 0&ndash;15</td></tr>
+  </table>
+  <p>The two pulse DACs share one nonlinear path; triangle and noise share a second. For
+  current 4-bit levels <code>p1</code>, <code>p2</code>, <code>t</code>, <code>n</code>:</p>
+  <pre class="code">pulse = 95.88 / (8128 / (p1 + p2) + 100)
+tnd   = 159.79 / (1 / (t/8227 + n/12241) + 100)
+mix   = (pulse + tnd) &times; master_volume / 15</pre>
+  <p>Fanticon evaluates the integer-rational equivalent of these equations, so results are
+  bit-identical everywhere the machine runs &mdash; the same NES-like nonlinear balance on
+  every system. The host then applies a light, presentation-only stereo width and a short,
+  subdued reverb; neither can feed back into APU state, consume CPU cycles, or change VM
+  timing.</p>
+
+  <div class="box warn">
+    <div class="box-title">RESET Silences Everything</div>
+    Power-on, CPU RESET, and cartridge removal all perform the same APU reset: every register
+    zero, every channel and master enable clear, pulse/triangle phase at step zero, every
+    divider zero, and the noise LFSR reseeded to 1. An ordinary pause instead freezes emulated
+    time and all APU state exactly as it stood &mdash; it does not reset anything.
+  </div>
+
+  <p>Chapter&nbsp;14 turns these registers into sound.</p>
+</div>
+
+<div class="chapter" id="ch14">
+  <div class="chapter-kicker">CHAPTER 14 &middot; PART IV</div>
+  <h1 class="chapter-title">Programming Sound Directly</h1>
+
+  <p class="lede">Every voice follows the same four-step pattern: pick a timer for the pitch
+  you want, set volume and duty/mode, reset phase for a clean attack, and enable the channel
+  &mdash; plus one master switch that gates everything.</p>
+
+  <pre class="code"><span class="lbl">P1_CTRL</span>  <span class="dir">EQU</span>   <span class="num">$C030</span>
+<span class="lbl">P1_TLO</span>   <span class="dir">EQU</span>   <span class="num">$C031</span>
+<span class="lbl">P1_THI</span>   <span class="dir">EQU</span>   <span class="num">$C032</span>
+<span class="lbl">P1_RST</span>   <span class="dir">EQU</span>   <span class="num">$C033</span>
+<span class="lbl">MASTER</span>   <span class="dir">EQU</span>   <span class="num">$C040</span>
+
+<span class="cmt">; Concert A (~440 Hz): timer = 3,144,000/(16*440) - 1 = 446 = $1BE</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$BE</span>       <span class="cmt">; timer low</span>
+         <span class="op">STA</span>   P1_TLO
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$01</span>       <span class="cmt">; timer high (11-bit total)</span>
+         <span class="op">STA</span>   P1_THI
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10101111</span> <span class="cmt">; enable, duty 2 (50%), volume 15</span>
+         <span class="op">STA</span>   P1_CTRL
+         <span class="op">STA</span>   P1_RST      <span class="cmt">; any write resets phase for a clean attack</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10001111</span> <span class="cmt">; master enable, volume 15</span>
+         <span class="op">STA</span>   MASTER</pre>
+
+  <div class="box warn">
+    <div class="box-title">Ultrasonic Timers Are Allowed, Not Silenced</div>
+    Timer values <code>$000&ndash;$007</code> are legal and produce ultrasonic fundamentals
+    rather than being clamped or muted &mdash; they simply are not useful pitches for music.
+    Double-check a computed timer value before trusting a very high note.
+  </div>
+
+  <h2>Driving sound from a timer, not the main loop</h2>
+  <p>Audio registers hold whatever they were last written and can be read back, but nothing
+  advances them automatically &mdash; a game normally updates volume and timer values from a
+  VBlank interrupt or a Fanticon interval timer (Chapter&nbsp;18), the same way it drives
+  animation. <code>/demos/audio</code> plays both pulses, the triangle, and noise together,
+  using a VBlank IRQ to change the lead note and the backdrop color in lockstep, four times per
+  cycle &mdash; a compact demonstration of interrupt-driven sound without a full tracker.</p>
+
+  <h2>Reference basis</h2>
+  <p>The voice layout follows the Ricoh 2A03 tradition found in the NESdev community's APU
+  documentation. Fanticon freezes its own exact waveform, divider, LFSR, and mixer choices as
+  its own behavior &mdash; not a claim of being electrically identical to any specific NES
+  revision.</p>
+
+  <p>Hand-writing register pokes works well for sound effects and simple leads. For a complete
+  composition, Chapter&nbsp;15's tracker generates this same register stream for you.</p>
+</div>
+
+<div class="chapter" id="ch15">
+  <div class="chapter-kicker">CHAPTER 15 &middot; PART IV</div>
+  <h1 class="chapter-title">The Music Tracker</h1>
+
+  <p class="lede">Choose <strong>File &gt; New Music</strong> or open an existing
+  <code>.MUS</code> file to enter Fanticon's four-channel tracker &mdash; one column per voice,
+  compiled straight into assembler source your cartridge includes directly.</p>
+
+  <h2>Three views, one song</h2>
+  <p>Press <span class="kbd">V</span> to rotate through them, or click their tabs:</p>
+  <ul>
+    <li><strong>Pattern</strong> &mdash; notes, instrument, and volume per row. The active row
+    stays highlighted and centered during playback.</li>
+    <li><strong>Frames</strong> &mdash; the song order. Each frame independently selects a
+    pattern for pulse&nbsp;1, pulse&nbsp;2, triangle, and noise, FamiTracker-style, so one
+    channel can repeat a pattern while another advances.</li>
+    <li><strong>Instrument</strong> &mdash; volume, arpeggio, pitch, and tone/duty envelopes.</li>
+  </ul>
+  <p>Notes enter on a piano-style layout, <span class="kbd">A W S E D F T G Y H U J</span>
+  across a chromatic octave, with <span class="kbd">Z</span>/<span class="kbd">X</span>
+  shifting the entry octave. <code>OFF</code> disables a channel for that row; <code>---</code>
+  holds the previous value. Noise notes <code>N00</code>&ndash;<code>N0F</code> pick its
+  sixteen periods directly. <span class="kbd">[</span>/<span class="kbd">]</span> move between
+  frames without leaving Pattern view.</p>
+
+  <h2>Instruments are four independent sequences</h2>
+  <p>Each sequence advances once per <em>video frame</em>, including the frames between
+  tracker rows &mdash; this is where a Fanticon instrument gets its character:</p>
+  <table>
+    <tr><th>Sequence</th><th>Values</th></tr>
+    <tr><td>Volume</td><td><code>0&ndash;15</code>, scales the row's volume</td></tr>
+    <tr><td>Arpeggio</td><td>Signed semitone offsets from the note</td></tr>
+    <tr><td>Pitch</td><td>Signed timer offsets, for slides and vibrato</td></tr>
+    <tr><td>Tone/Duty</td><td>Pulse duty 0&ndash;3; on noise, 0 selects long mode and nonzero selects short/metallic; triangle ignores it</td></tr>
+  </table>
+
+  <h2>Playing it back in a cartridge</h2>
+  <p><code>/demos/music</code> includes <code>PLAYER.INC</code>, a small reference player. Pass
+  the compiled song header in <code>X</code>/<code>Y</code> once, then tick it every VBlank:</p>
+  <pre class="code">         <span class="op">LDX</span>   <span class="dir">#</span>&lt;SONG_MUSIC
+         <span class="op">LDY</span>   <span class="dir">#</span>&gt;SONG_MUSIC
+         <span class="op">JSR</span>   MUSIC_START
+<span class="cmt">; ...inside your VBlank handler, once per frame...</span>
+         <span class="op">JSR</span>   MUSIC_TICK</pre>
+  <p>Each tick decodes one delta frame straight into <code>$C030&ndash;$C03E</code>. That
+  decode is deliberately small and predictable &mdash; all the expensive pattern and envelope
+  work already happened at build time, not at runtime. <code>MUSIC_STOP</code> disables every
+  voice. The driver reserves zero-page <code>$30&ndash;$41</code>; relocate its <code>EQU</code>
+  definitions if that range collides with your own variables.</p>
+
+  <div class="box tip">
+    <div class="box-title">Included Demo Song</div>
+    <code>/demos/music/SONG.MUS</code> is a complete chiptune arrangement of Beethoven's
+    "Ode to Joy" (Mutopia Music&nbsp;ID&nbsp;528, public domain), with a Fanticon-original noise
+    percussion part. Space starts and stops playback in the tracker. Opening it also
+    demonstrates automatic migration: it is stored in the legacy flat-row v1 format, and saving
+    it upgrades the file to v2 patterns, frames, and instruments in place.
+  </div>
+
+  <h2>Importing existing NES music</h2>
+  <p>Editor mode can run an isolated NSF driver and transcribe its output directly into an
+  editable <code>.MUS</code> resource:</p>
+  <pre class="code">NSF2MUS INPUT.NSF OUTPUT.MUS [TRACK]</pre>
+  <p>The importer samples all four supported channels at 60&nbsp;Hz, converts NES timer values
+  to the nearest Fanticon note, and preserves volume, duty, noise mode, retriggers, and legato
+  pitch changes, stopping automatically once its loop detector recognizes a repeating intro.
+  An NSF is executable code rather than a score, so this is necessarily a transcription: fine
+  pitch quantizes to Fanticon notes, PAL timing retunes to Fanticon's clock, and DPCM samples
+  have no matching channel and are dropped with a warning rather than silently ignored.</p>
+
+  <p>With graphics and sound both in hand, Part V covers the remaining systems every game
+  needs: controllers, interrupts, and precise timing.</p>
+</div>
+
+<div class="divider-page hue-green" id="part5">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 05</div>
+  <div class="divider-number">05</div>
+  <div class="divider-title">Input,<br>Interrupts &amp;<br>Timing</div>
+  <div class="divider-sub">Reading controllers, structuring interrupt handlers, and driving precise sub-frame schedules with the two hardware timers.</div>
+  <div class="divider-contents">CH 16 CONTROLLERS &middot; CH 17 INTERRUPTS &middot; CH 18 TIMERS</div>
+</div>
+
+<div class="chapter" id="ch16">
+  <div class="chapter-kicker">CHAPTER 16 &middot; PART V</div>
+  <h1 class="chapter-title">Controllers</h1>
+
+  <p class="lede">Two standard eight-button controllers are readable in parallel through
+  simple memory-mapped registers, keeping input code small and predictable.</p>
+
+  <table>
+    <tr><th>Address</th><th>Name</th><th>Description</th></tr>
+    <tr><td><code>$C050</code></td><td><code>PAD0_STATE</code></td><td>Currently held controller-1 buttons</td></tr>
+    <tr><td><code>$C051</code></td><td><code>PAD0_PRESSED</code></td><td>Newly pressed buttons; read clears the returned bits</td></tr>
+    <tr><td><code>$C052</code></td><td><code>PAD1_STATE</code></td><td>Currently held controller-2 buttons</td></tr>
+    <tr><td><code>$C053</code></td><td><code>PAD1_PRESSED</code></td><td>Newly pressed buttons; read clears the returned bits</td></tr>
+  </table>
+  <pre class="code">7       6       5       4       3       2       1       0
+START   SELECT  B       A       RIGHT   LEFT    DOWN    UP</pre>
+  <p>A set bit means pressed. Inputs are sampled once per frame, at line&nbsp;0, dot&nbsp;0.
+  <code>PAD_PRESSED</code> accumulates newly pressed edges until you read it, then clears every
+  bit it returned &mdash; a same-cycle new edge is latched <em>after</em> the read completes, so
+  it is never lost even if you happen to read at exactly the wrong instant. Opposite directions
+  may be held simultaneously; Fanticon does not resolve that for you, so decide your own policy
+  (last-pressed-wins is common). A disconnected controller simply reads all-released.</p>
+
+  <pre class="code"><span class="lbl">PAD0</span>     <span class="dir">EQU</span>   <span class="num">$C050</span>
+<span class="lbl">PAD0P</span>    <span class="dir">EQU</span>   <span class="num">$C051</span>
+<span class="lbl">BTN_A</span>    <span class="dir">EQU</span>   <span class="num">%00010000</span>
+<span class="lbl">BTN_RIGHT</span> <span class="dir">EQU</span>  <span class="num">%00001000</span>
+
+<span class="cmt">; held-state check -- movement, usually read every frame</span>
+         <span class="op">LDA</span>   PAD0
+         <span class="op">AND</span>   <span class="dir">#</span>BTN_RIGHT
+         <span class="op">BEQ</span>   NOTRIGHT
+         <span class="op">INC</span>   PLAYERX
+<span class="lbl">NOTRIGHT</span>
+
+<span class="cmt">; press-edge check -- jump, menu confirm, anything that should fire once</span>
+         <span class="op">LDA</span>   PAD0P
+         <span class="op">AND</span>   <span class="dir">#</span>BTN_A
+         <span class="op">BEQ</span>   NOJUMP
+         <span class="op">JSR</span>   STARTJUMP
+<span class="lbl">NOJUMP</span></pre>
+
+  <h2>Defaults and hot-plug</h2>
+  <p>Controller&nbsp;1 defaults to arrow keys, <span class="kbd">Z</span> for A,
+  <span class="kbd">X</span> for B, <span class="kbd">Space</span> for Select, and
+  <span class="kbd">Enter</span> for Start, and combines its keyboard and gamepad state into one
+  reading. Controller&nbsp;2 has no default keyboard mapping and relies on a second gamepad. The
+  first two connected gamepads keep stable controller slots across hot-plug events, and losing
+  focus, a hot-unplug, or a debugger stop all release host input latches cleanly rather than
+  leaving a button artificially stuck down.</p>
+
+  <div class="box tip">
+    <div class="box-title">Read Once, Use Twice</div>
+    Reading <code>PAD_PRESSED</code> clears its bits, so if two different systems in your game
+    both need to know about the same button press this frame, read it once into a RAM variable
+    at the top of your input handling and let both systems consult the copy.
+  </div>
+
+  <p>Both registers are typically read from inside a VBlank handler, which Chapter&nbsp;17
+  covers in detail next.</p>
+</div>
+
+<div class="chapter" id="ch17">
+  <div class="chapter-kicker">CHAPTER 17 &middot; PART V</div>
+  <h1 class="chapter-title">Interrupts &amp; the IRQ Controller</h1>
+
+  <p class="lede">Four interrupt sources share one IRQ controller: VBlank, the raster
+  comparator, and the two interval timers. All of them OR onto the 6502's single, level-sensitive
+  IRQ pin, so your handler decides what matters first by checking bits in whatever order suits
+  your game.</p>
+
+  <table>
+    <tr><th>Bit</th><th>Mask</th><th>Source</th></tr>
+    <tr><td>0</td><td><code>$01</code></td><td>Vertical blank begins</td></tr>
+    <tr><td>1</td><td><code>$02</code></td><td>Raster X/Y comparison matches</td></tr>
+    <tr><td>2</td><td><code>$04</code></td><td>Timer 0 reaches zero</td></tr>
+    <tr><td>3</td><td><code>$08</code></td><td>Timer 1 reaches zero</td></tr>
+  </table>
+  <p><code>IRQ_ENABLE</code> (<code>$C003</code>) chooses which sources can assert the CPU's
+  IRQ line at all; <code>IRQ_PENDING</code> (<code>$C002</code>) is read/write-one-to-clear
+  &mdash; writing a 1 to a pending bit acknowledges that source, writing 0 leaves it alone, and
+  disabling a source does not erase its already-pending state. Nothing is acknowledged
+  automatically on interrupt entry; your handler always acknowledges explicitly, so it can tell
+  apart which of possibly several simultaneously pending sources it needs to service.</p>
+
+  <h2>A complete VBlank handler</h2>
+  <p>The vast majority of Fanticon games structure almost everything &mdash; input, animation,
+  sound, VRAM updates &mdash; inside one VBlank handler, because VBlank is the one moment
+  guaranteed not to race the visible raster:</p>
+  <pre class="code"><span class="lbl">IRQPEND</span>  <span class="dir">EQU</span>   <span class="num">$C002</span>
+<span class="lbl">IRQEN</span>    <span class="dir">EQU</span>   <span class="num">$C003</span>
+
+         <span class="dir">ORG</span>   <span class="num">$FFFA</span>
+         <span class="dir">DA</span>    RESET,RESET,IRQHANDLER
+
+<span class="lbl">IRQHANDLER</span>
+         <span class="op">PHA</span>
+         <span class="op">TXA</span>
+         <span class="op">PHA</span>
+         <span class="op">TYA</span>
+         <span class="op">PHA</span>
+
+         <span class="op">LDA</span>   IRQPEND
+         <span class="op">AND</span>   <span class="dir">#%</span><span class="num">00000001</span>   <span class="cmt">; is this a VBlank event?</span>
+         <span class="op">BEQ</span>   NOTVBLANK
+
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000001</span>
+         <span class="op">STA</span>   IRQPEND     <span class="cmt">; acknowledge VBlank -- write-one-to-clear</span>
+         <span class="op">JSR</span>   READPADS
+         <span class="op">JSR</span>   UPDATEGAME
+         <span class="op">JSR</span>   MUSIC_TICK
+
+<span class="lbl">NOTVBLANK</span>
+         <span class="op">PLA</span>
+         <span class="op">TAY</span>
+         <span class="op">PLA</span>
+         <span class="op">TAX</span>
+         <span class="op">PLA</span>
+         <span class="op">RTI</span></pre>
+  <p>Preserving <code>A</code>, <code>X</code>, and <code>Y</code> on entry and restoring them
+  before <code>RTI</code> is not optional discipline &mdash; interrupts can land in the middle
+  of any instruction sequence in your main loop, and <code>RTI</code> restores the interrupted
+  status flags on its own, so the temporary flag changes from your own <code>PLA</code>/transfer
+  sequence never escape the handler.</p>
+
+  <div class="box hw">
+    <div class="box-title">NMI Is Reserved</div>
+    NMI (<code>$FFFA</code>) is falling-edge-sensitive and, on the 6502, cannot be masked
+    the way IRQ can. No standard v0.1 device drives it &mdash; it is explicitly reserved for a
+    future cartridge or debugging facility. Point the NMI vector at a safe handler (often the
+    same one as RESET, or a simple <code>RTI</code>) and otherwise ignore it for now.
+  </div>
+
+  <p>Combine sources by testing multiple bits, in priority order you choose:</p>
+  <pre class="code">         <span class="op">LDA</span>   IRQPEND
+         <span class="op">AND</span>   <span class="dir">#%</span><span class="num">00000100</span>   <span class="cmt">; Timer 0?</span>
+         <span class="op">BEQ</span>   SKIPTIMER0
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000100</span>
+         <span class="op">STA</span>   IRQPEND     <span class="cmt">; ack only this source</span>
+         <span class="op">JSR</span>   ONTIMER0
+<span class="lbl">SKIPTIMER0</span></pre>
+  <p>Because IRQ is level-sensitive rather than edge-sensitive, an unacknowledged source keeps
+  re-asserting the CPU's IRQ line &mdash; if you forget to acknowledge one, your handler simply
+  runs again immediately after <code>RTI</code>. That is a useful debugging signal in its own
+  right: a game that appears to hang inside its interrupt handler is almost always missing an
+  acknowledgment somewhere.</p>
+</div>
+
+<div class="chapter" id="ch18">
+  <div class="chapter-kicker">CHAPTER 18 &middot; PART V</div>
+  <h1 class="chapter-title">Timers</h1>
+
+  <p class="lede">Two independent 16-bit down-counters tick once every CPU cycle, entirely
+  apart from the raster &mdash; useful for music ticks, sub-frame scheduling, or timing input
+  that needs finer resolution than once per frame.</p>
+
+  <table>
+    <tr><th>Timer</th><th>Reload low</th><th>Reload high</th><th>Control</th><th>Count low</th><th>Count high</th></tr>
+    <tr><td>Timer 0</td><td><code>$C060</code></td><td><code>$C061</code></td><td><code>$C062</code></td><td><code>$C063</code></td><td><code>$C064</code></td></tr>
+    <tr><td>Timer 1</td><td><code>$C068</code></td><td><code>$C069</code></td><td><code>$C06A</code></td><td><code>$C06B</code></td><td><code>$C06C</code></td></tr>
+  </table>
+  <table>
+    <tr><th>Control mask</th><th>Meaning</th></tr>
+    <tr><td><code>$01</code></td><td>Enable counter</td></tr>
+    <tr><td><code>$02</code></td><td>Automatically reload after reaching zero</td></tr>
+  </table>
+  <p>Reading count-low latches count-high until you read it, giving a coherent 16-bit snapshot
+  the same way the frame counter does. Reload writes never disturb a running count &mdash; only
+  an enable transition from 0 to 1 loads the reload value and starts counting, beginning on the
+  following CPU cycle. Automatic mode reloads immediately at zero and keeps firing at an exact
+  interval; one-shot mode simply stops at zero. Disabling a timer preserves its current count,
+  so re-enabling later restarts cleanly from the reload value, not from wherever it happened to
+  stop. A reload of zero means the maximum interval: 65,536 cycles.</p>
+
+  <pre class="code"><span class="lbl">T0_RELO</span>  <span class="dir">EQU</span>   <span class="num">$C060</span>
+<span class="lbl">T0_RELH</span>  <span class="dir">EQU</span>   <span class="num">$C061</span>
+<span class="lbl">T0_CTRL</span>  <span class="dir">EQU</span>   <span class="num">$C062</span>
+
+<span class="cmt">; Fire roughly every 1 ms: 3,144,000 / 1000 = 3144 cycles = $0C48</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$48</span>
+         <span class="op">STA</span>   T0_RELO
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$0C</span>
+         <span class="op">STA</span>   T0_RELH
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">00000011</span>   <span class="cmt">; enable + auto-reload</span>
+         <span class="op">STA</span>   T0_CTRL</pre>
+
+  <div class="box tip">
+    <div class="box-title">Why Reach for a Timer Instead of VBlank</div>
+    VBlank gives you exactly one tick per 60&nbsp;Hz frame &mdash; fine for animation and input,
+    too coarse for a metronome-accurate rhythm game, a UART-like protocol, or any effect that
+    needs to subdivide a frame precisely. A hardware timer's IRQ fires on its own schedule,
+    completely decoupled from the raster, and is the right tool whenever "once per frame" is
+    the wrong granularity.
+  </div>
+
+  <p>With controllers, the IRQ controller, and both timers under control, you have every input
+  and every clock a Fanticon game can see. Part VI turns to shipping: bank switching, packaging
+  a finished cartridge, and making sure it runs at full speed.</p>
+</div>
+
+<div class="divider-page hue-slate" id="part6">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 06</div>
+  <div class="divider-number">06</div>
+  <div class="divider-title">Shipping<br>a Game</div>
+  <div class="divider-sub">Bank switching at scale, packaging a cartridge, writing cycle-accurate code, and testing it before release.</div>
+  <div class="divider-contents">CH 19 BANK SWITCHING &middot; CH 20 PACKAGING &amp; SAVES &middot; CH 21 OPTIMIZATION &middot; CH 22 TESTING &amp; SHIPPING</div>
+</div>
+
+<div class="chapter" id="ch19">
+  <div class="chapter-kicker">CHAPTER 19 &middot; PART VI</div>
+  <h1 class="chapter-title">Bank Switching &amp; Memory Management</h1>
+
+  <p class="lede">Everything you have built so far fit inside fixed ROM. A complete game outgrows
+  16&nbsp;KiB quickly &mdash; the bank window is how Fanticon scales up to 4&nbsp;MiB of code
+  and assets without ever widening the CPU's address bus.</p>
+
+  <div class="box tip">
+    <div class="box-title">One Window, Four Pools</div>
+    Think of <code>$8000&ndash;$BFFF</code> as a single 16&nbsp;KiB peephole, not four separate
+    ones. <code>BANK_KIND</code> decides <em>which pool</em> of memory the peephole currently
+    looks into &mdash; cartridge ROM, work RAM, video RAM, or save RAM. <code>BANK_NUMBER</code>
+    decides <em>which 16&nbsp;KiB slice</em> of that pool you are looking at. Nothing else about
+    addressing changes: <code>LDA&nbsp;$8005</code> always means &quot;the sixth byte of
+    whatever is mapped right now&quot; &mdash; ROM, RAM, VRAM, or save RAM, depending entirely
+    on the two registers below.
+  </div>
+
+  <table>
+    <tr><th><code>BANK_KIND</code></th><th>Valid <code>BANK_NUMBER</code></th><th>Window contains</th></tr>
+    <tr><td><code>$00</code></td><td>0&ndash;255</td><td>Cartridge ROM, up to 4&nbsp;MiB</td></tr>
+    <tr><td><code>$01</code></td><td>0&ndash;3</td><td>Volatile work RAM, 64&nbsp;KiB total</td></tr>
+    <tr><td><code>$02</code></td><td>0&ndash;2</td><td>Video RAM, 48&nbsp;KiB total</td></tr>
+    <tr><td><code>$03</code></td><td>0&ndash;3</td><td>Battery-backed save RAM, up to 64&nbsp;KiB</td></tr>
+  </table>
+  <p>Every bank switch is the same two-register move, regardless of which pool you are headed
+  for:</p>
+  <ol>
+    <li>Write the pool you want to <code>BANK_KIND</code> (<code>$C000</code>) &mdash; one of
+    the four values above.</li>
+    <li>Write which slice of that pool to <code>BANK_NUMBER</code> (<code>$C001</code>).</li>
+    <li>Address <code>$8000&ndash;$BFFF</code> normally. It now means whatever you just
+    selected, until the next write to either register.</li>
+  </ol>
+  <p>The same CPU address means a different physical byte depending only on what those two
+  registers currently hold:</p>
+  <table>
+    <tr><th><code>BANK_KIND</code></th><th><code>BANK_NUMBER</code></th><th><code>$8005</code> currently means</th></tr>
+    <tr><td><code>$00</code></td><td><code>5</code></td><td>Byte 5 of cartridge ROM bank 5</td></tr>
+    <tr><td><code>$01</code></td><td><code>0</code></td><td>Byte 5 of work RAM bank 0</td></tr>
+    <tr><td><code>$02</code></td><td><code>0</code></td><td>Byte 5 of video RAM bank 0</td></tr>
+    <tr><td><code>$03</code></td><td><code>1</code></td><td>Byte 5 of save RAM bank 1</td></tr>
+  </table>
+  <p>The change takes effect after the register write's bus cycle completes, so the golden rule
+  is simple: <strong>switch banks while executing from main RAM or fixed ROM, never from the
+  bank window itself</strong> &mdash; you would be changing the ground out from under the
+  instruction that is running.</p>
+  <pre class="code">bank number = offset / $4000
+CPU address = $8000 + (offset AND $3FFF)</pre>
+
+  <h2>Bank-aware symbols</h2>
+  <p>Every label the assembler resolves records its CPU address <em>and</em> which section
+  produced it. <code>BANKOF(label)</code> turns a switchable-ROM label into its bank number
+  &mdash; it is an error to call it on a fixed-ROM, RAM, or plain numeric label:</p>
+  <pre class="code">         <span class="op">LDA</span>   <span class="dir">#</span>BANKOF(LEVEL2)
+         <span class="op">STA</span>   BANKNUM
+         <span class="op">JMP</span>   LEVEL2      <span class="cmt">; resolves to its $8000-$BFFF address</span></pre>
+  <p>Referring to a banked label always returns its <code>$8000&ndash;$BFFF</code> address, and
+  never silently inserts a bank switch for you &mdash; a direct branch or jump between two
+  <em>different</em> switchable banks produces a build warning, because the assembler cannot
+  know whether the correct bank will be mapped in when execution gets there.</p>
+
+  <h2>What goes where</h2>
+  <p>Work RAM (<code>BANK_KIND=$01</code>) is volatile banked scratch space &mdash; a natural
+  home for level data staged out of ROM, decompression buffers, or music driver state that does
+  not need to persist. Remember that only the lower 32&nbsp;KiB of main RAM is <em>always</em>
+  visible; work RAM banks exist purely inside the window. Save RAM (<code>$03</code>) is the
+  one banked kind that survives power-off, covered fully in Chapter&nbsp;20. A cartridge that
+  declares fewer than four save banks simply exposes its unused bank numbers as unmapped.</p>
+
+  <h2>A complete worked example: staging ROM into VRAM</h2>
+  <p>Cartridge ROM and video RAM are two different pools behind the <em>same</em> window, so
+  you can never have both mapped in at once &mdash; there is no register write that lets the
+  CPU read ROM and write VRAM in the same instruction. Moving a level's graphics from ROM to
+  VRAM is therefore always a three-step relay: map the ROM bank in and copy it out to ordinary
+  main RAM, then map the VRAM bank in and copy from RAM into it. A small reusable routine
+  handles the copying half of that relay regardless of which pool is mapped:</p>
+  <pre class="code"><span class="lbl">BANKKIND</span> <span class="dir">EQU</span>   <span class="num">$C000</span>
+<span class="lbl">BANKNUM</span>  <span class="dir">EQU</span>   <span class="num">$C001</span>
+<span class="lbl">SRC</span>      <span class="dir">EQU</span>   <span class="num">$10</span>      <span class="cmt">; 2-byte zero-page pointer</span>
+<span class="lbl">DST</span>      <span class="dir">EQU</span>   <span class="num">$12</span>      <span class="cmt">; 2-byte zero-page pointer</span>
+<span class="lbl">PAGES</span>    <span class="dir">EQU</span>   <span class="num">$14</span>      <span class="cmt">; pages left to copy</span>
+
+<span class="cmt">; Copies A 256-byte pages from (SRC) to (DST). Load both pointers and A</span>
+<span class="cmt">; before calling; this only walks them forward one page at a time.</span>
+<span class="lbl">PAGECOPY</span> <span class="op">STA</span>   PAGES
+<span class="lbl">.PAGE</span>    <span class="op">LDY</span>   <span class="dir">#</span><span class="num">0</span>
+<span class="lbl">.BYTE</span>    <span class="op">LDA</span>   (SRC),Y
+         <span class="op">STA</span>   (DST),Y
+         <span class="op">INY</span>
+         <span class="op">BNE</span>   .BYTE
+         <span class="op">INC</span>   SRC+1
+         <span class="op">INC</span>   DST+1
+         <span class="op">DEC</span>   PAGES
+         <span class="op">BNE</span>   .PAGE
+         <span class="op">RTS</span></pre>
+  <p>With that in place, staging one level's 2,048-byte tile-number map from a switchable
+  cartridge bank into video RAM is two calls &mdash; one bank switch and one <code>PAGECOPY</code>
+  per leg of the relay:</p>
+  <pre class="code">         <span class="cmt">; leg 1: cartridge ROM -&gt; main RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   BANKKIND     <span class="cmt">; cartridge ROM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span>BANKOF(LEVEL1_MAP)
+         <span class="op">STA</span>   BANKNUM      <span class="cmt">; LEVEL1_MAP's bank now fills $8000-$BFFF</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;LEVEL1_MAP
+         <span class="op">STA</span>   SRC
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;LEVEL1_MAP
+         <span class="op">STA</span>   SRC+1
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;STAGE
+         <span class="op">STA</span>   DST
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;STAGE
+         <span class="op">STA</span>   DST+1
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>            <span class="cmt">; 2,048 bytes = 8 pages</span>
+         <span class="op">JSR</span>   PAGECOPY
+
+         <span class="cmt">; leg 2: main RAM -&gt; video RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$02</span>
+         <span class="op">STA</span>   BANKKIND     <span class="cmt">; video RAM</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   BANKNUM      <span class="cmt">; the tile-number map lives in VRAM bank 0</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;STAGE
+         <span class="op">STA</span>   SRC
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;STAGE
+         <span class="op">STA</span>   SRC+1
+         <span class="op">LDA</span>   <span class="dir">#</span>&lt;<span class="num">$A000</span>    <span class="cmt">; $8000 + $2000, the tile-map offset from Ch. 9</span>
+         <span class="op">STA</span>   DST
+         <span class="op">LDA</span>   <span class="dir">#</span>&gt;<span class="num">$A000</span>
+         <span class="op">STA</span>   DST+1
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>
+         <span class="op">JSR</span>   PAGECOPY</pre>
+  <p><code>STAGE</code> is any 2,048-byte buffer you set aside in main RAM &mdash; it never
+  needs to be bigger than the largest single asset you stage through it, and the same buffer is
+  reused for tile patterns, attributes, sprite records, and bitmap pages by simply changing the
+  source label, the destination offset, and the page count passed to <code>PAGECOPY</code>.
+  Chapter&nbsp;9 puts this exact relay to work loading a tile set.</p>
+
+  <div class="box warn">
+    <div class="box-title">Reset Always Selects Bank 0</div>
+    Every reset selects cartridge bank 0, kind <code>$00</code>. Reset code cannot assume any
+    other switchable bank is mapped &mdash; if your reset routine needs data from a different
+    bank, it must explicitly select that bank itself before reading it, exactly like any other
+    routine would.
+  </div>
+
+  <p>With multiple banks in play, packaging becomes the next question: how does a project
+  with a handful of referenced banks turn into one <code>.FCN</code> file, and how
+  does a game remember player progress between sessions? Chapter&nbsp;20 covers both.</p>
+</div>
+
+<div class="chapter" id="ch20">
+  <div class="chapter-kicker">CHAPTER 20 &middot; PART VI</div>
+  <h1 class="chapter-title">Packaging &amp; Save Files</h1>
+
+  <p class="lede">A finished cartridge is a single <code>.FCN</code> file: a 64-byte header, a
+  fixed 16&nbsp;KiB ROM image, and zero or more banked ROM images, all little-endian and
+  independently versioned from its optional <code>.SAV</code> companion.</p>
+
+  <h2>How BUILD packs a cartridge</h2>
+  <p>The packager writes the fixed image, then every bank from zero through the
+  <strong>highest bank your source references</strong> &mdash; skipped banks and
+  unwritten bytes fill with <code>$FF</code>, and any trailing banks above the highest
+  reference are omitted entirely. Using banks 0 and 3, for instance, stores four banks, not
+  256 &mdash; you only pay for what you use.</p>
+
+  <table>
+    <tr><th>Offset</th><th>Field</th><th>Meaning</th></tr>
+    <tr><td><code>$00</code></td><td><code>MAGIC</code></td><td>ASCII <code>FANTICON</code></td></tr>
+    <tr><td><code>$08/$09</code></td><td><code>FORMAT_MAJOR/MINOR</code></td><td><code>1.0</code></td></tr>
+    <tr><td><code>$0C</code></td><td><code>FLAGS</code></td><td>Bit 0: uses battery RAM</td></tr>
+    <tr><td><code>$10</code></td><td><code>ROM_BANKS</code></td><td>Switchable banks, 0&ndash;256</td></tr>
+    <tr><td><code>$12</code></td><td><code>SAVE_BANKS</code></td><td>Battery RAM banks, 0&ndash;4</td></tr>
+    <tr><td><code>$14/$18</code></td><td><code>FIXED_CRC32/BANKED_CRC32</code></td><td>CRC-32 of ROM contents</td></tr>
+    <tr><td><code>$1C</code></td><td><code>CARTRIDGE_ID</code></td><td>Stable, nonzero 64-bit identity</td></tr>
+    <tr><td><code>$24</code></td><td><code>TITLE</code></td><td>22 bytes, printable ASCII</td></tr>
+    <tr><td><code>$3A/$3B</code></td><td><code>MACHINE_MAJOR/MINOR</code></td><td>Required hardware version</td></tr>
+  </table>
+  <p>All CRC fields use CRC-32/ISO-HDLC. A loader validates, in strict order: minimum length
+  and magic, supported version and header size, known flags and mapper, ROM/save bank-count
+  limits, a nonzero ID with valid title bytes and compatible machine version, exact total file
+  size, every checksum, and finally the presence of all three fixed-ROM vectors &mdash; before
+  a single byte is exposed to the CPU. Nothing partially loads.</p>
+
+  <h2>Save files</h2>
+  <p>A cartridge with <code>SAVE_BANKS &gt; 0</code> gets a sibling save file: on native
+  platforms, the same base name with a <code>.SAV</code> extension beside the cartridge
+  (<code>ASTRO.FCN</code> &rarr; <code>ASTRO.SAV</code>), keyed by path, not by the cartridge's
+  internal title. Browser builds store the equivalent bytes in persistent browser storage,
+  keyed by <code>CARTRIDGE_ID</code> instead.</p>
+  <p>Writes through the save-RAM bank window update RAM immediately and mark the save dirty.
+  The host flushes it to disk after one second of no new writes, whenever a cartridge is
+  cleanly ejected or Game mode exits, and during orderly shutdown &mdash; always through a
+  temporary file that is flushed and then atomically swapped in, so a crash mid-save can only
+  lose the most recent unflushed writes, never corrupt the last good file. Only one running
+  Fanticon instance can hold the write lock for a given save; if a second instance cannot
+  acquire it, that cartridge simply runs with save RAM read-only and a host warning.</p>
+
+  <div class="box tip">
+    <div class="box-title">Why CARTRIDGE_ID Matters</div>
+    <code>ID</code> in <code>FANTICON.CFG</code> is generated once, the first time a project is
+    created, and ordinary rebuilds never change it &mdash; that is deliberate. It is what lets
+    you ship new versions of a game, with completely different code and assets, while every
+    player's existing save file keeps working. If a loaded save's declared size does not match
+    <code>SAVE_BANKS &times; $4000</code> for the cartridge that is loading it, Fanticon deletes
+    the mismatched save and creates a fresh zero-filled one at the correct size &mdash; save
+    data is never silently migrated across a size change.
+  </div>
+
+  <p>Packaging and saving are both automatic once your manifest and sections are right &mdash;
+  the work that is yours to get right is making the code fast enough to hit 60&nbsp;Hz
+  every frame, which is where Chapter&nbsp;21 goes next.</p>
+</div>
+
+<div class="chapter" id="ch21">
+  <div class="chapter-kicker">CHAPTER 21 &middot; PART VI</div>
+  <h1 class="chapter-title">Cycle-Accurate Optimization</h1>
+
+  <p class="lede">Fanticon gives you a fixed budget every frame: 52,400 CPU cycles at 60&nbsp;Hz.
+  Writing efficient 6502 code is mostly about arranging data around the processor, not chasing
+  clever instruction tricks.</p>
+
+  <ul>
+    <li>Put frequently accessed variables and pointers in <strong>zero page</strong> &mdash; a
+    zero-page load is one byte shorter and one cycle faster than the equivalent absolute load.</li>
+    <li>Use <code>X</code> or <code>Y</code> as loop counters so <code>DEX</code>/<code>DEY</code>/<code>INX</code>/<code>INY</code>
+    avoid memory traffic entirely.</li>
+    <li>Choose <code>(zp),Y</code> for walking one buffer through a zero-page pointer, and
+    <code>(zp,X)</code> for selecting among several adjacent zero-page pointers.</li>
+    <li>Align tables to page boundaries when indexed-read timing must stay constant &mdash;
+    an <code>abs,X</code> or <code>abs,Y</code> read costs one extra cycle whenever the index
+    crosses a page.</li>
+    <li>Keep hot loops inside a single page so a taken branch never pays the page-crossing
+    penalty, and remember the final (not-taken) iteration of a counted loop usually has a
+    different cycle cost than the taken ones.</li>
+    <li>Prefer a counted loop over unrolled code until you have measured a bottleneck
+    &mdash; unroll only after profiling shows it matters.</li>
+  </ul>
+
+  <pre class="code"><span class="cmt">; X iterations: 5 cycles per taken pass, 4 on the final (not-taken) pass</span>
+<span class="lbl">LOOP</span>     <span class="op">DEX</span>            <span class="cmt">; 2 cycles</span>
+         <span class="op">BNE</span>   LOOP        <span class="cmt">; 3 taken, 2 not taken (same-page target)</span></pre>
+
+  <div class="box warn">
+    <div class="box-title">Hardware Registers Are Not Ordinary Memory</div>
+    Fanticon exposes exact NMOS bus timing: indexed stores always perform a dummy read before
+    the write, and a read-modify-write instruction (<code>INC</code>, <code>ASL</code>,
+    and friends) reads the old value, writes it back unchanged, and only then writes the new
+    value &mdash; three bus accesses where you might expect one. Never use a read-modify-write
+    instruction on a device register unless that register's own documentation explicitly says
+    it tolerates the extra read and write. The same caution applies to indexed addressing near
+    a device register: an indexed access can briefly touch a provisional address on its way to
+    the final one.
+  </div>
+
+  <h2>A portability and correctness checklist</h2>
+  <p>Before treating any routine as finished:</p>
+  <ul>
+    <li>Know exactly which registers, flags, zero-page bytes, and stack bytes it clobbers.</li>
+    <li>Set carry explicitly (<code>CLC</code>/<code>SEC</code>) before every independent
+    <code>ADC</code>/<code>SBC</code> chain &mdash; never assume its state.</li>
+    <li>Confirm decimal mode is what you expect; NMOS interrupt entry does not clear <code>D</code>
+    for you.</li>
+    <li>Check every relative branch is in range, and whether a page crossing changes its timing.</li>
+    <li>Never assume RESET initializes <code>A</code>, <code>X</code>, or <code>Y</code> &mdash;
+    initialize your own program state explicitly, every time.</li>
+    <li>Keep <code>SP</code> balanced across every control-flow path, and end interrupt
+    handlers with <code>RTI</code>, ordinary subroutines with <code>RTS</code> &mdash; never
+    mix the two.</li>
+    <li>Avoid undocumented opcodes in anything you might someday retarget to a different
+    6502-family chip; Fanticon emulates all 256 opcode bytes faithfully, but that faithfulness
+    is exactly why relying on them is a one-way door.</li>
+  </ul>
+
+  <p>Appendix&nbsp;A collects the complete opcode and cycle tables this chapter draws its rules
+  of thumb from, including the full undocumented-opcode catalog for when you deliberately
+  decide the trade-off is worth it. Chapter&nbsp;22 closes the loop: how Fanticon itself
+  verifies correctness, and how to give your own cartridge the same confidence before it ships.</p>
+</div>
+
+<div class="chapter" id="ch22">
+  <div class="chapter-kicker">CHAPTER 22 &middot; PART VI</div>
+  <h1 class="chapter-title">Testing &amp; Shipping</h1>
+
+  <p class="lede">Fanticon itself is held to an exacting standard: cycle-accurate, bit-identical
+  behavior on every host, every time. Here is how to borrow that same confidence for your own
+  game before you call it done.</p>
+
+  <h2>Playtesting with the debugger, deliberately</h2>
+  <p>Chapter&nbsp;6 introduced breakpoints, watchpoints, and stepping as tools for understanding
+  code you just wrote. Before shipping, turn them on your <em>finished</em> cartridge instead:</p>
+  <ul>
+    <li>Set a memory-write watchpoint on your player's health or position variable and play
+    normally &mdash; anything that writes it unexpectedly stands out immediately.</li>
+    <li>Drop a breakpoint at the top of your VBlank handler and single-step
+    (<span class="kbd">F11</span>) through one full frame at least once, confirming every
+    interrupt source you expect to see acknowledged is.</li>
+    <li>Use a raster breakpoint at the exact <code>LINE,DOT</code> of a raster effect
+    (Chapter&nbsp;12) to confirm it fires where you think it does, not just that it looks right
+    on screen.</li>
+    <li>Watch the paused panel's APU section while audio plays to confirm channels enable,
+    retrigger, and disable exactly when your code intends.</li>
+  </ul>
+
+  <h2>Budget every frame, not just the average one</h2>
+  <p>52,400 cycles is the hard limit, but the moment that matters is your <em>worst</em> frame,
+  not your typical one &mdash; the frame where the player is taking damage, three enemies are
+  on screen, a room transition is loading, and the tracker is mid-pattern all at once. Trigger
+  that worst case deliberately while stepping through it, and confirm your VBlank handler still
+  finishes before the next VBlank arrives. A handler that occasionally overruns shows up as a
+  dropped frame or a one-frame input hiccup &mdash; often intermittent enough to ship
+  unnoticed unless you have gone looking for it on purpose.</p>
+
+  <h2>Exercise every save path</h2>
+  <p>Chapter&nbsp;20 covered how save RAM persists; test all three shapes that behavior can
+  take before release:</p>
+  <ul>
+    <li>A completely fresh save, from a player who has never run your cartridge before.</li>
+    <li>A save created by an earlier build of your own cartridge, loaded by the current one.</li>
+    <li>What happens if <code>SAVE_BANKS</code> in your manifest ever changes between versions
+    &mdash; Fanticon discards a save whose size no longer matches and starts over rather than
+    guessing, so make sure that is an acceptable experience rather than a surprise.</li>
+  </ul>
+
+  <h2>A pre-ship checklist for your own cartridge</h2>
+  <ul>
+    <li>Confirm your frame's work fits inside 52,400&nbsp;cycles with room to spare for
+    worst-case input/animation/audio bursts.</li>
+    <li>Step through RESET and your interrupt handlers in the debugger at least once end to
+    end; confirm every acknowledgment clears the bit it means to.</li>
+    <li>If Fanticon is available to you on more than one platform (say, native and browser),
+    play your finished cartridge on both &mdash; save persistence in particular takes a
+    different path on each, as Chapter&nbsp;20 described.</li>
+    <li>Re-read the correctness checklist at the end of Chapter&nbsp;21 against your
+    source, not from memory.</li>
+  </ul>
+
+  <p>That is the complete path from an empty folder to a shipped cartridge. Part&nbsp;VII turns
+  from the console itself to the games you build with it &mdash; menus, side-scrollers,
+  top-down worlds, raster effects, and palette tricks, all in genre-shaped detail. The
+  appendices after that are the reference material you will keep this book open to.</p>
+</div>
+
+<div class="divider-page hue-coral" id="part7">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">CART 07</div>
+  <div class="divider-number">07</div>
+  <div class="divider-title">Game Dev<br>Patterns</div>
+  <div class="divider-sub">Turning the raw hardware from Parts II&ndash;VI into menus, side-scrollers, top-down worlds, raster tricks, and palette-swap magic.</div>
+  <div class="divider-contents">CH 23 LOOPS, STATES &amp; MENUS &middot; CH 24 SIDE-SCROLLERS &middot; CH 25 TOP-DOWN &amp; RPG &middot; CH 26 RASTER EFFECTS &middot; CH 27 PALETTE SWAPPING</div>
+</div>
+
+<div class="chapter" id="ch23">
+  <div class="chapter-kicker">CHAPTER 23 &middot; PART VII</div>
+  <h1 class="chapter-title">Game Loops, States &amp; Building a Main Menu</h1>
+
+  <p class="lede">Almost every Fanticon game, regardless of genre, is structured the same way
+  underneath: a VBlank-driven heartbeat, and a state machine deciding what that heartbeat does
+  this frame. A main menu is simply the first state.</p>
+
+  <h2>The heartbeat</h2>
+  <p>Chapter&nbsp;17 built a VBlank handler that reads input, updates the game, and ticks music.
+  Keep that structure for the life of the project; what changes screen to screen is only what
+  <code>UPDATEGAME</code> does. The cleanest way to express "what it does depends on where the
+  player currently is" is a small state variable and a jump table:</p>
+  <pre class="code"><span class="lbl">GAMESTATE</span> <span class="dir">EQU</span>  <span class="num">$40</span>    <span class="cmt">; 0=menu, 1=play, 2=pause</span>
+<span class="lbl">STATEPTR</span>  <span class="dir">EQU</span>  <span class="num">$41</span>    <span class="cmt">; 2-byte zero-page pointer</span>
+
+<span class="lbl">UPDATEGAME</span>
+         <span class="op">LDX</span>   GAMESTATE
+         <span class="op">LDA</span>   STATE_LO,X
+         <span class="op">STA</span>   STATEPTR
+         <span class="op">LDA</span>   STATE_HI,X
+         <span class="op">STA</span>   STATEPTR+1
+         <span class="op">JMP</span>   (STATEPTR)  <span class="cmt">; the 6502's one indirect jump form</span>
+
+<span class="lbl">STATE_LO</span>  <span class="dir">DFB</span>   <span class="dir">&lt;</span>MENU_UPDATE,<span class="dir">&lt;</span>PLAY_UPDATE,<span class="dir">&lt;</span>PAUSE_UPDATE
+<span class="lbl">STATE_HI</span>  <span class="dir">DFB</span>   <span class="dir">&gt;</span>MENU_UPDATE,<span class="dir">&gt;</span>PLAY_UPDATE,<span class="dir">&gt;</span>PAUSE_UPDATE</pre>
+  <p>This is the standard 6502 jump-table idiom: since <code>JMP</code> only has one indirect
+  form (a plain pointer, not an indexed one), you compute the target address into a zero-page
+  pointer yourself using the low/high byte operators <code>&lt;</code> and <code>&gt;</code>
+  from Chapter&nbsp;4, then jump through it. Adding a new state is one entry in two tables, not
+  a growing chain of <code>CMP</code>/<code>BEQ</code> checks.</p>
+
+  <h2>Building the menu screen itself</h2>
+  <p>A main menu is ordinary tile-mode content: a static background built once in the graphics
+  editor (Chapter&nbsp;8), with menu text authored directly as tiles rather than drawn at
+  runtime. Selection typically works one of two ways:</p>
+  <ul>
+    <li><strong>Attribute swap</strong> &mdash; give the currently selected menu row's tiles a
+    different palette bank in the attribute map (Chapter&nbsp;9), so "highlighting" an option is
+    one small VRAM write, not a redraw.</li>
+    <li><strong>Cursor sprite</strong> &mdash; park one 8&times;8 sprite next to the selected
+    row and move its <code>Y</code> field to point at a new row on Up/Down.</li>
+  </ul>
+  <pre class="code"><span class="lbl">MENUSEL</span>  <span class="dir">EQU</span>  <span class="num">$42</span>    <span class="cmt">; 0-2: which menu row is selected</span>
+
+<span class="lbl">MENU_UPDATE</span>
+         <span class="op">LDA</span>   PAD0P
+         <span class="op">AND</span>   <span class="dir">#</span>BTN_DOWN
+         <span class="op">BEQ</span>   CHECKUP
+         <span class="op">INC</span>   MENUSEL
+         <span class="op">LDA</span>   MENUSEL
+         <span class="op">CMP</span>   <span class="dir">#</span><span class="num">3</span>
+         <span class="op">BNE</span>   MOVED
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="op">STA</span>   MENUSEL     <span class="cmt">; wrap back to the top entry</span>
+<span class="lbl">MOVED</span>    <span class="op">JSR</span>   MOVECURSOR
+<span class="lbl">CHECKUP</span>
+         <span class="cmt">; ...BTN_UP handled the same way, decrementing...</span>
+         <span class="op">LDA</span>   PAD0P
+         <span class="op">AND</span>   <span class="dir">#</span>BTN_A
+         <span class="op">BEQ</span>   MENUDONE
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">1</span>
+         <span class="op">STA</span>   GAMESTATE   <span class="cmt">; confirm -- switch to the PLAY state</span>
+<span class="lbl">MENUDONE</span>
+         <span class="op">RTS</span></pre>
+
+  <h2>Transitioning between screens</h2>
+  <p>Because a state change is just writing <code>GAMESTATE</code>, the interesting work is
+  usually what happens once, on the frame a transition starts: swapping in the gameplay
+  <code>.GFX</code> set (Chapter&nbsp;9), selecting the right cartridge bank if the new screen's
+  code lives elsewhere (Chapter&nbsp;19), and resetting per-screen RAM. Do that setup work in a
+  dedicated <code>ENTER_PLAY</code> routine called exactly once on the transition, not inside
+  <code>PLAY_UPDATE</code> itself &mdash; otherwise it silently re-runs every frame you are in
+  that state.</p>
+
+  <div class="box tip">
+    <div class="box-title">Pause Is Just Another State</div>
+    Because the state machine already exists, pause is nearly free: a <code>PAUSE_UPDATE</code>
+    handler that ignores gameplay input, watches only for the pause button to return to state 1,
+    and optionally stops calling <code>MUSIC_TICK</code> (Chapter&nbsp;15) so the soundtrack
+    freezes with everything else.
+  </div>
+
+  <p>With state management in place, the next three chapters are about what <em>lives</em>
+  inside the "play" state for three different kinds of games.</p>
+</div>
+
+<div class="chapter" id="ch24">
+  <div class="chapter-kicker">CHAPTER 24 &middot; PART VII</div>
+  <h1 class="chapter-title">Side-Scrolling Games</h1>
+
+  <p class="lede">A side-scroller is Chapter&nbsp;9's ring-buffer scrolling technique, plus a
+  player that moves smoothly through it and a world that pushes back.</p>
+
+  <h2>Sub-pixel movement</h2>
+  <p>Smooth in-between speeds come from storing position as a 16-bit fixed-point value, high
+  byte the pixel position and low byte a sub-pixel fraction, and adding a small velocity to the
+  whole 16-bit value every frame:</p>
+  <pre class="code"><span class="lbl">PLAYERX</span>  <span class="dir">EQU</span>  <span class="num">$50</span>    <span class="cmt">; sub-pixel fraction</span>
+<span class="lbl">PLAYERX_HI</span> <span class="dir">EQU</span> <span class="num">$51</span> <span class="cmt">; whole pixel position</span>
+<span class="lbl">VELX</span>    <span class="dir">EQU</span>  <span class="num">$52</span>    <span class="cmt">; e.g. $180 = 1.5 px/frame</span>
+
+         <span class="op">CLC</span>
+         <span class="op">LDA</span>   PLAYERX
+         <span class="op">ADC</span>   VELX
+         <span class="op">STA</span>   PLAYERX
+         <span class="op">LDA</span>   PLAYERX_HI
+         <span class="op">ADC</span>   VELX+1
+         <span class="op">STA</span>   PLAYERX_HI  <span class="cmt">; carry propagates into the pixel byte automatically</span></pre>
+  <p>Only <code>PLAYERX_HI</code> ever needs to reach the sprite record's <code>X_LOW</code>
+  byte (Chapter&nbsp;10); the fraction stays entirely in RAM. This is exactly how the wave
+  demo's smooth raster curve and countless 8-bit platformers get sub-integer motion out of
+  an integer CPU.</p>
+
+  <h2>Collision is a lookup table</h2>
+  <p>Tile collision is software work: reserve a range of tile numbers for solid terrain and
+  check the map, not the screen:</p>
+  <pre class="code"><span class="cmt">; Is the tile under world pixel (X,Y) solid? Tiles $00-$1F = passable, $20+ = solid.</span>
+<span class="lbl">ISSOLID</span>
+         <span class="cmt">; ...compute tile_x = X/8, tile_y = Y/8, read the map byte at $2000+tile_y*64+tile_x...</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$20</span>
+         <span class="op">CMP</span>   MAPBYTE
+         <span class="op">RTS</span>            <span class="cmt">; carry clear if MAPBYTE < $20 (passable)</span></pre>
+  <p>Checking a handful of sample points around the player's bounding box (feet, head, both
+  sides) against this table is enough for a solid platformer &mdash; the same approach scales
+  down to one point for a simple top-down game in Chapter&nbsp;25.</p>
+
+  <h2>Following the player with the camera</h2>
+  <p>Write <code>SCROLL_X</code> from a camera variable, not directly from the player's
+  position &mdash; a camera that is always centered exactly on the player feels jittery and
+  reveals level edges the moment the player stops near them. A small deadzone keeps the camera
+  still while the player moves within the middle of the screen, then catches up smoothly, and
+  clamping keeps it from scrolling past the level's edges:</p>
+  <pre class="code">         <span class="cmt">; if player is left of camera+deadzone, pull camera left; mirror on the right</span>
+         <span class="cmt">; then clamp: if camera < 0, camera = 0; if camera > level_max, camera = level_max</span></pre>
+
+  <h2>Streaming new columns without blowing the frame budget</h2>
+  <p>Chapter&nbsp;9 described the ring-buffer idea: as the camera crosses an 8-pixel tile
+  boundary, the column of map cells about to scroll into view needs fresh tile numbers written
+  before it arrives. Writing an entire 32-cell column in one VBlank is usually fine, but if a
+  level streams from compressed or procedurally generated data, cap how much work happens per
+  frame (a handful of cells) and spread the rest across the next few frames &mdash; the hidden
+  margin outside the 320&times;200 viewport (Chapter&nbsp;9) is exactly the slack that makes
+  this possible.</p>
+
+  <div class="box warn">
+    <div class="box-title">Faking Parallax on One Layer</div>
+    Convincing depth on single-layer 8-bit hardware usually comes from restraint: a static or
+    slow backdrop color change instead of a moving backdrop, or a few large sprites drifting at
+    a different speed than the world for a lightweight parallax illusion, budgeted against the
+    eight-sprites-per-line limit from Chapter&nbsp;10.
+  </div>
+</div>
+
+<div class="chapter" id="ch25">
+  <div class="chapter-kicker">CHAPTER 25 &middot; PART VII</div>
+  <h1 class="chapter-title">Top-Down &amp; RPG-Style Games</h1>
+
+  <p class="lede">Top-down games trade continuous scrolling for grid discipline: characters
+  move cell by cell, and worlds bigger than one screen are built as connected rooms rather than
+  one continuously scrolling map.</p>
+
+  <h2>Grid-locked movement</h2>
+  <p>Rather than free sub-pixel motion, classic top-down movement snaps to an 8 or 16-pixel
+  grid matching the tile size, animating <em>between</em> cells over a fixed number of frames:</p>
+  <pre class="code"><span class="lbl">MOVETIMER</span> <span class="dir">EQU</span> <span class="num">$53</span>   <span class="cmt">; counts down while sliding between cells</span>
+<span class="lbl">MOVEDX</span>   <span class="dir">EQU</span>  <span class="num">$54</span>    <span class="cmt">; +1, 0, or -1 this move</span>
+
+<span class="lbl">TRYMOVE</span>
+         <span class="op">LDA</span>   MOVETIMER
+         <span class="op">BNE</span>   BUSY        <span class="cmt">; already sliding -- ignore new input</span>
+         <span class="cmt">; ...check the destination cell with the same ISSOLID-style lookup as Chapter 24...</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">8</span>
+         <span class="op">STA</span>   MOVETIMER   <span class="cmt">; 8 frames to cross one 8px cell = 1px/frame</span>
+<span class="lbl">BUSY</span>    <span class="op">RTS</span></pre>
+  <p>Each frame that <code>MOVETIMER</code> is nonzero, add <code>MOVEDX</code>/<code>MOVEDY</code>
+  to the player's pixel position and decrement the timer; input is only sampled again once it
+  reaches zero. This single rule &mdash; a move either fully completes or has not started
+  &mdash; is what makes grid movement feel precise instead of mushy, and it makes tile collision
+  trivial: you only ever need to validate the single destination cell before committing to a
+  move, never a mid-slide position.</p>
+
+  <h2>Worlds bigger than one map</h2>
+  <p>The hardware tilemap is a fixed 64&times;32 cells &mdash; plenty for one scrolling
+  side-scrolling level, but an RPG overworld is usually built from many discrete
+  <strong>rooms</strong>, each its own <code>.GFX</code> map, rather than one giant scrolling
+  space. When the player walks off the edge of the current room, load the next one using the
+  same VRAM-loading routine from Chapter&nbsp;9 &mdash; select the neighboring room's bank
+  (Chapter&nbsp;19), copy its patterns/map/attributes into VRAM, and place the player at the
+  matching entry point on the new map's opposite edge. Unlike side-scrolling, this is a
+  deliberate hard cut rather than continuous motion, so it reads well with a brief screen wipe
+  (Chapter&nbsp;26) covering the one or two frames the load takes.</p>
+
+  <h2>NPCs, facing, and interaction</h2>
+  <p>An NPC is a sprite plus a small record: grid position, facing direction, and a pointer to
+  whatever it does when interacted with. "Talk to the NPC in front of you" is then just: compute
+  the cell one step ahead of the player in their current facing direction, and check it against
+  the NPC table the same way <code>ISSOLID</code> checks it against terrain:</p>
+  <pre class="code"><span class="cmt">; FACEDX/FACEDY are -1/0/+1 based on the player's last-pressed direction</span>
+<span class="lbl">TRYINTERACT</span>
+         <span class="cmt">; targetcell = playercell + (FACEDX, FACEDY)</span>
+         <span class="cmt">; ...scan the NPC table for an entry at targetcell...</span>
+         <span class="cmt">; if found: JSR through that NPC's dialogue pointer</span></pre>
+
+  <h2>Text and dialogue boxes</h2>
+  <p>Because tile-map cells can hold any of the 256 resident patterns, author a text tileset
+  (one 8&times;8 pattern per glyph) in the graphics editor and reserve a palette bank for it
+  (Chapter&nbsp;8). "Printing" a message is then writing tile numbers directly into a fixed
+  region of the tile-number map &mdash; usually a few rows near the bottom of the screen &mdash;
+  one character (one <code>STA</code>) at a time, optionally paced a letter every few frames for
+  a classic scrolling-text effect. Because this is ordinary VRAM, the same dialogue box works
+  whether it appears over a top-down room or a side-scrolling level.</p>
+
+  <div class="box tip">
+    <div class="box-title">Buffer the Input, Not Just the Position</div>
+    A common RPG feel comes from accepting a directional press slightly before the current move
+    finishes and queuing it, rather than dropping it because <code>MOVETIMER</code> was still
+    nonzero. Latch the most recent direction pressed into a one-entry buffer in your VBlank
+    handler, and consult that buffer instead of a fresh read the instant <code>MOVETIMER</code>
+    reaches zero &mdash; it is a small change that makes continuous movement across several
+    cells feel responsive instead of stuttery.
+  </div>
+</div>
+
+<div class="chapter" id="ch26">
+  <div class="chapter-kicker">CHAPTER 26 &middot; PART VII</div>
+  <h1 class="chapter-title">Raster Effects in Practice</h1>
+
+  <p class="lede">Chapter&nbsp;12 covered the raster comparator itself. This chapter applies it
+  to three effects nearly every genre eventually wants: a status bar that will not scroll,
+  animated color cycling, and a screen wipe between scenes.</p>
+
+  <h2>A non-scrolling status bar via a scroll split</h2>
+  <p>Fanticon has one tile layer, so a HUD that stays put while the world above it scrolls needs
+  a trick, not a second layer. Reserve the bottom rows of your 64&times;32 map (say, rows
+  30&ndash;31) exclusively for HUD tiles, keep your world scroll's <em>vertical</em> range
+  clamped so those rows never scroll into view during normal play, and then use a raster IRQ at
+  the exact scanline where the HUD begins to rewrite <code>SCROLL_Y</code> so the remaining
+  visible lines display that fixed HUD region instead of continuing the world:</p>
+  <pre class="code"><span class="cmt">; Raster IRQ fires at line 184 -- the last 16 lines become the HUD</span>
+<span class="lbl">HUDSPLIT</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$00</span>
+         <span class="op">STA</span>   SCROLLY_LO
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">240</span>     <span class="cmt">; points SCROLL_Y at map row 30 (240 / 8)</span>
+         <span class="op">STA</span>   SCROLLY_HI  <span class="cmt">; (illustrative split -- tune to your HUD's row count)</span>
+         <span class="cmt">; re-arm RASTER_Y for line 0 next frame, then restore the world SCROLL_Y there</span></pre>
+  <p>A second raster target back at line&nbsp;0 (or simply doing it at the top of your next
+  VBlank handler) restores the camera scroll before the world begins drawing again next
+  frame. This is the same family of technique NES games used for split-screen status bars
+  &mdash; here it is simpler, because Chapter&nbsp;7's dual-ported VRAM means the write always
+  lands exactly on the raster timestamp you programmed, with no bus contention to fight.</p>
+
+  <h2>Palette cycling</h2>
+  <p>Animating water, lava, or energy fields without touching a single tile is a palette trick:
+  rotate a small run of entries in one bank every few frames.</p>
+  <pre class="code"><span class="lbl">CYCLE</span>    <span class="op">LDA</span>   COLOR3      <span class="cmt">; save the entry about to be overwritten</span>
+         <span class="op">PHA</span>
+         <span class="op">LDA</span>   COLOR2
+         <span class="op">STA</span>   COLOR3
+         <span class="op">LDA</span>   COLOR1
+         <span class="op">STA</span>   COLOR2
+         <span class="op">PLA</span>
+         <span class="op">STA</span>   COLOR1      <span class="cmt">; write all three back through PALETTE_INDEX/DATA</span></pre>
+  <p>Because every tile using that palette bank updates the instant the palette entry changes
+  (Chapter&nbsp;7), a whole river or lava field animates from one small per-frame write,
+  regardless of how many tiles are on screen.</p>
+
+  <h2>Screen wipes between scenes</h2>
+  <p>The cheapest transition is a straight cut. The next cheapest, and usually worth it, fades
+  through <code>BACKDROP_COLOR</code> with the background layer momentarily disabled
+  (<code>VIDEO_CONTROL</code> bit&nbsp;0 clear, Chapter&nbsp;7) &mdash; step the backdrop
+  through a short table of darkening RGB332 values over a handful of frames, do your room load
+  (Chapter&nbsp;25) while the screen reads as solid black, then step back up and re-enable the
+  background. For a full-color wipe instead of fading to black, step every entry of the active
+  palette bank(s) toward its target using the same per-frame table idea from palette cycling
+  above.</p>
+
+  <p>All three of these effects are variations on one idea: Fanticon guarantees a write lands
+  exactly where you time it, so "when" is as much a creative tool here as "what."</p>
+</div>
+
+<div class="chapter" id="ch27">
+  <div class="chapter-kicker">CHAPTER 27 &middot; PART VII</div>
+  <h1 class="chapter-title">Palette Swapping &amp; Color Tricks</h1>
+
+  <p class="lede">Sixteen palette banks sharing one pattern library (Chapter&nbsp;7) is one of
+  the cheapest tools in the whole machine: the same artwork, a completely different look, for
+  the cost of a register write.</p>
+
+  <h2>Recoloring for free</h2>
+  <p>An enemy palette swap is not a second set of sprite patterns &mdash; it is the same tile
+  numbers with a different palette bank in the sprite's <code>ATTR</code> byte (Chapter&nbsp;10)
+  or the tile attribute map (Chapter&nbsp;9). A "red slime" and a "blue slime" can be one
+  pattern, two palette banks, and zero extra VRAM for pixels:</p>
+  <pre class="code">         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10000001</span> <span class="cmt">; enabled, 8x8, palette bank 1 (red variant)</span>
+         <span class="op">STA</span>   REC0+4
+         <span class="cmt">; ...later, for the blue variant, only the low nibble changes...</span>
+         <span class="op">LDA</span>   <span class="dir">#%</span><span class="num">10000011</span> <span class="cmt">; same sprite, palette bank 3 (blue variant)</span>
+         <span class="op">STA</span>   REC1+4</pre>
+
+  <h2>Damage flash and invincibility blink</h2>
+  <p>A hit-flash is a palette bank swap held for a handful of frames &mdash; write the sprite's
+  palette bits to a bank containing an all-white or all-red version of the same ramp for a few
+  frames, then restore the normal bank. Invincibility blinking is the same idea driven by a
+  timer in your VBlank handler, alternately toggling the sprite's <code>ENABLE</code> bit (or
+  swapping between the normal bank and a dimmed one) every few frames until the timer expires
+  &mdash; both are RAM-side bookkeeping around registers already covered in Chapter&nbsp;10, not
+  new hardware capability.</p>
+
+  <h2>Re-tinting a whole scene</h2>
+  <p>Because <code>PALETTE_INDEX</code>/<code>PALETTE_DATA</code> can rewrite any of the 256
+  entries at any time (Chapter&nbsp;7), a day-to-night transition, a "poisoned" status tint, or
+  an alternate title-screen look for a bitmap (via <code>BITMAP_PALETTE</code>,
+  Chapter&nbsp;11) can all be authored as a handful of extra palette banks in the graphics
+  editor and swapped in with the same loop from Chapter&nbsp;8's palette-upload example:</p>
+  <pre class="code"><span class="lbl">PALINDEX</span> <span class="dir">EQU</span>   <span class="num">$C01B</span>
+<span class="lbl">PALDATA</span>  <span class="dir">EQU</span>   <span class="num">$C01C</span>
+
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$30</span>       <span class="cmt">; bank 3, entry 0 -- the "level" bank from Ch. 8's table</span>
+         <span class="op">STA</span>   PALINDEX
+         <span class="op">LDX</span>   <span class="dir">#</span><span class="num">0</span>
+<span class="lbl">RETINT</span>   <span class="op">LDA</span>   NIGHT_PAL,X
+         <span class="op">STA</span>   PALDATA     <span class="cmt">; index auto-increments -- 16 writes recolor the whole bank</span>
+         <span class="op">INX</span>
+         <span class="op">CPX</span>   <span class="dir">#</span><span class="num">16</span>
+         <span class="op">BNE</span>   RETINT</pre>
+  <p>Sixteen writes re-skins every tile and sprite already using that bank, instantly, with no
+  changes to map data, pattern data, or code anywhere else &mdash; a large visual change for one
+  of the smallest possible pieces of work on the machine.</p>
+
+  <div class="box tip">
+    <div class="box-title">Reserve a Bank on Purpose</div>
+    Chapter&nbsp;8's suggested bank layout (<code>UI</code>, <code>player</code>,
+    <code>enemies</code>, <code>level</code>, <code>title</code>) is worth extending
+    deliberately: if you know a scene will need a flash, a tint, or a variant color scheme,
+    reserve its palette bank up front rather than discovering late that every other bank is
+    already spoken for. There are only sixteen.
+  </div>
+
+  <p>That closes the loop from raw hardware to genre-shaped technique. Whatever kind of game you
+  are building, it is assembled from exactly the pieces in Parts&nbsp;II&ndash;VII &mdash; the
+  appendices that follow are where you go to check the exact register, cycle count, or byte
+  layout behind any of them.</p>
+</div>
+
+<div class="divider-page hue-ink" id="appendices">
+  <div class="divider-scanlines"></div>
+  <div class="divider-cart">REFERENCE</div>
+  <div class="divider-number">R</div>
+  <div class="divider-title">Appendices</div>
+  <div class="divider-sub">The exact tables and formats you will keep this book open to &mdash; opcode timings, the full memory map, the assembler, both file formats, every demo cartridge, and a glossary.</div>
+  <div class="divider-contents">APP A CPU OPCODES &middot; APP B MEMORY MAP &middot; APP C ASSEMBLER &middot; APP D FILE FORMATS &middot; APP E DEMOS &middot; APP F GLOSSARY</div>
+</div>
+
+<div class="chapter dense" id="appA">
+  <div class="chapter-kicker">APPENDIX A</div>
+  <h1 class="chapter-title">Complete 6502 Opcode &amp; Cycle Reference</h1>
+  <p class="lede">Fanticon implements the standard NMOS MOS 6502 &mdash; not the CMOS 65C02
+  &mdash; including every undocumented opcode byte. This appendix is the exact reference; the
+  teaching version is Chapter&nbsp;3.</p>
+
+  <h2>Official opcode and cycle table</h2>
+  <p>Each cell is <code>opcode/cycles</code>. <code>+P</code> means one additional cycle on a
+  page crossing. A dash means the instruction has no such addressing mode.</p>
+  <table class="opcode-table">
+    <thead><tr><th>Instr</th><th>#</th><th>zp</th><th>zp,X</th><th>zp,Y</th><th>abs</th><th>abs,X</th><th>abs,Y</th><th>(zp,X)</th><th>(zp),Y</th></tr></thead>
+    <tbody>
+    <tr><td>ADC</td><td>69/2</td><td>65/3</td><td>75/4</td><td>&mdash;</td><td>6D/4</td><td>7D/4+P</td><td>79/4+P</td><td>61/6</td><td>71/5+P</td></tr>
+    <tr><td>AND</td><td>29/2</td><td>25/3</td><td>35/4</td><td>&mdash;</td><td>2D/4</td><td>3D/4+P</td><td>39/4+P</td><td>21/6</td><td>31/5+P</td></tr>
+    <tr><td>CMP</td><td>C9/2</td><td>C5/3</td><td>D5/4</td><td>&mdash;</td><td>CD/4</td><td>DD/4+P</td><td>D9/4+P</td><td>C1/6</td><td>D1/5+P</td></tr>
+    <tr><td>EOR</td><td>49/2</td><td>45/3</td><td>55/4</td><td>&mdash;</td><td>4D/4</td><td>5D/4+P</td><td>59/4+P</td><td>41/6</td><td>51/5+P</td></tr>
+    <tr><td>LDA</td><td>A9/2</td><td>A5/3</td><td>B5/4</td><td>&mdash;</td><td>AD/4</td><td>BD/4+P</td><td>B9/4+P</td><td>A1/6</td><td>B1/5+P</td></tr>
+    <tr><td>ORA</td><td>09/2</td><td>05/3</td><td>15/4</td><td>&mdash;</td><td>0D/4</td><td>1D/4+P</td><td>19/4+P</td><td>01/6</td><td>11/5+P</td></tr>
+    <tr><td>SBC</td><td>E9/2</td><td>E5/3</td><td>F5/4</td><td>&mdash;</td><td>ED/4</td><td>FD/4+P</td><td>F9/4+P</td><td>E1/6</td><td>F1/5+P</td></tr>
+    <tr><td>LDX</td><td>A2/2</td><td>A6/3</td><td>&mdash;</td><td>B6/4</td><td>AE/4</td><td>&mdash;</td><td>BE/4+P</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>LDY</td><td>A0/2</td><td>A4/3</td><td>B4/4</td><td>&mdash;</td><td>AC/4</td><td>BC/4+P</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>CPX</td><td>E0/2</td><td>E4/3</td><td>&mdash;</td><td>&mdash;</td><td>EC/4</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>CPY</td><td>C0/2</td><td>C4/3</td><td>&mdash;</td><td>&mdash;</td><td>CC/4</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>STA</td><td>&mdash;</td><td>85/3</td><td>95/4</td><td>&mdash;</td><td>8D/4</td><td>9D/5</td><td>99/5</td><td>81/6</td><td>91/6</td></tr>
+    <tr><td>STX</td><td>&mdash;</td><td>86/3</td><td>&mdash;</td><td>96/4</td><td>8E/4</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    <tr><td>STY</td><td>&mdash;</td><td>84/3</td><td>94/4</td><td>&mdash;</td><td>8C/4</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Read-modify-write instructions (fixed timing)</h2>
+  <table class="opcode-table">
+    <thead><tr><th>Instr</th><th>A</th><th>zp</th><th>zp,X</th><th>abs</th><th>abs,X</th></tr></thead>
+    <tbody>
+    <tr><td>ASL</td><td>0A/2</td><td>06/5</td><td>16/6</td><td>0E/6</td><td>1E/7</td></tr>
+    <tr><td>LSR</td><td>4A/2</td><td>46/5</td><td>56/6</td><td>4E/6</td><td>5E/7</td></tr>
+    <tr><td>ROL</td><td>2A/2</td><td>26/5</td><td>36/6</td><td>2E/6</td><td>3E/7</td></tr>
+    <tr><td>ROR</td><td>6A/2</td><td>66/5</td><td>76/6</td><td>6E/6</td><td>7E/7</td></tr>
+    <tr><td>DEC</td><td>&mdash;</td><td>C6/5</td><td>D6/6</td><td>CE/6</td><td>DE/7</td></tr>
+    <tr><td>INC</td><td>&mdash;</td><td>E6/5</td><td>F6/6</td><td>EE/6</td><td>FE/7</td></tr>
+    </tbody>
+  </table>
+  <p>A read-modify-write instruction reads the value, writes the old value back unchanged,
+  then writes the new value &mdash; three bus accesses, not one. See the hardware-register
+  warning in Chapter&nbsp;21.</p>
+
+  <h2>Other official opcodes</h2>
+  <table>
+    <thead><tr><th>Group</th><th>Opcodes and cycles</th></tr></thead>
+    <tbody>
+    <tr><td>Branch</td><td><code>BPL 10, BMI 30, BVC 50, BVS 70, BCC 90, BCS B0, BNE D0, BEQ F0</code> &mdash; all 2 + taken + page</td></tr>
+    <tr><td>Bit test</td><td><code>BIT zp 24/3</code>, <code>BIT abs 2C/4</code></td></tr>
+    <tr><td>Jump/call</td><td><code>JMP abs 4C/3</code>, <code>JMP (abs) 6C/5</code>, <code>JSR 20/6</code>, <code>RTS 60/6</code>, <code>RTI 40/6</code></td></tr>
+    <tr><td>Stack</td><td><code>PHP 08/3</code>, <code>PLP 28/4</code>, <code>PHA 48/3</code>, <code>PLA 68/4</code></td></tr>
+    <tr><td>Transfer</td><td><code>DEY 88/2, TXA 8A/2, TAY A8/2, TAX AA/2, TYA 98/2, TXS 9A/2, TSX BA/2</code></td></tr>
+    <tr><td>Increment</td><td><code>INY C8/2, INX E8/2, DEX CA/2</code></td></tr>
+    <tr><td>Flags</td><td><code>CLC 18/2, SEC 38/2, CLI 58/2, SEI 78/2, CLV B8/2, CLD D8/2, SED F8/2</code></td></tr>
+    <tr><td>System</td><td><code>BRK 00/7</code>, <code>NOP EA/2</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Cycle-accurate programming rules</h2>
+  <ul>
+    <li>Taken branches perform an extra read; a page-crossing branch performs another.</li>
+    <li>Indexed reads perform a correction cycle when their address crosses a page.</li>
+    <li>Indexed stores always perform a dummy read before the write.</li>
+    <li>Stack and control-flow instructions perform their documented dummy reads.</li>
+    <li>Holding the hardware-ready signal inactive repeats read cycles but never stalls a write.</li>
+  </ul>
+
+  <h2>Decimal mode</h2>
+  <p>With <code>D=1</code>, <code>ADC</code>/<code>SBC</code> perform NMOS binary-coded-decimal
+  adjustment &mdash; each nibble is a decimal digit, so <code>$42</code> means decimal&nbsp;42.
+  Fanticon implements NMOS decimal behavior exactly, including inputs that are not valid BCD
+  digits. <code>N</code>, <code>V</code>, and <code>Z</code> after a decimal operation are
+  NMOS-specific and should not be read as portable BCD indicators &mdash; prefer <code>C</code>
+  for carry/no-borrow and test <code>A</code> directly when it matters. Interrupt entry does not
+  clear <code>D</code>; leave decimal mode clear except inside a small, deliberately controlled
+  BCD routine.</p>
+
+  <h2>Undocumented NMOS opcodes</h2>
+  <p>Fanticon's assembler accepts every stable undocumented mnemonic below. Where the NMOS has
+  duplicate opcode bytes for identical syntax, the assembler emits one canonical encoding
+  (<code>$0B</code> for <code>ANC #</code>, <code>$02</code> for <code>KIL</code>/<code>JAM</code>,
+  and <code>$80</code>/<code>$04</code>/<code>$14</code>/<code>$0C</code>/<code>$1C</code> for
+  addressed <code>NOP</code>); use <code>DFB</code>/<code>HEX</code> to force a specific
+  alternate byte.</p>
+
+  <table class="opcode-table">
+    <thead><tr><th>Mnemonic</th><th>Operation</th><th>Opcodes by mode (same order as official table)</th></tr></thead>
+    <tbody>
+    <tr><td>SLO</td><td><code>ASL M</code>, then <code>A&larr;A|M</code></td><td>03,07,0F,13,17,1B,1F</td></tr>
+    <tr><td>RLA</td><td><code>ROL M</code>, then <code>A&larr;A&amp;M</code></td><td>23,27,2F,33,37,3B,3F</td></tr>
+    <tr><td>SRE</td><td><code>LSR M</code>, then <code>A&larr;A^M</code></td><td>43,47,4F,53,57,5B,5F</td></tr>
+    <tr><td>RRA</td><td><code>ROR M</code>, then <code>ADC M</code></td><td>63,67,6F,73,77,7B,7F</td></tr>
+    <tr><td>SAX</td><td><code>M&larr;A&amp;X</code></td><td>(zp,X)83, zp87, abs8F, zp,Y97</td></tr>
+    <tr><td>LAX</td><td><code>A&larr;M; X&larr;M</code></td><td>(zp,X)A3, zpA7, absAF, (zp),YB3, zp,YB7, abs,YBF</td></tr>
+    <tr><td>DCP</td><td><code>DEC M</code>, then compare A with M</td><td>C3,C7,CF,D3,D7,DB,DF</td></tr>
+    <tr><td>ISC/ISB</td><td><code>INC M</code>, then <code>SBC M</code></td><td>E3,E7,EF,F3,F7,FB,FF</td></tr>
+    </tbody>
+  </table>
+  <p>For the seven-mode rows, cycle counts in listed order are 8, 5, 6, 8, 6, 7, 7 &mdash;
+  these are read-modify-write operations that perform both the old-value and new-value writes.</p>
+
+  <table class="opcode-table">
+    <thead><tr><th>Mnemonic</th><th>Opcode</th><th>Cyc</th><th>Operation</th></tr></thead>
+    <tbody>
+    <tr><td>ANC #</td><td>0B, 2B</td><td>2</td><td><code>A&larr;A&amp;#</code>; C&larr;result bit 7</td></tr>
+    <tr><td>ALR #</td><td>4B</td><td>2</td><td><code>A&larr;A&amp;#</code>, then LSR</td></tr>
+    <tr><td>ARR #</td><td>6B</td><td>2</td><td><code>A&larr;A&amp;#</code>, then ROR; special C/V/decimal behavior</td></tr>
+    <tr><td>XAA #</td><td>8B</td><td>2</td><td><code>A&larr;(A|$EE)&amp;X&amp;#</code></td></tr>
+    <tr><td>LAX #</td><td>AB</td><td>2</td><td><code>A&larr;X&larr;(A|$EE)&amp;#</code></td></tr>
+    <tr><td>AXS/SBX #</td><td>CB</td><td>2</td><td><code>X&larr;(A&amp;X)-#</code>; C reports no borrow</td></tr>
+    <tr><td>SBC #</td><td>EB</td><td>2</td><td>Alias of official immediate SBC</td></tr>
+    <tr><td>LAS abs,Y</td><td>BB</td><td>4+P</td><td><code>A&larr;X&larr;SP&larr;M&amp;SP</code></td></tr>
+    <tr><td>AHX (zp),Y / abs,Y</td><td>93 / 9F</td><td>6 / 5</td><td>Unstable high-byte-masked store</td></tr>
+    <tr><td>TAS abs,Y</td><td>9B</td><td>5</td><td><code>SP&larr;A&amp;X</code>, then unstable masked store</td></tr>
+    <tr><td>SHY abs,X</td><td>9C</td><td>5</td><td>Store Y masked by address-derived high byte</td></tr>
+    <tr><td>SHX abs,Y</td><td>9E</td><td>5</td><td>Store X masked by address-derived high byte</td></tr>
+    </tbody>
+  </table>
+  <p>The unstable stores follow Fanticon's own fixed, deterministic behavior exactly
+  (including its <code>$EE</code> magic-mask value), which differs from how these bytes behave
+  on an original chip, where results vary with silicon revision, temperature, and bus
+  conditions.</p>
+
+  <table>
+    <thead><tr><th>Undocumented NOP form</th><th>Opcodes</th><th>Cycles</th></tr></thead>
+    <tbody>
+    <tr><td>Implied</td><td>1A 3A 5A 7A DA FA</td><td>2</td></tr>
+    <tr><td>Immediate</td><td>80 82 89 C2 E2</td><td>2</td></tr>
+    <tr><td>Zero page</td><td>04 44 64</td><td>3</td></tr>
+    <tr><td>Zero page,X</td><td>14 34 54 74 D4 F4</td><td>4</td></tr>
+    <tr><td>Absolute</td><td>0C</td><td>4</td></tr>
+    <tr><td>Absolute,X</td><td>1C 3C 5C 7C DC FC</td><td>4+P</td></tr>
+    </tbody>
+  </table>
+  <p>Undocumented NOPs still fetch operands and perform normal addressing-mode bus reads
+  &mdash; they are not all equivalent to <code>EA</code>. The JAM/KIL opcodes
+  (<code>02 12 22 32 42 52 62 72 92 B2 D2 F2</code>) halt useful execution until RESET; do not
+  use JAM as a wait primitive unless that halt-until-reset behavior is exactly the intent.</p>
+</div>
+
+<div class="chapter dense" id="appB">
+  <div class="chapter-kicker">APPENDIX B</div>
+  <h1 class="chapter-title">Complete Memory Map</h1>
+  <p class="lede">Every address a Fanticon cartridge can see, in one place. All addresses are
+  hexadecimal; multi-byte registers are little-endian.</p>
+
+  <h2>CPU address space</h2>
+  <table>
+    <tr><th>Range</th><th>Size</th><th>Read</th><th>Write</th></tr>
+    <tr><td><code>$0000&ndash;$7FFF</code></td><td>32 KiB</td><td>Main RAM</td><td>Main RAM</td></tr>
+    <tr><td><code>$8000&ndash;$BFFF</code></td><td>16 KiB</td><td>Selected bank</td><td>Selected bank, unless ROM</td></tr>
+    <tr><td><code>$C000&ndash;$C0FF</code></td><td>256 B</td><td>Device registers</td><td>Device registers</td></tr>
+    <tr><td><code>$C100&ndash;$FFFF</code></td><td>16,128 B</td><td>Fixed cartridge ROM</td><td>Ignored</td></tr>
+  </table>
+  <p>Unmapped and reserved reads return <code>$FF</code>; unmapped, reserved, and ROM writes
+  are ignored outright &mdash; Fanticon does not emulate a floating last-value data bus.</p>
+
+  <h2>Bank window ($8000&ndash;$BFFF)</h2>
+  <table class="reg-table">
+    <tr><th>Register</th><th>Address</th><th>Purpose</th></tr>
+    <tr><td><code>BANK_KIND</code></td><td><code>$C000</code></td><td>Select the backing memory type</td></tr>
+    <tr><td><code>BANK_NUMBER</code></td><td><code>$C001</code></td><td>Select one bank of that type</td></tr>
+  </table>
+  <table>
+    <tr><th><code>BANK_KIND</code></th><th>Valid <code>BANK_NUMBER</code></th><th>Window contains</th></tr>
+    <tr><td><code>$00</code></td><td>0&ndash;255</td><td>Cartridge ROM, up to 4 MiB</td></tr>
+    <tr><td><code>$01</code></td><td>0&ndash;3</td><td>Volatile work RAM, 64 KiB total</td></tr>
+    <tr><td><code>$02</code></td><td>0&ndash;2</td><td>Video RAM, 48 KiB total</td></tr>
+    <tr><td><code>$03</code></td><td>0&ndash;3</td><td>Battery-backed save RAM, up to 64 KiB total</td></tr>
+    <tr><td>Other</td><td>&mdash;</td><td>Unmapped memory</td></tr>
+  </table>
+  <pre class="code">bank number = offset / $4000
+CPU address = $8000 + (offset AND $3FFF)</pre>
+
+  <h2>I/O page overview ($C000&ndash;$C0FF)</h2>
+  <table>
+    <tr><th>Address</th><th>Device</th></tr>
+    <tr><td><code>$C000&ndash;$C00F</code></td><td>Banking, interrupt controller, frame counter</td></tr>
+    <tr><td><code>$C010&ndash;$C02F</code></td><td>Video control and palette</td></tr>
+    <tr><td><code>$C030&ndash;$C040</code></td><td>Audio channels and master control</td></tr>
+    <tr><td><code>$C050&ndash;$C05F</code></td><td>Controllers</td></tr>
+    <tr><td><code>$C060&ndash;$C06F</code></td><td>Two interval timers</td></tr>
+    <tr><td><code>$C070&ndash;$C0FF</code></td><td>Reserved</td></tr>
+  </table>
+
+  <h2>System and interrupt registers</h2>
+  <table class="reg-table">
+    <tr><th>Addr</th><th>Name</th><th>Access</th><th>Description</th></tr>
+    <tr><td>$C000</td><td>BANK_KIND</td><td>R/W</td><td>$00 cartridge, $01 work RAM, $02 VRAM, $03 save RAM</td></tr>
+    <tr><td>$C001</td><td>BANK_NUMBER</td><td>R/W</td><td>Bank within the selected kind</td></tr>
+    <tr><td>$C002</td><td>IRQ_PENDING</td><td>R/W1C</td><td>Pending interrupt sources</td></tr>
+    <tr><td>$C003</td><td>IRQ_ENABLE</td><td>R/W</td><td>Sources allowed to assert IRQ</td></tr>
+    <tr><td>$C004</td><td>FRAME_LOW</td><td>R</td><td>Frame counter low byte; latches high byte</td></tr>
+    <tr><td>$C005</td><td>FRAME_HIGH</td><td>R</td><td>Latched frame counter high byte</td></tr>
+    <tr><td>$C006</td><td>MACHINE_MAJOR</td><td>R</td><td>Hardware major version, currently 1</td></tr>
+    <tr><td>$C007</td><td>MACHINE_MINOR</td><td>R</td><td>Hardware minor version, currently 0</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>Mask</th><th>Source</th></tr>
+    <tr><td>0</td><td>$01</td><td>Vertical blank begins</td></tr>
+    <tr><td>1</td><td>$02</td><td>Raster X/Y comparison matches</td></tr>
+    <tr><td>2</td><td>$04</td><td>Timer 0 reaches zero</td></tr>
+    <tr><td>3</td><td>$08</td><td>Timer 1 reaches zero</td></tr>
+  </table>
+
+  <h2>Video registers</h2>
+  <table class="reg-table">
+    <tr><th>Addr</th><th>Name</th><th>Access</th><th>Description</th></tr>
+    <tr><td>$C010</td><td>VIDEO_MODE</td><td>R/W</td><td>0 blank, 1 tilemap, 2 packed bitmap</td></tr>
+    <tr><td>$C011</td><td>VIDEO_CONTROL</td><td>R/W</td><td>Bit 0 background enable, bit 1 sprites enable</td></tr>
+    <tr><td>$C012</td><td>BACKDROP_COLOR</td><td>R/W</td><td>8-bit palette index behind a disabled background</td></tr>
+    <tr><td>$C013/$C014</td><td>SCROLL_X</td><td>R/W</td><td>Signed 16-bit tilemap X scroll</td></tr>
+    <tr><td>$C015/$C016</td><td>SCROLL_Y</td><td>R/W</td><td>Signed 16-bit tilemap Y scroll</td></tr>
+    <tr><td>$C017/$C018</td><td>RASTER_X</td><td>R/W</td><td>Raster compare dot, 0&ndash;399</td></tr>
+    <tr><td>$C019/$C01A</td><td>RASTER_Y</td><td>R/W</td><td>Raster compare line, 0&ndash;261</td></tr>
+    <tr><td>$C01B</td><td>PALETTE_INDEX</td><td>R/W</td><td>Select one of 256 palette entries</td></tr>
+    <tr><td>$C01C</td><td>PALETTE_DATA</td><td>R/W</td><td>RGB332 data; index auto-increments</td></tr>
+    <tr><td>$C01D</td><td>BITMAP_PALETTE</td><td>R/W</td><td>Bitmap palette bank, bits 0&ndash;3</td></tr>
+    <tr><td>$C01E</td><td>VIDEO_STATUS</td><td>R</td><td>VBlank, HBlank, sprite-overflow status &mdash; see below</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>VIDEO_STATUS field</th></tr>
+    <tr><td>0</td><td>Live VBlank</td></tr>
+    <tr><td>1</td><td>Live HBlank</td></tr>
+    <tr><td>2</td><td>Sprite overflow, latched for the current frame</td></tr>
+    <tr><td>7&ndash;3</td><td>Reserved</td></tr>
+  </table>
+
+  <h3>Video RAM &mdash; tile mode</h3>
+  <table>
+    <tr><th>VRAM offset</th><th>Bank</th><th>Size</th><th>Description</th></tr>
+    <tr><td>$0000&ndash;$1FFF</td><td>0</td><td>8 KiB</td><td>256 packed 4-bpp, 8&times;8 tile patterns</td></tr>
+    <tr><td>$2000&ndash;$27FF</td><td>0</td><td>2,048 B</td><td>64&times;32 tile-number map</td></tr>
+    <tr><td>$2800&ndash;$2FFF</td><td>0</td><td>2,048 B</td><td>64&times;32 tile-attribute map</td></tr>
+    <tr><td>$3000&ndash;$30FF</td><td>0</td><td>256 B</td><td>32 eight-byte sprite records</td></tr>
+  </table>
+  <pre class="code">tile pattern offset = tile_number &times; 32
+tilemap offset       = tile_y &times; 64 + tile_x
+tile number byte     = $2000 + tilemap offset
+tile attribute byte  = $2800 + tilemap offset
+sprite record        = $3000 + sprite_number &times; 8</pre>
+  <table>
+    <tr><th>Bit</th><th>Tile attribute field</th></tr>
+    <tr><td>7</td><td>Reserved</td></tr>
+    <tr><td>6</td><td>Priority</td></tr>
+    <tr><td>5</td><td>V-flip</td></tr>
+    <tr><td>4</td><td>H-flip</td></tr>
+    <tr><td>3&ndash;0</td><td>Palette</td></tr>
+  </table>
+
+  <h3>Sprite record (8 bytes)</h3>
+  <table>
+    <tr><th>Offset</th><th>Name</th><th>Meaning</th></tr>
+    <tr><td>0</td><td>X_LOW</td><td>X position bits 0&ndash;7</td></tr>
+    <tr><td>1</td><td>X_FLAGS</td><td>Bit 0 X bit 8; bit 1 behind background</td></tr>
+    <tr><td>2</td><td>Y</td><td>Y position</td></tr>
+    <tr><td>3</td><td>TILE</td><td>First pattern tile</td></tr>
+    <tr><td>4</td><td>ATTR</td><td>Enable, size, flips, palette &mdash; see below</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>ATTR field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6</td><td>16&times;16 size</td></tr>
+    <tr><td>5</td><td>V-flip</td></tr>
+    <tr><td>4</td><td>H-flip</td></tr>
+    <tr><td>3&ndash;0</td><td>Palette</td></tr>
+  </table>
+  <p>X <code>$1F0&ndash;$1FF</code> = &minus;16..&minus;1. Y <code>$F0&ndash;$FF</code> =
+  &minus;16..&minus;1. Sprites clip at all four edges and never wrap.</p>
+
+  <h3>Video RAM &mdash; bitmap mode</h3>
+  <table>
+    <tr><th>VRAM offset</th><th>Bank</th><th>Size</th><th>Description</th></tr>
+    <tr><td>$4000&ndash;$7FFF</td><td>1</td><td>16 KiB</td><td>First bitmap section</td></tr>
+    <tr><td>$8000&ndash;$BCFF</td><td>2</td><td>15,616 B</td><td>Remaining bitmap pixels</td></tr>
+  </table>
+  <pre class="code">VRAM byte offset = $4000 + Y &times; 160 + (X / 2)
+even X pixel = high nibble   odd X pixel = low nibble</pre>
+
+  <h2>Audio registers</h2>
+  <table class="audio-table">
+    <tr><th>Channel</th><th>Control</th><th>Timer low</th><th>Timer high</th><th>Phase reset</th></tr>
+    <tr><td>Pulse 1</td><td>$C030</td><td>$C031</td><td>$C032</td><td>$C033</td></tr>
+    <tr><td>Pulse 2</td><td>$C034</td><td>$C035</td><td>$C036</td><td>$C037</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>Pulse control field</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6&ndash;5</td><td>Duty</td></tr>
+    <tr><td>4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Volume</td></tr>
+  </table>
+  <table>
+    <tr><th>Addr</th><th>Name</th><th>Description</th></tr>
+    <tr><td>$C038</td><td>TRI_CONTROL</td><td>Bit 7 enables the triangle</td></tr>
+    <tr><td>$C039/$C03A</td><td>TRI_TIMER</td><td>11-bit timer</td></tr>
+    <tr><td>$C03B</td><td>TRI_PHASE_RESET</td><td>Any write resets phase</td></tr>
+    <tr><td>$C03D</td><td>NOISE_PERIOD</td><td>Period-table index, bits 0&ndash;3</td></tr>
+    <tr><td>$C03E</td><td>NOISE_RESET</td><td>Any write reseeds the LFSR</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>NOISE_CONTROL field ($C03C)</th></tr>
+    <tr><td>7</td><td>Enable</td></tr>
+    <tr><td>6</td><td>Short mode</td></tr>
+    <tr><td>5&ndash;4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Volume</td></tr>
+  </table>
+  <table>
+    <tr><th>Bit</th><th>AUDIO_MASTER field ($C040)</th></tr>
+    <tr><td>7</td><td>Master enable</td></tr>
+    <tr><td>6&ndash;4</td><td>Reserved</td></tr>
+    <tr><td>3&ndash;0</td><td>Master volume</td></tr>
+  </table>
+
+  <h2>Controller registers</h2>
+  <table class="reg-table">
+    <tr><th>Addr</th><th>Name</th><th>Description</th></tr>
+    <tr><td>$C050</td><td>PAD0_STATE</td><td>Currently held controller-1 buttons</td></tr>
+    <tr><td>$C051</td><td>PAD0_PRESSED</td><td>Newly pressed buttons; read clears returned bits</td></tr>
+    <tr><td>$C052</td><td>PAD1_STATE</td><td>Currently held controller-2 buttons</td></tr>
+    <tr><td>$C053</td><td>PAD1_PRESSED</td><td>Newly pressed buttons; read clears returned bits</td></tr>
+  </table>
+  <pre class="code">7       6       5       4       3       2       1       0
+START   SELECT  B       A       RIGHT   LEFT    DOWN    UP</pre>
+
+  <h2>Timer registers</h2>
+  <table class="reg-table">
+    <tr><th>Timer</th><th>Reload lo</th><th>Reload hi</th><th>Control</th><th>Count lo</th><th>Count hi</th></tr>
+    <tr><td>Timer 0</td><td>$C060</td><td>$C061</td><td>$C062</td><td>$C063</td><td>$C064</td></tr>
+    <tr><td>Timer 1</td><td>$C068</td><td>$C069</td><td>$C06A</td><td>$C06B</td><td>$C06C</td></tr>
+  </table>
+  <p>Control: <code>$01</code> enable, <code>$02</code> auto-reload. Both timers decrement once
+  per CPU cycle; reload of zero means 65,536 cycles.</p>
+
+  <h2>CPU vectors</h2>
+  <table>
+    <tr><th>Address</th><th>Vector</th></tr>
+    <tr><td>$FFFA&ndash;$FFFB</td><td>NMI &mdash; reserved by v0.1 hardware</td></tr>
+    <tr><td>$FFFC&ndash;$FFFD</td><td>RESET entry point</td></tr>
+    <tr><td>$FFFE&ndash;$FFFF</td><td>IRQ and BRK entry point</td></tr>
+  </table>
+  <p>Fixed ROM must supply all three vectors even when a cartridge never uses NMI or IRQ.</p>
+</div>
+
+<div class="chapter dense" id="appC">
+  <div class="chapter-kicker">APPENDIX C</div>
+  <h1 class="chapter-title">Assembler Directive &amp; Macro Reference</h1>
+  <p class="lede">The complete syntax reference for Fanticon's native two-pass 6502 assembler
+  &mdash; Merlin-inspired source, raw <code>.BIN</code> output, project-aware <code>BANK</code>/<code>FIXED</code>
+  extensions.</p>
+
+  <h2>Source layout</h2>
+  <p>Source is case-insensitive; string contents are preserved. Merlin-style fields: label at
+  column&nbsp;1, operation at column&nbsp;10, operand at column&nbsp;16, comment at
+  column&nbsp;27 &mdash; whitespace-separated source is also accepted. A semicolon starts a
+  comment outside a quoted string; a line beginning with <code>*</code> or <code>;</code> is a
+  full-line comment. Labels are global, case-insensitive, and may end in a colon.</p>
+
+  <h2>Numbers and expressions</h2>
+  <p>Decimal integers, <code>$</code>/<code>0x</code> hexadecimal, <code>%</code> binary, and
+  single-character literals. <code>*</code> is the address at the current source line. Unary
+  operators: <code>+ - ~ &lt;</code>(low byte)<code> &gt;</code>(high byte). Binary operators,
+  highest to lowest precedence: <code>* /</code>, then <code>+ -</code>, then <code>&lt;&lt; &gt;&gt;</code>,
+  then <code>&amp;</code>, then <code>^</code>, then <code>|</code>. Parentheses override
+  precedence. <code>EQU</code> and layout-determining directives must resolve when encountered
+  &mdash; define those constants first; ordinary instruction/data operands may reference labels
+  defined later.</p>
+
+  <h2>Addressing modes accepted</h2>
+  <table>
+    <tr><th>Mode</th><th>Example</th></tr>
+    <tr><td>Implied</td><td><code>RTS</code></td></tr>
+    <tr><td>Accumulator</td><td><code>ASL A</code></td></tr>
+    <tr><td>Immediate</td><td><code>LDA #$20</code></td></tr>
+    <tr><td>Zero page or absolute</td><td><code>LDA ADDRESS</code></td></tr>
+    <tr><td>Indexed</td><td><code>LDA ADDRESS,X</code> or <code>LDX ADDRESS,Y</code></td></tr>
+    <tr><td>Indirect jump</td><td><code>JMP (VECTOR)</code></td></tr>
+    <tr><td>Indexed indirect</td><td><code>LDA (POINTER,X)</code></td></tr>
+    <tr><td>Indirect indexed</td><td><code>LDA (POINTER),Y</code></td></tr>
+    <tr><td>Relative</td><td><code>BNE LABEL</code></td></tr>
+  </table>
+  <p>Also accepted: Fanticon's stable NMOS undocumented mnemonics <code>SLO, RLA, SRE, RRA,
+  SAX, LAX, DCP, ISC/ISB, ANC, ALR, ARR, XAA, AXS/SBX, AHX, SHY, SHX, TAS, LAS,</code> and
+  <code>KIL/JAM</code>, plus addressed undocumented <code>NOP</code> forms (Appendix&nbsp;A).</p>
+
+  <h2>Directives</h2>
+  <table>
+    <tr><th>Directive</th><th>Purpose</th></tr>
+    <tr><td><code>ORG expr</code></td><td>Set the address for following output</td></tr>
+    <tr><td><code>name EQU expr</code> / <code>EQ</code></td><td>Define a constant</td></tr>
+    <tr><td><code>DFB, DB, BYTE</code></td><td>Emit comma-separated bytes or strings</td></tr>
+    <tr><td><code>DW, DA, WORD</code></td><td>Emit comma-separated 16-bit values, low byte first</td></tr>
+    <tr><td><code>ASC, TEXT</code></td><td>Emit quoted ASCII strings or byte expressions</td></tr>
+    <tr><td><code>HEX</code></td><td>Emit hexadecimal byte pairs, spaces or commas allowed</td></tr>
+    <tr><td><code>DS expr</code></td><td>Reserve and zero-fill a number of bytes</td></tr>
+    <tr><td><code>PUT, USE, INCLUDE</code></td><td>Assemble another file at this point (nested up to 16 levels)</td></tr>
+    <tr><td><code>END</code></td><td>Mark the logical end of source</td></tr>
+  </table>
+  <p>Multiple <code>ORG</code> regions are allowed only in increasing address order; gaps are
+  zero-filled. Moving backward over already-written output is an error.</p>
+
+  <h2>Cartridge-project extensions</h2>
+  <table>
+    <tr><th>Directive</th><th>Purpose</th></tr>
+    <tr><td><code>BANK 0&ndash;255</code></td><td>Select a switchable 16 KiB image at $8000&ndash;$BFFF</td></tr>
+    <tr><td><code>FIXED</code></td><td>Select the 16 KiB image always mapped at $C000&ndash;$FFFF</td></tr>
+    <tr><td><code>BANKOF(label)</code></td><td>Resolve a switchable-ROM label's bank number, 0&ndash;255</td></tr>
+  </table>
+  <p>Code or data crossing its own section, overlapping earlier output, writing the hidden
+  I/O-shadowed page ($C000&ndash;$C0FF within FIXED), selecting an invalid bank, or omitting
+  any CPU vector is a build error. Every unwritten ROM byte is <code>$FF</code>.</p>
+
+  <h2>Merlin-style macros</h2>
+  <p>Define a macro with its name in the label field and <code>MAC</code> in the operation
+  field; end with <code>EOM</code> or <code>&lt;&lt;&lt;</code>. Parameters <code>]1</code>
+  through <code>]8</code> substitute on expansion:</p>
+  <pre class="code"><span class="lbl">LOADIMM</span>  <span class="dir">MAC</span>
+         <span class="op">LDA</span>   <span class="dir">#</span>]1
+         <span class="op">STA</span>   ]2
+         <span class="dir">EOM</span>
+
+         <span class="dir">ORG</span>   <span class="num">$8000</span>
+         <span class="dir">PMC</span>   LOADIMM;$42;$20</pre>
+  <p><code>PMC name;arg1;arg2</code> and <code>&gt;&gt;&gt; name;arg1;arg2</code> both invoke a
+  macro; a macro name may also appear directly in the operation field. Expansion nests up to 32
+  levels. Duplicate names, unterminated definitions, invalid expanded source, and unknown macro
+  calls are all reported with their exact source location.</p>
+
+  <h2>Output and limits</h2>
+  <p>Output may span at most the 6502's full 64 KiB address space. Byte and immediate values
+  must fit 8 bits; word and address values must fit 16 bits; branch targets must be in the
+  signed &minus;128..+127 range from the address immediately after the operand &mdash; a common
+  workaround for a too-far branch inverts the condition and jumps:</p>
+  <pre class="code">         <span class="op">BEQ</span>   NEARBY      <span class="cmt">; original intent: BNE FAR_AWAY</span>
+         <span class="op">JMP</span>   FAR_AWAY
+<span class="lbl">NEARBY</span></pre>
+
+  <h2>Building</h2>
+  <table>
+    <tr><th>Where</th><th>How</th></tr>
+    <tr><td>Console, raw file</td><td><code>ASM GAME.ASM [OUTPUT.BIN]</code></td></tr>
+    <tr><td>Console, project</td><td><code>BUILD</code> (package), <code>RUN</code> (build &amp; launch), <code>RUN GAME.FCN</code> (launch existing)</td></tr>
+    <tr><td>Editor</td><td><span class="kbd">F5</span>/<span class="kbd">Ctrl+B</span> assemble; <span class="kbd">Shift+F5</span> Build &amp; Run</td></tr>
+  </table>
+  <p>Console diagnostics print as <code>source:line:column message</code>. No new binary is
+  ever written on a failed build.</p>
+</div>
+
+<div class="chapter dense" id="appD">
+  <div class="chapter-kicker">APPENDIX D</div>
+  <h1 class="chapter-title">Cartridge &amp; Save File Formats</h1>
+  <p class="lede">Both formats are little-endian and independently versioned. Byte-for-byte
+  detail; the narrative version is Chapter&nbsp;20.</p>
+
+  <h2>Cartridge capacity</h2>
+  <p>One fixed 16 KiB ROM image, 0&ndash;256 switchable 16 KiB ROM banks, and a declaration for
+  0&ndash;4 battery-backed 16 KiB RAM banks. Maximum banked ROM is 4 MiB; the largest possible
+  <code>.FCN</code> file, including the fixed image and 64-byte header, is
+  <code>$404040</code> bytes (4,210,752). Battery RAM is 0, 16, 32, 48, or 64 KiB, selected with
+  <code>BANK_KIND=$03</code>.</p>
+
+  <h2>.FCN file layout</h2>
+  <pre class="code">offset $000000  64-byte FCN header
+offset $000040  16 KiB fixed ROM image
+offset $004040  banked ROM bank 0
+offset $008040  banked ROM bank 1
+                ...</pre>
+  <p>Banks are stored uncompressed in ascending order. The file must be exactly the size implied
+  by its header &mdash; trailing bytes are an error.</p>
+
+  <h2>FCN header (64 bytes)</h2>
+  <table class="dense">
+    <tr><th>Off</th><th>Size</th><th>Type</th><th>Field</th><th>Meaning</th></tr>
+    <tr><td>$00</td><td>8</td><td>bytes</td><td>MAGIC</td><td>ASCII <code>FANTICON</code></td></tr>
+    <tr><td>$08</td><td>1</td><td>u8</td><td>FORMAT_MAJOR</td><td>$01</td></tr>
+    <tr><td>$09</td><td>1</td><td>u8</td><td>FORMAT_MINOR</td><td>$00</td></tr>
+    <tr><td>$0A</td><td>2</td><td>u16</td><td>HEADER_SIZE</td><td>$0040</td></tr>
+    <tr><td>$0C</td><td>4</td><td>u32</td><td>FLAGS</td><td>Bit 0: BATTERY_RAM</td></tr>
+    <tr><td>$10</td><td>2</td><td>u16</td><td>ROM_BANKS</td><td>Switchable banks, 0&ndash;256</td></tr>
+    <tr><td>$12</td><td>1</td><td>u8</td><td>SAVE_BANKS</td><td>Battery RAM banks, 0&ndash;4</td></tr>
+    <tr><td>$13</td><td>1</td><td>u8</td><td>MAPPER</td><td>$00 for the v0.1 mapper</td></tr>
+    <tr><td>$14</td><td>4</td><td>u32</td><td>FIXED_CRC32</td><td>CRC-32 of the fixed ROM image</td></tr>
+    <tr><td>$18</td><td>4</td><td>u32</td><td>BANKED_CRC32</td><td>CRC-32 of all banked ROM bytes</td></tr>
+    <tr><td>$1C</td><td>8</td><td>u64</td><td>CARTRIDGE_ID</td><td>Stable, nonzero game identifier</td></tr>
+    <tr><td>$24</td><td>22</td><td>bytes</td><td>TITLE</td><td>Printable ASCII, NUL-padded</td></tr>
+    <tr><td>$3A</td><td>1</td><td>u8</td><td>MACHINE_MAJOR</td><td>Required hardware major version</td></tr>
+    <tr><td>$3B</td><td>1</td><td>u8</td><td>MACHINE_MINOR</td><td>Minimum required minor version</td></tr>
+    <tr><td>$3C</td><td>4</td><td>u32</td><td>HEADER_CRC32</td><td>CRC-32 of header bytes $00&ndash;$3B</td></tr>
+  </table>
+  <p>All CRC fields use CRC-32/ISO-HDLC: polynomial <code>$04C11DB7</code>, initial value
+  <code>$FFFFFFFF</code>, reflected input/output, final XOR <code>$FFFFFFFF</code>.
+  <code>BANKED_CRC32</code> is zero when <code>ROM_BANKS</code> is zero. Hardware major
+  versions must match exactly; a loader accepts a cartridge only when its own minor version is
+  at least <code>MACHINE_MINOR</code>. v0.1 cartridges require machine version 1.0.</p>
+
+  <h3>Fixed ROM image layout</h3>
+  <p>A complete 16 KiB logical image for <code>$C000&ndash;$FFFF</code>. Its first 256 bytes
+  correspond to <code>$C000&ndash;$C0FF</code>, hidden by the I/O page &mdash; packagers fill
+  those bytes with <code>$FF</code>.</p>
+  <table>
+    <tr><th>CPU address</th><th>Fixed-image offset</th></tr>
+    <tr><td>$C100</td><td>$0100</td></tr>
+    <tr><td>$FFFA NMI vector</td><td>$3FFA</td></tr>
+    <tr><td>$FFFC RESET vector</td><td>$3FFC</td></tr>
+    <tr><td>$FFFE IRQ/BRK vector</td><td>$3FFE</td></tr>
+  </table>
+
+  <h2>Save file naming and layout</h2>
+  <p>Native: <code>ASTRO.FCN &rarr; ASTRO.SAV</code>, beside the cartridge, keyed by path.
+  Browser: persistent storage keyed by <code>CARTRIDGE_ID</code>.</p>
+  <pre class="code">offset $0000  32-byte SAV header
+offset $0020  battery-backed RAM bytes</pre>
+  <table class="dense">
+    <tr><th>Off</th><th>Size</th><th>Type</th><th>Field</th><th>Meaning</th></tr>
+    <tr><td>$00</td><td>8</td><td>bytes</td><td>MAGIC</td><td><code>FCNSAVE</code> + $1A</td></tr>
+    <tr><td>$08</td><td>1</td><td>u8</td><td>FORMAT_MAJOR</td><td>$01</td></tr>
+    <tr><td>$09</td><td>1</td><td>u8</td><td>FORMAT_MINOR</td><td>$00</td></tr>
+    <tr><td>$0A</td><td>2</td><td>u16</td><td>HEADER_SIZE</td><td>$0020</td></tr>
+    <tr><td>$0C</td><td>8</td><td>u64</td><td>CARTRIDGE_ID</td><td>Must match the loaded cartridge</td></tr>
+    <tr><td>$14</td><td>4</td><td>u32</td><td>RAM_SIZE</td><td>Exact payload length</td></tr>
+    <tr><td>$18</td><td>4</td><td>u32</td><td>DATA_CRC32</td><td>CRC-32 of RAM payload</td></tr>
+    <tr><td>$1C</td><td>4</td><td>u32</td><td>HEADER_CRC32</td><td>CRC-32 of header bytes $00&ndash;$1B</td></tr>
+  </table>
+  <p><code>RAM_SIZE</code> must be 16, 32, 48, or 64 KiB, and the file must be exactly
+  <code>HEADER_SIZE + RAM_SIZE</code> bytes. If a valid save's <code>RAM_SIZE</code> does not
+  match <code>SAVE_BANKS &times; $4000</code> for the loading cartridge, Fanticon deletes it and
+  creates a fresh zero-filled save at the correct size.</p>
+
+  <h2>Mapper 0 (the only mapper in format 1.0)</h2>
+  <table>
+    <tr><th>BANK_KIND</th><th>Meaning</th><th>Bank range</th></tr>
+    <tr><td>$00</td><td>Cartridge ROM</td><td>0 to ROM_BANKS&minus;1</td></tr>
+    <tr><td>$01</td><td>Work RAM</td><td>0&ndash;3</td></tr>
+    <tr><td>$02</td><td>Video RAM</td><td>0&ndash;2</td></tr>
+    <tr><td>$03</td><td>Battery-backed save RAM</td><td>0 to SAVE_BANKS&minus;1</td></tr>
+  </table>
+
+  <h2>Loader validation order</h2>
+  <ol>
+    <li>Minimum length and magic</li>
+    <li>Supported major/minor version and header size</li>
+    <li>Known flags and mapper</li>
+    <li>ROM and save bank-count limits</li>
+    <li>Nonzero cartridge ID, valid title bytes, compatible machine version</li>
+    <li>Exact total file size</li>
+    <li>Header, fixed-ROM, and banked-ROM CRC values</li>
+    <li>Fixed-ROM vector presence</li>
+  </ol>
+  <p>This format stores no host paths, no executable host code, no compression stream, and no
+  embedded save data.</p>
+</div>
+
+<div class="chapter dense" id="appE">
+  <div class="chapter-kicker">APPENDIX E</div>
+  <h1 class="chapter-title">Demo Cartridge Index</h1>
+  <p class="lede">Every example cartridge ships under <code>/demos</code> the moment the host
+  boots. Each is small enough to read end to end in one sitting.</p>
+
+  <table>
+    <tr><th>Folder</th><th>Demonstrates</th><th>See</th></tr>
+    <tr><td><code>graphics</code></td><td>The complete .GFX/.PAL asset pipeline: edit patterns, a 64&times;32 map, attributes, and 16&times;16 sprite art, then load all of it into VRAM at runtime</td><td>Ch. 8</td></tr>
+    <tr><td><code>tiles</code></td><td>A full tilemap scroller driven by a VBlank IRQ reading controller 1; scroll registers wrap around a 320&times;200 map</td><td>Ch. 9</td></tr>
+    <tr><td><code>sprites</code></td><td>One hardware sprite, VBlank-driven movement, edge clipping, and signed coordinates</td><td>Ch. 10</td></tr>
+    <tr><td><code>bitmap</code></td><td>Filling the packed 320&times;200 bitmap across VRAM banks 1&ndash;2; visible multi-frame startup cost</td><td>Ch. 11</td></tr>
+    <tr><td><code>raster</code></td><td>Four horizontal color bands from raster IRQs alone, with zero framebuffer writes</td><td>Ch. 12</td></tr>
+    <tr><td><code>wave</code></td><td>A per-scanline raster IRQ bending tilemap scroll along a 128-step sine curve, timed against HBlank</td><td>Ch. 12</td></tr>
+    <tr><td><code>audio</code></td><td>All four voices together, with a VBlank IRQ changing the lead note and backdrop color in lockstep</td><td>Ch. 14</td></tr>
+    <tr><td><code>music</code></td><td>A complete tracker song ("Ode to Joy") plus <code>PLAYER.INC</code>, a reference cartridge music player</td><td>Ch. 15</td></tr>
+  </table>
+
+  <p>Every demo folder also carries its own <code>FANTICON.CFG</code> and <code>readme.txt</code>
+  &mdash; from any of them, <code>RUN</code> or <span class="kbd">F5</span> builds and launches
+  it on the spot.</p>
+</div>
+
+<div class="chapter dense" id="appF">
+  <div class="chapter-kicker">APPENDIX F</div>
+  <h1 class="chapter-title">Glossary</h1>
+
+  <table>
+    <tr><th>Term</th><th>Meaning</th></tr>
+    <tr><td>Bank</td><td>One 16 KiB slice of ROM, work RAM, VRAM, or save RAM, selectable into the $8000&ndash;$BFFF window</td></tr>
+    <tr><td>BCD</td><td>Binary-coded decimal; the NMOS decimal-mode arithmetic adjustment</td></tr>
+    <tr><td>Cartridge</td><td>A validated .FCN image: fixed ROM, banked ROM, and metadata</td></tr>
+    <tr><td>Fantasy console</td><td>An emulated machine with no historical hardware counterpart, built and documented as if it had one</td></tr>
+    <tr><td>Fixed ROM</td><td>The 16 KiB image always mapped at $C000&ndash;$FFFF, holding RESET and the CPU vectors</td></tr>
+    <tr><td>HBlank</td><td>Horizontal blanking; dots 320&ndash;399 of each scanline</td></tr>
+    <tr><td>IRQ</td><td>Maskable interrupt request; shared and software-prioritized among four sources</td></tr>
+    <tr><td>LFSR</td><td>Linear-feedback shift register; drives the noise channel's pseudo-random output</td></tr>
+    <tr><td>NMI</td><td>Non-maskable interrupt; reserved by v0.1, undriven by standard devices</td></tr>
+    <tr><td>NMOS 6502</td><td>The original MOS Technology 6502 variant Fanticon emulates, including undocumented opcodes, as distinct from the later CMOS 65C02</td></tr>
+    <tr><td>Page crossing</td><td>An indexed address whose high byte differs from its unindexed base &mdash; costs an extra CPU cycle on affected instructions</td></tr>
+    <tr><td>RGB332</td><td>An 8-bit color encoding: 3 bits red, 3 bits green, 2 bits blue</td></tr>
+    <tr><td>Raster</td><td>The simulated scanning beam that paints the display top to bottom, left to right, whose exact position code can read and race</td></tr>
+    <tr><td>VBlank</td><td>Vertical blanking; scanlines 200&ndash;261, when nothing visible is being drawn</td></tr>
+    <tr><td>VRAM</td><td>Video RAM; 48 KiB across three banks, holding patterns, maps, attributes, sprite records, or bitmap pixels</td></tr>
+    <tr><td>W1C</td><td>Write-one-to-clear; the acknowledgment pattern used by IRQ_PENDING</td></tr>
+    <tr><td>Zero page</td><td>Addresses $0000&ndash;$00FF, with shorter and faster addressing modes than the rest of memory</td></tr>
+  </table>
+</div>
+
+</body>
+</html>

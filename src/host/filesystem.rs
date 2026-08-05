@@ -572,10 +572,16 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn native_filesystem_is_confined_to_its_root() {
+        // The test harness names worker threads after the fully-qualified
+        // test path (e.g. "host::filesystem::tests::..."). `:` is reserved
+        // in Windows filenames (drive letters / alternate data streams), so
+        // it has to be stripped before the name can be used as a path
+        // component.
+        let thread_name = std::thread::current().name().unwrap_or("worker").replace(':', "_");
         let root = std::env::temp_dir().join(format!(
             "fanticon-filesystem-test-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("worker")
+            thread_name
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("MixCase")).unwrap();

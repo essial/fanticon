@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use crate::{
     assembler::{
-        CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic, assemble_cartridge_with_loader,
+        BankUsage, CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic,
+        assemble_cartridge_with_loader,
     },
     cartridge::Cartridge,
 };
@@ -114,6 +115,7 @@ pub struct ProjectBuild {
     pub bytes: Vec<u8>,
     pub symbols: BTreeMap<String, CartridgeSymbol>,
     pub source_map: Vec<CartridgeSourceMapEntry>,
+    pub bank_usage: Vec<BankUsage>,
 }
 
 pub fn build_project_with_loader<F>(
@@ -132,6 +134,7 @@ where
     let assembled = assemble_cartridge_with_loader(&manifest.main, &source, |path| loader(path))?;
     let symbols = assembled.symbols;
     let source_map = assembled.source_map;
+    let bank_usage = assembled.bank_usage;
     let mut cartridge = Cartridge::new(
         manifest.title.clone(),
         manifest.id,
@@ -147,7 +150,7 @@ where
     let bytes = cartridge.to_bytes().map_err(|error| {
         vec![Diagnostic { source: manifest.main.clone(), line: 1, column: 1, message: error.0 }]
     })?;
-    Ok(ProjectBuild { manifest, cartridge, bytes, symbols, source_map })
+    Ok(ProjectBuild { manifest, cartridge, bytes, symbols, source_map, bank_usage })
 }
 
 pub fn generate_cartridge_id() -> Result<u64, String> {

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fanticon::{
-    assembler::{CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic, SymbolSection},
+    assembler::{BankUsage, CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic, SymbolSection},
     debugger::{DebugSnapshot, DebugStop},
     disassemble_instruction, instruction_length,
     machine::{VIDEO_DOTS_PER_CPU_CYCLE, bank_kind},
@@ -50,6 +50,9 @@ const SEARCH_RESULTS_Y: usize = 3;
 const SEARCH_RESULTS_WIDTH: usize = COLUMNS - 4;
 const SEARCH_RESULTS_HEIGHT: usize = ROWS - 6;
 const SEARCH_RESULTS_VISIBLE: usize = SEARCH_RESULTS_HEIGHT - 5;
+const BANK_USAGE_WIDTH: usize = 44;
+const BANK_USAGE_HEIGHT: usize = 20;
+const BANK_USAGE_VISIBLE: usize = BANK_USAGE_HEIGHT - 6;
 const HELP_X: usize = 2;
 const HELP_Y: usize = 3;
 const HELP_WIDTH: usize = COLUMNS - 4;
@@ -65,6 +68,7 @@ const ASM_NUMBER_COLOR: u8 = 244;
 const ASM_COMMENT_COLOR: u8 = 245;
 const ASM_STRING_COLOR: u8 = 246;
 const ASM_ERROR_COLOR: u8 = 247;
+const ASM_MACRO_COLOR: u8 = 255;
 const UI_WHITE_COLOR: u8 = 248;
 const UI_ERROR_BACKGROUND: u8 = 249;
 const UI_SUCCESS_BACKGROUND: u8 = 250;
@@ -317,6 +321,12 @@ enum Overlay {
         scroll: usize,
         preview_scroll: usize,
     },
+    /// Read-only "how much ROM is left" readout, one row per FIXED/BANK
+    /// section, populated by a fresh build so it never goes stale.
+    BankUsage {
+        entries: Vec<BankUsage>,
+        scroll: usize,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -363,6 +373,7 @@ pub struct TextEditor {
     diagnostic_index: Option<usize>,
     build_message: Option<String>,
     build_and_run: bool,
+    pending_bank_usage: bool,
     pending_launch: Option<GameLaunch>,
     mouse_selecting: bool,
     wheel_remainder: (f64, f64),
@@ -433,6 +444,7 @@ impl TextEditor {
             diagnostic_index: None,
             build_message: None,
             build_and_run: false,
+            pending_bank_usage: false,
             pending_launch: None,
             mouse_selecting: false,
             wheel_remainder: (0.0, 0.0),
@@ -669,6 +681,14 @@ impl TextEditor {
                 }
                 "g" => {
                     self.open_search_prompt(SearchMode::GoToLine);
+                    EditorAction::None
+                }
+                "=" if self.assembly_mode() => {
+                    self.insert_banner_comment('=');
+                    EditorAction::None
+                }
+                "-" if self.assembly_mode() => {
+                    self.insert_banner_comment('-');
                     EditorAction::None
                 }
                 _ => EditorAction::None,
@@ -1602,6 +1622,10 @@ impl TextEditor {
             }
             Overlay::Building { .. } => return EditorAction::None,
             Overlay::HelpFinder { .. } => return EditorAction::None,
+            Overlay::BankUsage { .. } => {
+                self.overlay = Overlay::None;
+                return EditorAction::None;
+            }
             Overlay::None => {}
         }
 
@@ -2936,6 +2960,24 @@ impl TextEditor {
             }
             return EditorAction::None;
         }
+        if matches!(self.overlay, Overlay::BankUsage { .. }) {
+            if let Overlay::BankUsage { entries, scroll } = &mut self.overlay {
+                let max_scroll = entries.len().saturating_sub(BANK_USAGE_VISIBLE);
+                match key {
+                    Key::Named(NamedKey::Escape | NamedKey::Enter) => self.overlay = Overlay::None,
+                    Key::Named(NamedKey::ArrowUp) => *scroll = scroll.saturating_sub(1),
+                    Key::Named(NamedKey::ArrowDown) => *scroll = (*scroll + 1).min(max_scroll),
+                    Key::Named(NamedKey::PageUp) => {
+                        *scroll = scroll.saturating_sub(BANK_USAGE_VISIBLE);
+                    }
+                    Key::Named(NamedKey::PageDown) => {
+                        *scroll = (*scroll + BANK_USAGE_VISIBLE).min(max_scroll);
+                    }
+                    _ => {}
+                }
+            }
+            return EditorAction::None;
+        }
 
         if matches!(self.overlay, Overlay::SearchPrompt { .. }) {
             let mut submit = None;
@@ -3107,7 +3149,8 @@ impl TextEditor {
             | Overlay::SearchResults { .. }
             | Overlay::DebugPrompt { .. }
             | Overlay::About { .. }
-            | Overlay::HelpFinder { .. } => {}
+            | Overlay::HelpFinder { .. }
+            | Overlay::BankUsage { .. } => {}
         }
         EditorAction::None
     }
@@ -3199,6 +3242,7 @@ impl TextEditor {
             (MenuKind::Build, 1) => self.start_build(true),
             (MenuKind::Build, 3) => self.move_diagnostic(true),
             (MenuKind::Build, 4) => self.move_diagnostic(false),
+            (MenuKind::Build, 6) => self.start_bank_usage(),
             (MenuKind::Debug, 0) => {
                 if self.debug_active && self.debug_snapshot.is_some() {
                     self.debug_snapshot = None;
@@ -3513,6 +3557,43 @@ impl TextEditor {
                     SEARCH_RESULTS_Y + SEARCH_RESULTS_HEIGHT - 2,
                     "ENTER/CLICK=OPEN  ESC=CLOSE",
                 );
+            }
+            Overlay::BankUsage { entries, scroll } => {
+                let x = (COLUMNS - BANK_USAGE_WIDTH) / 2;
+                let y = (ROWS - BANK_USAGE_HEIGHT) / 2;
+                draw_dialog(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    background_gradients,
+                    inverse,
+                    CellRect { x, y, width: BANK_USAGE_WIDTH, height: BANK_USAGE_HEIGHT },
+                    style,
+                );
+                put_text_width(cells, x + 3, y, "ROM BANK USAGE", BANK_USAGE_WIDTH - 6);
+                for (screen_row, entry) in
+                    entries.iter().skip(*scroll).take(BANK_USAGE_VISIBLE).enumerate()
+                {
+                    let row = y + 2 + screen_row;
+                    let label = bank_usage_label(entry.section);
+                    let used = entry.used;
+                    let free = entry.free();
+                    let percent = if entry.capacity == 0 { 0 } else { used * 100 / entry.capacity };
+                    let line =
+                        format!("{label:<8}{used:>6}B USED {free:>6}B FREE {percent:>3}%");
+                    put_text_width(cells, x + 2, row, &line, BANK_USAGE_WIDTH - 4);
+                }
+                if entries.len() > BANK_USAGE_VISIBLE {
+                    let shown_end = (*scroll + BANK_USAGE_VISIBLE).min(entries.len());
+                    put_text_width(
+                        cells,
+                        x + 2,
+                        y + BANK_USAGE_HEIGHT - 3,
+                        &format!("{}-{} OF {}", *scroll + 1, shown_end, entries.len()),
+                        BANK_USAGE_WIDTH - 4,
+                    );
+                }
+                put_text(cells, x + 2, y + BANK_USAGE_HEIGHT - 2, "ENTER/ESC=CLOSE");
             }
             Overlay::About { .. } => {
                 let x = (COLUMNS - ABOUT_WIDTH) / 2;
@@ -3842,12 +3923,50 @@ impl TextEditor {
 
     fn start_build(&mut self, run_after: bool) {
         self.build_and_run = run_after;
+        // A cancelled ROM-usage build must never linger and hijack this one.
+        self.pending_bank_usage = false;
+        self.overlay = Overlay::Building { frames_remaining: BUILD_PROGRESS_FRAMES };
+    }
+
+    /// Runs a fresh project build purely to report free ROM space, so the
+    /// dialog can never show stale numbers from a build the source has since
+    /// outgrown.
+    fn start_bank_usage(&mut self) {
+        self.pending_bank_usage = true;
+        self.build_and_run = false;
         self.overlay = Overlay::Building { frames_remaining: BUILD_PROGRESS_FRAMES };
     }
 
     fn perform_build(&mut self) {
         if let Err(error) = self.save_named_tabs() {
             self.show_build_message("BUILD ERROR", &[error]);
+            return;
+        }
+        if self.pending_bank_usage {
+            self.pending_bank_usage = false;
+            if self.filesystem.borrow().read_binary(MANIFEST_NAME).is_ok() {
+                match build_project(&self.filesystem) {
+                    Ok(success) => {
+                        self.diagnostics.clear();
+                        self.diagnostic_index = None;
+                        self.overlay =
+                            Overlay::BankUsage { entries: success.bank_usage, scroll: 0 };
+                        self.refresh_project_browser();
+                    }
+                    Err(diagnostics) => {
+                        self.diagnostics = diagnostics;
+                        self.diagnostic_index = (!self.diagnostics.is_empty()).then_some(0);
+                        self.build_message = None;
+                        self.goto_current_diagnostic();
+                        self.show_current_diagnostic_dialog();
+                    }
+                }
+            } else {
+                self.show_build_message(
+                    "BUILD ERROR",
+                    &["ROM BANK USAGE REQUIRES A FANTICON PROJECT".to_owned()],
+                );
+            }
             return;
         }
         if self.build_and_run {
@@ -4313,6 +4432,24 @@ impl TextEditor {
         if text.is_empty() || self.debug_read_only() {
             return;
         }
+        // A `;` typed as the only content on a line - typically one that
+        // Enter just auto-indented to the opcode column - drops back to
+        // column 1 instead of leaving the full-line comment indented, since
+        // `format_assembly_line` (and the Merlin convention it follows)
+        // never indents a `;`/`*` full-line comment.
+        if text == ";"
+            && self.assembly_mode()
+            && self.selection_anchor.is_none()
+            && self.lines[self.cursor.line].trim().is_empty()
+        {
+            self.record_undo_for(EditRunKind::Insert);
+            self.lines[self.cursor.line].clear();
+            self.lines[self.cursor.line].push(';');
+            self.cursor.column = 1;
+            self.dirty = true;
+            self.edit_run = Some((EditRunKind::Insert, self.cursor));
+            return;
+        }
         self.record_undo_for(EditRunKind::Insert);
         self.delete_selection_without_undo();
         self.lines[self.cursor.line].insert_str(self.cursor.column, text);
@@ -4333,8 +4470,38 @@ impl TextEditor {
         }
         let remainder = self.lines[self.cursor.line].split_off(self.cursor.column);
         self.cursor.line += 1;
-        self.cursor.column = 0;
-        self.lines.insert(self.cursor.line, remainder);
+        if self.assembly_mode() {
+            // Default a new line to the opcode column rather than the left
+            // margin, matching the Merlin convention: most lines are plain
+            // instructions, and a label is the exception, not the rule.
+            let mut new_line = String::new();
+            pad_to_column(&mut new_line, 9);
+            self.cursor.column = new_line.len();
+            new_line.push_str(&remainder);
+            self.lines.insert(self.cursor.line, new_line);
+        } else {
+            self.cursor.column = 0;
+            self.lines.insert(self.cursor.line, remainder);
+        }
+        self.dirty = true;
+    }
+
+    /// Drops a three-line section-heading divider at the cursor's line -
+    /// a `;===...`/`;---...` bar, a bare `;` line ready for the heading
+    /// text, then a matching closing bar - mirroring the hand-written
+    /// dividers already used throughout the codebase (e.g. `funcs.inc`).
+    fn insert_banner_comment(&mut self, fill: char) {
+        if self.debug_read_only() {
+            return;
+        }
+        self.record_undo();
+        self.delete_selection_without_undo();
+        let bar = banner_bar(fill);
+        let line = self.cursor.line;
+        self.lines[line] = bar.clone();
+        self.lines.insert(line + 1, ";".to_owned());
+        self.lines.insert(line + 2, bar);
+        self.cursor = Position { line: line + 1, column: 1 };
         self.dirty = true;
     }
 
@@ -4817,6 +4984,13 @@ fn collect_project_files(
     }
 }
 
+fn bank_usage_label(section: SymbolSection) -> String {
+    match section {
+        SymbolSection::Fixed => "FIXED".to_owned(),
+        SymbolSection::Bank(bank) => format!("BANK {bank}"),
+    }
+}
+
 fn menu_items(menu: MenuKind) -> &'static [&'static str] {
     match menu {
         MenuKind::File => &[
@@ -4850,7 +5024,9 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "BACK",
             "FORWARD",
         ],
-        MenuKind::Build => &["ASSEMBLE", "BUILD & RUN", "", "NEXT ERROR", "PREV ERROR"],
+        MenuKind::Build => {
+            &["ASSEMBLE", "BUILD & RUN", "", "NEXT ERROR", "PREV ERROR", "", "ROM USAGE"]
+        }
         MenuKind::Debug => &[
             "START/CONTINUE",
             "STOP",
@@ -4938,7 +5114,15 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "BACK      K",
             "FORWARD   L",
         ],
-        MenuKind::Build => &["ASSEMBLE  B", "BUILD+RUN F5", "", "NEXT ERR  N", "PREV ERR  P"],
+        MenuKind::Build => &[
+            "ASSEMBLE  B",
+            "BUILD+RUN F5",
+            "",
+            "NEXT ERR  N",
+            "PREV ERR  P",
+            "",
+            "ROM USAGE  U",
+        ],
         MenuKind::Debug => &[
             "CONTINUE             F5",
             "STOP           SHIFT+F5",
@@ -4997,7 +5181,7 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
             (12, "k"),
             (13, "l"),
         ],
-        MenuKind::Build => &[(0, "b"), (1, "r"), (3, "n"), (4, "p")],
+        MenuKind::Build => &[(0, "b"), (1, "r"), (3, "n"), (4, "p"), (6, "u")],
         MenuKind::Debug => {
             &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c"), (15, "d")]
         }
@@ -5294,7 +5478,7 @@ fn draw_cell(
         }
     }
     let glyph = CHARACTER_ROM[usize::from(character).min(CHARACTER_ROM.len() - 1)];
-    let frame = is_frame_character(character);
+    let frame = is_frame_character(character) || is_scrollbar_column(cell_x, cell_y);
     for (glyph_y, bits) in glyph.into_iter().enumerate() {
         if bits == 0 {
             continue;
@@ -5411,6 +5595,15 @@ fn is_frame_character(character: u8) -> bool {
             | DBL_BOTTOM_LEFT
             | DBL_BOTTOM_RIGHT
     )
+}
+
+/// Whether a cell sits in the scrollbar's column along the editor's right
+/// edge. Its track, thumb, and end caps share glyphs (`SHADE_LIGHT`,
+/// `SHADE_MEDIUM`) with the window drop shadow, but should read as one solid
+/// rail rather than picking up the shadow's per-scanline banding, so this is
+/// checked by position rather than by character alone.
+fn is_scrollbar_column(cell_x: usize, cell_y: usize) -> bool {
+    cell_x == COLUMNS - 1 && (EDITOR_FIRST_ROW..EDITOR_FIRST_ROW + TEXT_ROWS).contains(&cell_y)
 }
 
 fn draw_about_logo(surface: &mut Surface, frame: u16) {
@@ -5718,6 +5911,10 @@ fn editor_color(index: u8) -> Rgba {
         ASM_COMMENT_COLOR => [127, 132, 156, 255],
         ASM_STRING_COLOR => [166, 227, 161, 255],
         ASM_ERROR_COLOR => [243, 139, 168, 255],
+        // Catppuccin yellow, kept distinct from every other ASM_* color so
+        // macro definitions, invocations, and ]1-]8 parameters read as one
+        // visual category apart from ordinary directives/opcodes.
+        ASM_MACRO_COLOR => [249, 226, 175, 255],
         other => rgb332_to_rgba(other),
     }
 }
@@ -5734,8 +5931,36 @@ fn format_assembly_line(line: &str) -> String {
     if trimmed_start.is_empty() || trimmed_start.starts_with([';', '*']) {
         return trimmed_start.to_owned();
     }
-
     let leading_whitespace = trimmed_end.len() != trimmed_start.len();
+    if is_macro_invocation(trimmed_start) {
+        // Align the same way an ordinary instruction does: label at column
+        // 1, PMC/>>> keyword at column 9, and everything after it at column
+        // 15 - matching the label/opcode/operand split below. The one
+        // difference is that the "operand" here is only ever split once,
+        // right after the keyword; its semicolon-separated argument list is
+        // copied through untouched instead of being re-tokenized, since
+        // reflowing it would corrupt it the same way the old bug did.
+        let first_field = trimmed_start.split_whitespace().next().unwrap_or_default();
+        let has_label = !leading_whitespace && !is_operation(first_field);
+        let mut output = String::new();
+        let after_label = if has_label {
+            output.push_str(first_field);
+            trimmed_start[first_field.len()..].trim_start()
+        } else {
+            trimmed_start
+        };
+        let keyword_len = after_label.split_whitespace().next().unwrap_or_default().len();
+        let (keyword, arguments) = after_label.split_at(keyword_len);
+        pad_to_column(&mut output, 9);
+        output.push_str(keyword);
+        let arguments = arguments.trim_start();
+        if !arguments.is_empty() {
+            pad_to_column(&mut output, 15);
+            output.push_str(arguments);
+        }
+        return output;
+    }
+
     let (code, comment) = split_assembly_comment(trimmed_start);
     let fields = code.split_whitespace().collect::<Vec<_>>();
     if fields.is_empty() {
@@ -5766,9 +5991,30 @@ fn format_assembly_line(line: &str) -> String {
     output
 }
 
+/// The shared column width for `;===...`/`;---...` section-heading dividers,
+/// matching the hand-written 54-column bars already used throughout the
+/// codebase (e.g. `funcs.inc`'s `;-----------------------------------------------------`).
+const BANNER_COLUMN: usize = 54;
+
+fn banner_bar(fill: char) -> String {
+    let mut bar = String::from(";");
+    while bar.chars().count() < BANNER_COLUMN {
+        bar.push(fill);
+    }
+    bar
+}
+
 fn pad_to_column(output: &mut String, column: usize) {
     let spaces = column.saturating_sub(output.len()).max(1);
     output.extend(core::iter::repeat_n(' ', spaces));
+}
+
+/// Mirrors the assembler's own macro-invocation detection (`PMC`/`>>>` as
+/// either of the first two whitespace-separated fields) so the editor's live
+/// formatting and syntax coloring never treat a macro's semicolon-separated
+/// argument list as a trailing comment.
+fn is_macro_invocation(line: &str) -> bool {
+    line.split_whitespace().take(2).any(|field| matches!(field.to_ascii_uppercase().as_str(), "PMC" | ">>>"))
 }
 
 fn split_assembly_comment(line: &str) -> (&str, Option<&str>) {
@@ -5793,7 +6039,7 @@ fn assembly_syntax_colors(line: &str, default: u8) -> Vec<u8> {
         return colors;
     }
 
-    let (code, comment) = split_assembly_comment(line);
+    let (code, comment) = if is_macro_invocation(trimmed) { (line, None) } else { split_assembly_comment(line) };
     if let Some(comment) = comment {
         let start = comment.as_ptr() as usize - line.as_ptr() as usize;
         colors[start..].fill(ASM_COMMENT_COLOR);
@@ -5801,13 +6047,31 @@ fn assembly_syntax_colors(line: &str, default: u8) -> Vec<u8> {
 
     let tokens = assembly_tokens(code);
     if let Some(operation_index) = tokens.iter().position(|(_, token)| is_operation(token)) {
+        let (op_start, op_token) = tokens[operation_index];
+        let is_macro_related = is_macro_keyword(op_token);
         if operation_index > 0 {
             let (start, token) = tokens[0];
-            colors[start..start + token.len()].fill(ASM_LABEL_COLOR);
+            let label_color = if is_macro_related { ASM_MACRO_COLOR } else { ASM_LABEL_COLOR };
+            colors[start..start + token.len()].fill(label_color);
         }
-        let (start, token) = tokens[operation_index];
-        let color = if is_directive(token) { ASM_DIRECTIVE_COLOR } else { ASM_OPCODE_COLOR };
-        colors[start..start + token.len()].fill(color);
+        let color = if is_macro_related {
+            ASM_MACRO_COLOR
+        } else if is_directive(op_token) {
+            ASM_DIRECTIVE_COLOR
+        } else {
+            ASM_OPCODE_COLOR
+        };
+        colors[op_start..op_start + op_token.len()].fill(color);
+
+        // A PMC/>>> invocation names the macro right after the keyword,
+        // packed against its semicolon-separated arguments with no space
+        // (e.g. `PMC PRINTAT;message;2;5`) - color just the name portion.
+        if matches!(op_token.to_ascii_uppercase().as_str(), "PMC" | ">>>")
+            && let Some((name_start, name_token)) = tokens.get(operation_index + 1).copied()
+        {
+            let name_len = name_token.split([',', ';']).next().unwrap_or(name_token).len();
+            colors[name_start..name_start + name_len].fill(ASM_MACRO_COLOR);
+        }
     } else if let Some((start, token)) = tokens.first().copied()
         && start == 0
     {
@@ -5830,12 +6094,17 @@ fn assembly_syntax_colors(line: &str, default: u8) -> Vec<u8> {
             // Symbols may contain digits. Consume the complete identifier
             // before looking for numeric literals so `P1CTL` remains one
             // label/symbol token instead of highlighting `1C` as hexadecimal.
+            let start = index;
+            let is_macro_parameter = bytes[index] == b']';
             index += 1;
             while index < bytes.len()
                 && (bytes[index].is_ascii_alphanumeric()
                     || matches!(bytes[index], b'_' | b'.' | b']'))
             {
                 index += 1;
+            }
+            if is_macro_parameter {
+                colors[start..index].fill(ASM_MACRO_COLOR);
             }
         } else if bytes[index].is_ascii_digit() || matches!(bytes[index], b'$' | b'%' | b'#') {
             let start = index;
@@ -5874,6 +6143,10 @@ fn assembly_tokens(code: &str) -> Vec<(usize, &str)> {
 
 fn is_operation(token: &str) -> bool {
     is_opcode(token) || is_directive(token)
+}
+
+fn is_macro_keyword(token: &str) -> bool {
+    matches!(token.to_ascii_uppercase().as_str(), "MAC" | "EOM" | "PMC" | "<<<" | ">>>")
 }
 
 fn is_opcode(token: &str) -> bool {
@@ -6244,7 +6517,8 @@ mod tests {
             CellStyle::new(UI_WHITE_COLOR, 0),
         );
         assert!(cells.windows(8).any(|window| window == b"FANTICON"));
-        assert!(cells.windows(5).any(|window| window == b"0.1.0"));
+        let version = env!("CARGO_PKG_VERSION").as_bytes();
+        assert!(cells.windows(version.len()).any(|window| window == version));
 
         let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut surface, false);
@@ -7716,6 +7990,63 @@ mod tests {
     }
 
     #[test]
+    fn format_assembly_line_does_not_reflow_macro_invocations() {
+        // PMC's semicolon-separated argument list must survive the editor's
+        // live formatting untouched; previously the formatter's own
+        // comment-splitting had no PMC exception and moved everything after
+        // the first `;` into a right-aligned "comment" field, corrupting
+        // the macro call before it was ever saved or compiled.
+        assert_eq!(
+            format_assembly_line("         PMC   PRINTAT;message;2;5"),
+            "         PMC   PRINTAT;message;2;5"
+        );
+        // The gap between the keyword and its arguments normalizes to
+        // column 15 - the same operand column an ordinary instruction
+        // gets - even though the arguments themselves are left untouched.
+        assert_eq!(
+            format_assembly_line("         >>> PRINTAT;message;2;5"),
+            "         >>>   PRINTAT;message;2;5"
+        );
+        // A macro invocation typed with no leading whitespace still isn't a
+        // label - PMC/>>> is always a recognized operation - so it should
+        // still auto-indent to column 9 like any other unlabeled
+        // instruction, even though its argument list stays untouched.
+        assert_eq!(
+            format_assembly_line("PMC PRINTAT;message;2;5"),
+            "         PMC   PRINTAT;message;2;5"
+        );
+    }
+
+    #[test]
+    fn asm_highlighting_does_not_color_macro_arguments_as_a_comment() {
+        let colors = assembly_syntax_colors("         PMC   PRINTAT;message;2;5", ASM_TEXT_COLOR);
+        assert!(!colors.contains(&ASM_COMMENT_COLOR));
+    }
+
+    #[test]
+    fn asm_highlighting_gives_macros_their_own_color() {
+        // Definition: both the declared name and the MAC/EOM keywords.
+        let definition = assembly_syntax_colors("LOADIMM  MAC", ASM_TEXT_COLOR);
+        assert!(definition[..7].iter().all(|color| *color == ASM_MACRO_COLOR));
+        assert!(definition[9..12].iter().all(|color| *color == ASM_MACRO_COLOR));
+
+        let eom = assembly_syntax_colors("         EOM", ASM_TEXT_COLOR);
+        assert!(eom[9..12].iter().all(|color| *color == ASM_MACRO_COLOR));
+
+        // Invocation: the PMC keyword and the macro name, but not its args.
+        let invocation = assembly_syntax_colors("         PMC   PRINTAT;message;2;5", ASM_TEXT_COLOR);
+        assert!(invocation[9..12].iter().all(|color| *color == ASM_MACRO_COLOR));
+        assert!(invocation[15..22].iter().all(|color| *color == ASM_MACRO_COLOR));
+        assert_eq!(invocation[22], ASM_TEXT_COLOR);
+
+        // Parameter placeholders inside a macro body (the `#` immediate
+        // marker colors separately as a number literal; `]1` is the part
+        // that should read as a macro placeholder).
+        let body = assembly_syntax_colors("         LDA   #]1", ASM_TEXT_COLOR);
+        assert!(body[16..18].iter().all(|color| *color == ASM_MACRO_COLOR));
+    }
+
+    #[test]
     fn asm_tab_and_enter_follow_merlin_fields() {
         let filesystem = shared_filesystem();
         filesystem.borrow_mut().write_text("code.asm", "").unwrap();
@@ -7726,7 +8057,55 @@ mod tests {
         editor.insert_text("LDA #$20");
         editor.insert_newline();
         assert_eq!(editor.lines[0], "START    LDA   #$20");
-        assert_eq!(editor.cursor, Position { line: 1, column: 0 });
+        // A fresh line defaults to the opcode column, not the label column -
+        // most lines are plain instructions, and typing a label is the
+        // exception that then has to un-indent back to column 1.
+        assert_eq!(editor.lines[1], " ".repeat(9));
+        assert_eq!(editor.cursor, Position { line: 1, column: 9 });
+    }
+
+    #[test]
+    fn semicolon_on_an_auto_indented_blank_line_drops_to_the_left_column() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("code.asm", "").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("code.asm".to_owned()));
+        editor.insert_text("LDA #$20");
+        editor.insert_newline();
+        assert_eq!(editor.cursor, Position { line: 1, column: 9 });
+        editor.insert_text(";");
+        assert_eq!(editor.lines[1], ";");
+        assert_eq!(editor.cursor, Position { line: 1, column: 1 });
+    }
+
+    #[test]
+    fn ctrl_equals_and_minus_insert_a_section_heading_divider() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("code.asm", "").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("code.asm".to_owned()));
+        editor.handle_key(
+            &Key::Character("=".into()),
+            PhysicalKey::Code(KeyCode::Equal),
+            ModifiersState::CONTROL,
+        );
+        let bar = ";".to_owned() + &"=".repeat(53);
+        assert_eq!(bar.len(), 54);
+        assert_eq!(editor.lines, vec![bar.clone(), ";".to_owned(), bar]);
+        assert_eq!(editor.cursor, Position { line: 1, column: 1 });
+
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("code.asm", "").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("code.asm".to_owned()));
+        editor.handle_key(
+            &Key::Character("-".into()),
+            PhysicalKey::Code(KeyCode::Minus),
+            ModifiersState::CONTROL,
+        );
+        let bar = ";".to_owned() + &"-".repeat(53);
+        assert_eq!(editor.lines, vec![bar.clone(), ";".to_owned(), bar]);
+        assert_eq!(editor.cursor, Position { line: 1, column: 1 });
     }
 
     #[test]
@@ -7831,6 +8210,68 @@ mod tests {
         assert!(matches!(
             editor.overlay,
             Overlay::Message { ref title, .. } if title == "BUILD SUCCESSFUL"
+        ));
+    }
+
+    #[test]
+    fn rom_usage_menu_item_reports_free_space_per_bank() {
+        let filesystem = shared_filesystem();
+        filesystem
+            .borrow_mut()
+            .write_text(
+                "fanticon.cfg",
+                "TITLE=EDITOR TEST\nID=0123456789ABCDEF\nMAIN=MAIN.ASM\n\
+                 OUTPUT=TEST.FCN\nSAVE_BANKS=0\nMACHINE=1.0\n",
+            )
+            .unwrap();
+        filesystem
+            .borrow_mut()
+            .write_text(
+                "main.asm",
+                " BANK 0\n ORG $8000\nLEVEL DFB $42\n FIXED\n ORG $C100\n\
+                 RESET JMP RESET\nNMI RTI\nIRQ RTI\n ORG $FFFA\n DA NMI,RESET,IRQ",
+            )
+            .unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("main.asm".to_owned()));
+
+        editor.start_bank_usage();
+        assert!(matches!(editor.overlay, Overlay::Building { .. }));
+        finish_pending_build(&mut editor);
+
+        let Overlay::BankUsage { entries, scroll } = &editor.overlay else {
+            panic!("expected a ROM bank usage dialog");
+        };
+        assert_eq!(*scroll, 0);
+        assert_eq!(entries[0].section, SymbolSection::Fixed);
+        assert!(entries[0].used > 0);
+        assert!(entries[0].free() < entries[0].capacity);
+        let bank_zero =
+            entries.iter().find(|entry| entry.section == SymbolSection::Bank(0)).unwrap();
+        assert_eq!(bank_zero.used, 1);
+        assert_eq!(bank_zero.free(), bank_zero.capacity - 1);
+
+        assert_eq!(
+            editor.handle_overlay_key(&Key::Named(NamedKey::Escape), ModifiersState::empty()),
+            EditorAction::None
+        );
+        assert!(matches!(editor.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn rom_usage_without_a_project_shows_an_error() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("solo.asm", " ORG $8000\n RTS").unwrap();
+        let mut editor =
+            TextEditor::new(filesystem, shared_ui_colors(), Some("solo.asm".to_owned()));
+
+        editor.start_bank_usage();
+        finish_pending_build(&mut editor);
+
+        assert!(matches!(
+            editor.overlay,
+            Overlay::Message { ref title, ref lines }
+                if title == "BUILD ERROR" && lines[0].contains("ROM BANK USAGE")
         ));
     }
 

@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::machine::{BANK_SIZE, FIXED_ROM_END, FIXED_ROM_START};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     pub source: String,
@@ -51,6 +53,27 @@ pub struct AssembledCartridge {
     pub rom_banks: Vec<[u8; 0x4000]>,
     pub symbols: BTreeMap<String, CartridgeSymbol>,
     pub source_map: Vec<CartridgeSourceMapEntry>,
+    /// Bytes actually emitted vs. available in each section, in FIXED then
+    /// bank order, for a "how much ROM is left" readout. Tracked from the
+    /// same per-byte write masks that catch overlapping output, rather than
+    /// inferred from the `$FF` erase fill, so a bank that legitimately emits
+    /// `$FF` data is not miscounted as free space.
+    pub bank_usage: Vec<BankUsage>,
+}
+
+/// How much of one cartridge section (the FIXED bank or one switchable
+/// `BANK`) a build actually wrote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BankUsage {
+    pub section: SymbolSection,
+    pub used: usize,
+    pub capacity: usize,
+}
+
+impl BankUsage {
+    pub fn free(&self) -> usize {
+        self.capacity - self.used
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -431,11 +454,26 @@ where
         });
     }
     if diagnostics.is_empty() {
+        // The hidden $C000-$C0FF I/O page is carved out of FIXED above and can
+        // never hold code, so it doesn't count as capacity either.
+        let fixed_capacity = usize::from(FIXED_ROM_END - FIXED_ROM_START) + 1;
+        let bank_usage = core::iter::once(BankUsage {
+            section: SymbolSection::Fixed,
+            used: fixed_written.iter().filter(|written| **written).count(),
+            capacity: fixed_capacity,
+        })
+        .chain(bank_written.iter().enumerate().map(|(bank, written)| BankUsage {
+            section: SymbolSection::Bank(bank as u8),
+            used: written.iter().filter(|written| **written).count(),
+            capacity: BANK_SIZE,
+        }))
+        .collect();
         Ok(AssembledCartridge {
             fixed_rom: fixed,
             rom_banks: banks,
             symbols: public_symbols,
             source_map,
+            bank_usage,
         })
     } else {
         Err(diagnostics)
@@ -602,11 +640,18 @@ fn expand_macro_line(
             let mut split = statement.operand.splitn(2, [',', ';', ' ']);
             (
                 split.next().unwrap_or_default().to_ascii_uppercase(),
-                split.next().unwrap_or_default(),
+                split.next().unwrap_or_default().to_owned(),
             )
         }
         Some(operation) if definitions.contains_key(operation) => {
-            (operation.to_owned(), statement.operand.as_str())
+            // `statement.operand` may already have been truncated at the
+            // first unquoted `;` by parse_statement's generic comment
+            // stripping, since it only recognizes `PMC`/`>>>` as macro
+            // invocations, not arbitrary user-defined macro names. A macro
+            // used directly still accepts the same semicolon-separated
+            // argument list documented for `PMC`, so re-derive the
+            // untruncated operand text from the raw line here.
+            (operation.to_owned(), raw_macro_operand(&line.text, statement.label.is_some()))
         }
         _ => {
             output.push(line.clone());
@@ -617,7 +662,7 @@ fn expand_macro_line(
         error(diagnostics, line, format!("unknown macro {name}"));
         return;
     };
-    let arguments = split_macro_arguments(arguments);
+    let arguments = split_macro_arguments(&arguments);
     for body_line in &definition.body {
         let mut text = body_line.text.clone();
         for parameter in (1..=8).rev() {
@@ -627,6 +672,22 @@ fn expand_macro_line(
         let expanded = SourceLine { source: line.source.clone(), line: line.line, text };
         expand_macro_line(&expanded, definitions, output, diagnostics, depth + 1);
     }
+}
+
+/// Returns the raw, un-comment-stripped text following a macro invocation's
+/// name (and label, if present), preserving semicolons so the caller can
+/// split them as arguments rather than losing everything after the first
+/// one to comment stripping.
+fn raw_macro_operand(text: &str, has_label: bool) -> String {
+    let mut remainder = text.trim_start();
+    let fields_to_skip = if has_label { 2 } else { 1 };
+    for _ in 0..fields_to_skip {
+        remainder = match remainder.split_once(char::is_whitespace) {
+            Some((_, rest)) => rest.trim_start(),
+            None => "",
+        };
+    }
+    remainder.trim_end().to_owned()
 }
 
 fn split_macro_arguments(arguments: &str) -> Vec<String> {
@@ -1921,6 +1982,24 @@ LOADIMM  MAC
     }
 
     #[test]
+    fn expands_macro_invoked_directly_with_semicolon_arguments() {
+        // A macro name used directly in the operation field (no `PMC`
+        // prefix) must accept the same semicolon-separated argument list as
+        // `PMC`, rather than losing every argument after the first `;` to
+        // comment stripping.
+        let source = r#"
+LOADIMM  MAC
+         LDA   #]1
+         STA   ]2
+         EOM
+         ORG   $1000
+         LOADIMM $42;$20
+"#;
+        let program = assemble(source).unwrap();
+        assert_eq!(program.bytes, [0xa9, 0x42, 0x85, 0x20]);
+    }
+
+    #[test]
     fn expressions_support_low_high_arithmetic_and_current_address() {
         let source = r#"
          ORG   $1234
@@ -2101,6 +2180,21 @@ IRQ      RTI
         assert_eq!(program.symbols["RESET"].address, 0xc100);
         assert_eq!(program.symbols["NMI"].address, 0xc108);
         assert_eq!(&program.fixed_rom[0x3ffa..], &[0x08, 0xc1, 0x00, 0xc1, 0x09, 0xc1]);
+
+        assert_eq!(program.bank_usage.len(), 4, "FIXED plus banks 0 through 2");
+        assert_eq!(
+            program.bank_usage[0],
+            BankUsage { section: SymbolSection::Fixed, used: 16, capacity: 0x3f00 }
+        );
+        assert_eq!(
+            program.bank_usage[1],
+            BankUsage { section: SymbolSection::Bank(0), used: 0, capacity: 0x4000 }
+        );
+        assert_eq!(
+            program.bank_usage[3],
+            BankUsage { section: SymbolSection::Bank(2), used: 1, capacity: 0x4000 }
+        );
+        assert_eq!(program.bank_usage[3].free(), 0x4000 - 1);
     }
 
     #[test]

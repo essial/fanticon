@@ -228,7 +228,7 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                         self.apply_editor_action(action);
                     }
                     if should_process_keyboard_input(event.state, event.repeat) {
-                        self.handle_key(&event.logical_key, event.physical_key);
+                        self.handle_key(event_loop, &event.logical_key, event.physical_key);
                     }
                 }
             }
@@ -447,7 +447,12 @@ impl FanticonApp {
         self.frame_number = self.frame_number.wrapping_add(1);
     }
 
-    fn handle_key(&mut self, key: &Key, physical_key: winit::keyboard::PhysicalKey) {
+    fn handle_key(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        key: &Key,
+        physical_key: winit::keyboard::PhysicalKey,
+    ) {
         if let Some(editor) = &mut self.text_editor {
             let action = editor.handle_key(key, physical_key, self.modifiers);
             self.apply_editor_action(action);
@@ -467,6 +472,12 @@ impl FanticonApp {
             TerminalAction::Music(command) => {
                 let result = self.apply_music_command(command);
                 self.terminal.finish_music_command(result);
+            }
+            // Typing EXIT/QUIT kills the whole virtual console, the same
+            // shutdown path as closing the window.
+            TerminalAction::Exit => {
+                self.flush_game_save();
+                event_loop.exit();
             }
             TerminalAction::None => {}
         }

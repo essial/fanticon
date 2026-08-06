@@ -54,6 +54,10 @@ pub enum TerminalAction {
     Edit(Option<String>),
     Run(GameLaunch),
     Music(MusicCommand),
+    /// Typed at the console prompt: shuts down the whole virtual console, not
+    /// just the current mode or document. Distinct from the editor's own
+    /// FILE > EXIT, which only leaves the editor for the console.
+    Exit,
 }
 
 pub struct Terminal {
@@ -208,7 +212,7 @@ impl Terminal {
         match name.as_str() {
             "" => TerminalAction::None,
             "HELP" if arguments.is_empty() => {
-                self.write("HELP CLS MODE EDITOR GAME EDIT NEW\n");
+                self.write("HELP CLS MODE EDITOR GAME EDIT NEW EXIT\n");
                 self.write("ECHO VERSION COLOR CD MKDIR\n");
                 self.write("RMDIR RM DEL DIR LS ASM BUILD RUN DUMP\n");
                 self.write("PLAYNSF NSFPLAY NSFPAUSE NSFSTOP\n");
@@ -234,6 +238,7 @@ impl Terminal {
             }
             "EDITOR" => TerminalAction::SwitchMode(AppMode::Editor),
             "GAME" => TerminalAction::SwitchMode(AppMode::Game),
+            "EXIT" | "QUIT" => TerminalAction::Exit,
             "ECHO" => {
                 self.write(arguments);
                 self.newline();
@@ -328,7 +333,7 @@ impl Terminal {
     }
 
     fn show_banner(&mut self) {
-        self.write("FANTICON SYSTEM 0.1\n");
+        self.write(concat!("FANTICON SYSTEM ", env!("CARGO_PKG_VERSION"), "\n"));
         self.write(self.mode.name());
         self.write(" MODE READY.\n");
         if matches!(self.mode, AppMode::Game) {
@@ -781,6 +786,14 @@ mod tests {
                     .map(|column| row * terminal.columns + column)
             })
             .expect("text should be visible")
+    }
+
+    #[test]
+    fn exit_and_quit_commands_request_shutdown() {
+        let mut terminal = Terminal::new(AppMode::Game);
+        assert_eq!(type_command(&mut terminal, "exit"), TerminalAction::Exit);
+        let mut terminal = Terminal::new(AppMode::Editor);
+        assert_eq!(type_command(&mut terminal, "quit"), TerminalAction::Exit);
     }
 
     #[test]

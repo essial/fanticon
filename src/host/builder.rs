@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use fanticon::{
     assembler::{
-        AssembledProgram, CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic,
+        AssembledProgram, BankUsage, CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic,
         assemble_with_loader,
     },
     cartridge::{Cartridge, SaveImage},
@@ -26,6 +26,7 @@ pub struct ProjectBuildSuccess {
     pub size: usize,
     pub symbols: BTreeMap<String, CartridgeSymbol>,
     pub source_map: Vec<CartridgeSourceMapEntry>,
+    pub bank_usage: Vec<BankUsage>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +60,7 @@ pub fn build_project(
         size: build.bytes.len(),
         symbols: build.symbols,
         source_map: build.source_map,
+        bank_usage: build.bank_usage,
     })
 }
 

@@ -189,18 +189,38 @@ beginning with `*` or `;` is a full-line comment.
 
 Assembly highlighting uses exact Catppuccin Mocha accents over a true-black
 background: lavender labels, blue instructions, mauve directives, peach numeric
-literals, muted overlay comments, green strings, and Catppuccin Text for other
-source. ASM/INC mode reserves palette indexes 240–246 for these colors and
-overrides the ordinary `COLOR` pair while that source is displayed. Selection
-uses inverse Catppuccin Text and black. The saved source remains ordinary
-case-preserving text with spaces; no Merlin high-ASCII file encoding is
-introduced.
+literals, muted overlay comments, green strings, warm yellow macro definitions/
+invocations/parameters, and Catppuccin Text for other source. ASM/INC mode
+reserves palette indexes 240–247 and 255 for these colors and overrides the
+ordinary `COLOR` pair while that source is displayed. Selection uses inverse
+Catppuccin Text and black. The saved source remains ordinary case-preserving
+text with spaces; no Merlin high-ASCII file encoding is introduced.
 
 In assembly mode, Tab advances to the next label/opcode/operand/comment field.
-Pressing Enter at the end of a line formats that line immediately. A line is also
-formatted when ordinary cursor navigation leaves it; Shift-selection deliberately
-suppresses this behavior so selecting source never rewrites it. Loading and saving
-normalize every assembly line to the four-column layout.
+Pressing Enter at the end of a line formats that line immediately, then indents
+the new line to the opcode column by default rather than the left margin, since
+most lines are plain instructions and a label is the exception. Typing `;` as
+the only character on that blank auto-indented line immediately drops it back
+to column 1, matching the formatter's own rule that a full-line comment is
+never indented. A line is also formatted when ordinary cursor navigation leaves
+it; Shift-selection deliberately suppresses this behavior so selecting source
+never rewrites it. Loading and saving normalize every assembly line to the
+four-column layout.
+
+Ctrl/Cmd+= and Ctrl/Cmd+- drop a three-line section-heading divider at the
+cursor's line: a `;` followed by fifty-three `=` or `-` characters (54 columns
+total, the same width as the hand-written dividers throughout Fanticon's own
+source), a blank `;` line, and a matching closing bar, leaving the cursor on
+the blank line ready to type the heading text.
+
+Macro invocations (`PMC name;arg1;arg2`, `>>> name;arg1;arg2`, or a macro name
+used directly in the operation field) are recognized by the same live
+formatter and never reflowed the way an ordinary instruction's operand is:
+the keyword normalizes to column 9 and the argument list to column 15, exactly
+like an opcode and its operand, but nothing after that point is re-tokenized,
+since a macro's arguments are semicolon-separated rather than whitespace- or
+comment-delimited. See [Fanticon 6502 Macro Assembler](assembler.md) for the
+complete macro syntax.
 
 Assembly produces a raw `.BIN` beside the source by default. The editor shows an
 assembling dialog followed by a success dialog with the output, origin, and size,

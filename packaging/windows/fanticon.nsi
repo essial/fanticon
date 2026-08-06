@@ -20,7 +20,7 @@
 !endif
 
 Name "Fanticon"
-OutFile "Fanticon-Setup-${VERSION}.exe"
+OutFile "..\..\Fanticon-Setup-${VERSION}.exe"
 InstallDir "$PROGRAMFILES64\Fanticon"
 InstallDirRegKey HKLM "Software\Fanticon" "InstallDir"
 RequestExecutionLevel admin

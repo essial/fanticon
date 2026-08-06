@@ -1,3 +1,9 @@
+// Release/dist builds run without an attached console, so a plain Windows
+// binary would otherwise pop up a separate console window alongside the app
+// window. Debug builds keep the console so eprintln!/panic output is still
+// visible while developing. This attribute is a no-op on non-Windows targets.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod host;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,7 +28,7 @@ use winit::{
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey},
-    window::{Window, WindowId},
+    window::{Fullscreen, Window, WindowId},
 };
 
 enum UserEvent {
@@ -186,6 +192,22 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 window.request_redraw();
             }
             WindowEvent::KeyboardInput { event, .. } => {
+                // Alt+Enter toggles fullscreen regardless of what has focus
+                // (boot splash, running game, or editor), so it must be
+                // handled first -- otherwise, e.g., a running game would also
+                // see the Enter half of the chord and fire START.
+                if event.state == ElementState::Pressed
+                    && !event.repeat
+                    && self.modifiers.alt_key()
+                    && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Enter))
+                {
+                    if window.fullscreen().is_some() {
+                        window.set_fullscreen(None);
+                    } else {
+                        window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+                    }
+                    return;
+                }
                 let now = Instant::now();
                 if self.boot_splash.is_active(now) {
                     if event.state == ElementState::Pressed {

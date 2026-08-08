@@ -14,8 +14,16 @@ path = "src/main.rs"
 required-features = ["app-host"]
 bench = false
 
+[[bin]]
+name = "fanticon-export"
+path = "src/bin/fanticon-export.rs"
+required-features = ["native-export"]
+test = false
+bench = false
+
 [features]
-default = ["app-host"]
+default = ["app-host", "native-export"]
+native-export = []
 app-host = [
     "dep:bytemuck",
     "dep:cpal",

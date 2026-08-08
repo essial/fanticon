@@ -66,4 +66,4 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo build --release --locked --target wasm32-unknown-unknown --bin fanticon-app
       - run: cargo install wasm-pack --version 0.13.1 --locked
-      - run: wasm-pack test --headless --chrome --test web_runtime
+      - run: wasm-pack test --headless --chrome --test web_runtime --no-default-features --features app-host

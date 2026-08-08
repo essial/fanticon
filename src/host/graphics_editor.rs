@@ -5,8 +5,8 @@ use fanticon::{
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use super::EDITOR_DISPLAY_WIDTH;
-use super::surface::Surface;
 use super::character_rom::{GLYPH_HEIGHT, GLYPH_WIDTH};
+use super::surface::Surface;
 
 pub const TILE_BYTES: usize = 256 * 32;
 pub const MAP_CELLS: usize = TILEMAP_CELLS;
@@ -152,7 +152,7 @@ impl GraphicsEditor {
                 .and_then(|version| version.parse::<u8>().ok())
         });
         if !palette_document && !matches!(graphics_version, Some(1..=3)) {
-            return Err("FILE IS MISSING ;@FANTICON-GFX 1/2/3 OR ;@FANTICON-PAL 1".to_owned());
+            return Err("File is missing ;@FANTICON-GFX 1/2/3 or ;@FANTICON-PAL 1".to_owned());
         }
         let palette_reference = source
             .lines()
@@ -183,7 +183,7 @@ impl GraphicsEditor {
             .unwrap_or(0);
         if bitmap_asset && bitmap_bank > 253 {
             return Err(
-                "BITMAP START BANK MUST BE 0-253 (BITMAP + SPRITE PATTERNS USE 3 BANKS)".to_owned()
+                "Bitmap start bank must be 0-253 (bitmap + sprite patterns use 3 banks)".to_owned()
             );
         }
         let (tiles, map, attributes, bitmap) = if bitmap_asset {
@@ -319,7 +319,7 @@ impl GraphicsEditor {
 
     pub fn replace_palette(&mut self, palette: &[u8]) -> Result<(), String> {
         if palette.len() != PALETTE_BYTES {
-            return Err("PALETTE MUST CONTAIN EXACTLY 256 RGB332 BYTES".to_owned());
+            return Err("Palette must contain exactly 256 RGB332 bytes".to_owned());
         }
         self.asset.palette.copy_from_slice(palette);
         self.palette_preset = palette_preset_for_bank(&self.asset.palette, self.palette_bank);
@@ -535,14 +535,14 @@ impl GraphicsEditor {
     pub fn render(&self, surface: &mut Surface) {
         fill_rect(surface, PANE_LEFT, OUTER_TOP, EDITOR_DISPLAY_WIDTH - PANE_LEFT, 368, UI_BLACK);
         let workspace_caption = if self.palette_document {
-            "SHARED PALETTE RESOURCE - 16 BANKS X 16 COLORS"
+            "Shared Palette Resource - 16 Banks x 16 Colors"
         } else {
             match self.view {
-                GraphicsView::Tiles => "GRAPHICS - SHARED 8X8 PATTERN (MAP + SPRITES)",
-                GraphicsView::Map => "GRAPHICS - BACKGROUND MAP (TILEMAP MODE)",
-                GraphicsView::Sprite => "GRAPHICS - 16X16 SPRITE COMPOSITE",
-                GraphicsView::Palette => "GRAPHICS - COLOR PALETTE",
-                GraphicsView::Bitmap => "GRAPHICS - FULL-SCREEN BITMAP (BITMAP MODE)",
+                GraphicsView::Tiles => "Graphics - Shared 8x8 Pattern (Map + Sprites)",
+                GraphicsView::Map => "Graphics - Background Map (Tilemap Mode)",
+                GraphicsView::Sprite => "Graphics - 16x16 Sprite Composite",
+                GraphicsView::Palette => "Graphics - Color Palette",
+                GraphicsView::Bitmap => "Graphics - Full-Screen Bitmap (Bitmap Mode)",
             }
         };
         draw_group_box(
@@ -558,14 +558,14 @@ impl GraphicsEditor {
                 surface,
                 PANE_LEFT + 4,
                 PANE_TOP + 4,
-                "SHARED BY EVERY GFX FILE THAT REFERENCES THIS PALETTE",
+                "Shared by every GFX file that references this palette",
                 UI_WHITE,
             );
             draw_text(
                 surface,
                 PANE_LEFT + 4,
                 PANE_TOP + 18,
-                "N PRESET   SHIFT+N PREVIOUS   R/G/B EDIT",
+                "N Preset   Shift+N Previous   R/G/B Edit",
                 UI_GRAY,
             );
         } else {
@@ -583,20 +583,20 @@ impl GraphicsEditor {
     pub fn status(&self) -> String {
         if self.palette_document {
             return format!(
-                " SHARED PALETTE RESOURCE - BANK {} COLOR {:X}  CHANGES AFFECT ALL REFERENCES",
+                " Shared palette resource - Bank {} Color {:X}  Changes affect all references",
                 self.palette_bank, self.selected_color
             );
         }
         match self.view {
             GraphicsView::Tiles => format!(
-                " 8X8 PATTERN ${:02X} - MAP + SPRITES  BG={} PAL {} COLOR {:X}",
+                " 8x8 pattern ${:02X} - Map + Sprites  BG={} Pal {} Color {:X}",
                 self.selected_tile,
-                if self.bitmap_asset { "BITMAP" } else { "MAP" },
+                if self.bitmap_asset { "Bitmap" } else { "Map" },
                 self.palette_bank,
                 self.selected_color
             ),
             GraphicsView::Map => format!(
-                " 64X32 MAP VIEW {},{} - PLACE PATTERN ${:02X}  PAL {} COLOR {:X}",
+                " 64x32 map view {},{} - Place pattern ${:02X}  Pal {} Color {:X}",
                 self.map_view_x,
                 self.map_view_y,
                 self.selected_tile,
@@ -606,25 +606,25 @@ impl GraphicsEditor {
             GraphicsView::Sprite => {
                 let first = self.selected_tile & !3;
                 format!(
-                    " 16X16 SPRITE - PATTERNS ${first:02X}-${:02X}  BG={} PAL {} COLOR {:X}",
+                    " 16x16 sprite - Patterns ${first:02X}-${:02X}  BG={} Pal {} Color {:X}",
                     first + 3,
-                    if self.bitmap_asset { "BITMAP" } else { "MAP" },
+                    if self.bitmap_asset { "Bitmap" } else { "Map" },
                     self.palette_bank,
                     self.selected_color
                 )
             }
             GraphicsView::Palette => match &self.palette_reference {
                 Some(reference) => format!(
-                    " SHARED {reference} - BANK {} COLOR {:X}  SAVES TO PALETTE RESOURCE",
+                    " Shared {reference} - Bank {} Color {:X}  Saves to palette resource",
                     self.palette_bank, self.selected_color
                 ),
                 None => format!(
-                    " EMBEDDED PALETTE - BANK {} COLOR {:X}  USED BY THIS GFX SET",
+                    " Embedded palette - Bank {} Color {:X}  Used by this gfx set",
                     self.palette_bank, self.selected_color
                 ),
             },
             GraphicsView::Bitmap => format!(
-                " 320X200 BITMAP - PAL {} COLOR {:X}  ROM BANKS {}-{} (+SPRITE CHR)",
+                " 320x200 bitmap - Pal {} Color {:X}  ROM banks {}-{} (+sprite chr)",
                 self.palette_bank,
                 self.selected_color,
                 self.bitmap_bank,
@@ -639,19 +639,19 @@ impl GraphicsEditor {
         let origin = (PANE_LEFT + 12, PANE_TOP + 38);
         let first = self.selected_tile & !3;
         let canvas_caption = if sprite {
-            format!("16X16 SPRITE ${first:02X}-${:02X}", first + 3)
+            format!("16x16 Sprite ${first:02X}-${:02X}", first + 3)
         } else {
-            format!("8X8 PATTERN ${:02X}", self.selected_tile)
+            format!("8x8 Pattern ${:02X}", self.selected_tile)
         };
         draw_group_box(surface, PANE_LEFT + 6, PANE_TOP + 32, 236, 238, &canvas_caption);
-        draw_group_box(surface, PANE_LEFT + 246, PANE_TOP + 32, 220, 206, "SHARED 8X8 PATTERNS");
+        draw_group_box(surface, PANE_LEFT + 246, PANE_TOP + 32, 220, 206, "Shared 8x8 Patterns");
         draw_group_box(
             surface,
             PANE_LEFT + 6,
             PANE_TOP + 308,
             460,
             38,
-            &format!("PALETTE BANK {}", self.palette_bank),
+            &format!("Palette Bank {}", self.palette_bank),
         );
         for py in 0..size {
             for px in 0..size {
@@ -674,9 +674,9 @@ impl GraphicsEditor {
         }
         self.render_tile_sheet(surface, (PANE_LEFT + 252, PANE_TOP + 38), 12);
         let relationship = if sprite {
-            "8X8 SPRITES USE ONE PATTERN (MODE 1)"
+            "8x8 sprites use one pattern (Mode 1)"
         } else {
-            "ONE PATTERN CAN BE A MAP TILE OR 8X8 SPRITE"
+            "One pattern can be a map tile or 8x8 sprite"
         };
         draw_text(surface, PANE_LEFT + 12, PANE_TOP + 282, relationship, UI_GRAY);
         self.render_palette_strip(surface, PANE_LEFT + 12, PANE_TOP + 318);
@@ -741,17 +741,17 @@ impl GraphicsEditor {
             PANE_TOP + 32,
             326,
             210,
-            &format!("64X32 MAP - VIEW {},{}", self.map_view_x, self.map_view_y),
+            &format!("64x32 Map - View {},{}", self.map_view_x, self.map_view_y),
         );
-        draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 32, 136, 142, "8X8 PATTERNS");
-        draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 180, 136, 62, "CELL OPTIONS");
+        draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 32, 136, 142, "8x8 Patterns");
+        draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 180, 136, 62, "Cell Options");
         draw_group_box(
             surface,
             PANE_LEFT + 2,
             PANE_TOP + 270,
             466,
             38,
-            &format!("PALETTE BANK {}", self.palette_bank),
+            &format!("Palette Bank {}", self.palette_bank),
         );
         for cell_y in 0..MAP_VIEW_HEIGHT {
             for cell_x in 0..MAP_VIEW_WIDTH {
@@ -777,13 +777,13 @@ impl GraphicsEditor {
             }
         }
         self.render_tile_sheet(surface, (PANE_LEFT + 336, PANE_TOP + 38), 8);
-        draw_text(surface, PANE_LEFT + 338, PANE_TOP + 194, "H/V FLIP", UI_GRAY);
-        draw_text(surface, PANE_LEFT + 338, PANE_TOP + 210, "Q PRIORITY", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 338, PANE_TOP + 194, "H/V Flip", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 338, PANE_TOP + 210, "Q Priority", UI_GRAY);
         draw_text(
             surface,
             PANE_LEFT + 8,
             PANE_TOP + 252,
-            "ARROWS PAN 64X32 MAP - VIEW WRAPS AT EDGES",
+            "Arrows pan 64x32 map - view wraps at edges",
             UI_GRAY,
         );
         self.render_palette_strip(surface, PANE_LEFT + 4, PANE_TOP + 278);
@@ -791,8 +791,8 @@ impl GraphicsEditor {
 
     fn render_palette(&self, surface: &mut Surface) {
         let origin = (PANE_LEFT + 28, PANE_TOP + 38);
-        draw_group_box(surface, PANE_LEFT + 20, PANE_TOP + 32, 328, 300, "256-COLOR PALETTE");
-        draw_group_box(surface, PANE_LEFT + 352, PANE_TOP + 32, 114, 204, "PRESETS");
+        draw_group_box(surface, PANE_LEFT + 20, PANE_TOP + 32, 328, 300, "256-Color Palette");
+        draw_group_box(surface, PANE_LEFT + 352, PANE_TOP + 32, 114, 204, "Presets");
         for index in 0..256 {
             let x = index % 16;
             let y = index / 16;
@@ -805,13 +805,32 @@ impl GraphicsEditor {
                 self.asset.palette[index],
             );
             if index == usize::from(self.palette_bank) * 16 + usize::from(self.selected_color) {
-                stroke_rect(surface, origin.0 + x * 20 - 1, origin.1 + y * 18 - 1, 20, 18, UI_WHITE);
+                stroke_rect(
+                    surface,
+                    origin.0 + x * 20 - 1,
+                    origin.1 + y * 18 - 1,
+                    20,
+                    18,
+                    UI_WHITE,
+                );
             }
         }
         let index = usize::from(self.palette_bank) * 16 + usize::from(self.selected_color);
         let value = self.asset.palette[index];
-        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 50, &format!("INDEX ${index:02X}"), UI_WHITE);
-        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 66, &format!("RGB332 ${value:02X}"), UI_WHITE);
+        draw_text(
+            surface,
+            PANE_LEFT + 358,
+            PANE_TOP + 50,
+            &format!("Index ${index:02X}"),
+            UI_WHITE,
+        );
+        draw_text(
+            surface,
+            PANE_LEFT + 358,
+            PANE_TOP + 66,
+            &format!("RGB332 ${value:02X}"),
+            UI_WHITE,
+        );
         for (preset, (name, _)) in PALETTE_PRESETS.iter().enumerate() {
             let y = PANE_TOP + 92 + preset * 24;
             if Some(preset) == self.palette_preset {
@@ -819,14 +838,14 @@ impl GraphicsEditor {
             }
             draw_text(surface, PANE_LEFT + 364, y, name, UI_WHITE);
         }
-        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 190, "N NEXT", UI_GRAY);
-        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 206, "R/G/B EDIT", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 190, "N Next", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 358, PANE_TOP + 206, "R/G/B Edit", UI_GRAY);
     }
 
     fn render_bitmap(&self, surface: &mut Surface) {
         let origin = (PANE_LEFT + 4, PANE_TOP + 38);
-        draw_group_box(surface, PANE_LEFT + 2, PANE_TOP + 32, 326, 210, "320 X 200 BITMAP");
-        draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 32, 136, 190, "BITMAP SETTINGS");
+        draw_group_box(surface, PANE_LEFT + 2, PANE_TOP + 32, 326, 210, "320 x 200 Bitmap");
+        draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 32, 136, 190, "Bitmap Settings");
         for y in 0..200 {
             for x in 0..320 {
                 let color = self.bitmap_pixel(x, y);
@@ -842,7 +861,7 @@ impl GraphicsEditor {
             UI_WHITE,
         );
         draw_text(surface, PANE_LEFT + 332, PANE_TOP + 58, "BM+BM+CHR", UI_GRAY);
-        draw_text(surface, PANE_LEFT + 332, PANE_TOP + 72, ",/. ROM BANK", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 332, PANE_TOP + 72, ",/. ROM Bank", UI_GRAY);
         for color in 0..16 {
             let index = usize::from(self.palette_bank) * 16 + color;
             fill_rect(
@@ -858,7 +877,7 @@ impl GraphicsEditor {
             surface,
             PANE_LEFT + 332,
             PANE_TOP + 188,
-            &format!("PAL BANK {}", self.palette_bank),
+            &format!("Pal Bank {}", self.palette_bank),
             UI_WHITE,
         );
         self.render_bank_buttons(surface);
@@ -1172,35 +1191,35 @@ fn parse_section(source: &str, marker: &str, expected: usize) -> Result<Vec<u8>,
             };
             if fields[operation].eq_ignore_ascii_case("DS") {
                 let Some(size) = fields.get(operation + 1) else {
-                    return Err(format!("{marker} DS IS MISSING A SIZE"));
+                    return Err(format!("{marker} DS is missing a size"));
                 };
                 if fields.len() != operation + 2 {
-                    return Err(format!("{marker} DS REQUIRES ONE CONSTANT SIZE"));
+                    return Err(format!("{marker} DS requires one constant size"));
                 }
                 let count = size
                     .strip_prefix('$')
                     .map_or_else(|| size.parse::<usize>(), |hex| usize::from_str_radix(hex, 16))
-                    .map_err(|_| format!("INVALID DS SIZE IN {marker}"))?;
+                    .map_err(|_| format!("Invalid DS size in {marker}"))?;
                 let new_length = bytes
                     .len()
                     .checked_add(count)
                     .filter(|&length| length <= expected)
-                    .ok_or_else(|| format!("{marker} CONTAINS MORE THAN {expected} BYTES"))?;
+                    .ok_or_else(|| format!("{marker} contains more than {expected} bytes"))?;
                 bytes.resize(new_length, 0);
             } else {
                 let hex = fields[operation + 1..].join("");
                 if !hex.chars().all(|character| character.is_ascii_hexdigit() || character == ',') {
-                    return Err(format!("INVALID HEX IN {marker}"));
+                    return Err(format!("Invalid hex in {marker}"));
                 }
                 let compact = hex.replace(',', "");
                 if !compact.len().is_multiple_of(2) {
-                    return Err(format!("{marker} HAS AN ODD HEX DIGIT"));
+                    return Err(format!("{marker} has an odd hex digit"));
                 }
                 for pair in compact.as_bytes().chunks_exact(2) {
                     let text = core::str::from_utf8(pair).expect("ASCII hex");
                     bytes.push(
                         u8::from_str_radix(text, 16)
-                            .map_err(|_| format!("INVALID HEX IN {marker}"))?,
+                            .map_err(|_| format!("Invalid hex in {marker}"))?,
                     );
                 }
             }
@@ -1235,10 +1254,10 @@ fn draw_toolbar(surface: &mut Surface, view: GraphicsView, tool: GraphicsTool, b
         surface,
         PANE_LEFT + 4,
         PANE_TOP + 4,
-        "1 PATTERN  2 MAP  3 16X16 SPRITE  4 PALETTE  5 BITMAP",
+        "1 Pattern  2 Map  3 16x16 Sprite  4 Palette  5 Bitmap",
         UI_WHITE,
     );
-    draw_text(surface, PANE_LEFT + 4, PANE_TOP + 18, "P PENCIL  F FILL  I PICK", UI_GRAY);
+    draw_text(surface, PANE_LEFT + 4, PANE_TOP + 18, "P Pencil  F Fill  I Pick", UI_GRAY);
     // Map and Bitmap are the same slot, not two places to be. Name the mode the
     // asset is actually in, and bar the tab that owns it, so opening the other
     // one reads as changing the asset rather than changing the view.
@@ -1246,7 +1265,7 @@ fn draw_toolbar(surface: &mut Surface, view: GraphicsView, tool: GraphicsTool, b
         surface,
         PANE_LEFT + 208,
         PANE_TOP + 18,
-        if bitmap_asset { "BACKGROUND: BITMAP" } else { "BACKGROUND: TILEMAP" },
+        if bitmap_asset { "Background: Bitmap" } else { "Background: Tilemap" },
         UI_WHITE,
     );
     let (mode_x, mode_width) = if bitmap_asset { (364, 64) } else { (92, 40) };
@@ -1558,16 +1577,16 @@ mod tests {
     #[test]
     fn mode_labels_explain_the_shared_pattern_model() {
         let mut editor = GraphicsEditor::default();
-        assert!(editor.status().contains("MAP + SPRITES"));
+        assert!(editor.status().contains("Map + Sprites"));
 
         editor.handle_mouse_press(PANE_LEFT + 100, PANE_TOP + 6);
         assert_eq!(editor.view, GraphicsView::Map);
-        assert!(editor.status().contains("PLACE PATTERN"));
+        assert!(editor.status().contains("Place pattern"));
 
         editor.selected_tile = 7;
         editor.handle_mouse_press(PANE_LEFT + 160, PANE_TOP + 6);
         assert_eq!(editor.view, GraphicsView::Sprite);
-        assert!(editor.status().contains("PATTERNS $04-$07"));
+        assert!(editor.status().contains("Patterns $04-$07"));
     }
 
     #[test]
@@ -1624,7 +1643,7 @@ mod tests {
         assert_eq!(editor.view, GraphicsView::Palette);
         editor.handle_mouse_press(PANE_LEFT + 160, PANE_TOP + 6);
         assert_eq!(editor.view, GraphicsView::Palette);
-        assert!(editor.status().contains("SHARED PALETTE RESOURCE"));
+        assert!(editor.status().contains("Shared palette resource"));
     }
 
     #[test]

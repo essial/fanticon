@@ -145,14 +145,7 @@ impl Surface {
         background: Option<Rgba>,
     ) {
         for (index, byte) in text.bytes().enumerate() {
-            self.blit_glyph(
-                x + index * GLYPH_WIDTH,
-                y,
-                byte.to_ascii_uppercase(),
-                foreground,
-                background,
-                false,
-            );
+            self.blit_glyph(x + index * GLYPH_WIDTH, y, byte, foreground, background, false);
         }
     }
 }

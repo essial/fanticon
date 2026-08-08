@@ -92,10 +92,7 @@ impl FanticonApp {
             window: None,
             renderer: None,
             video,
-            editor_surface: Surface::new(
-                host::EDITOR_DISPLAY_WIDTH,
-                host::EDITOR_DISPLAY_HEIGHT,
-            ),
+            editor_surface: Surface::new(host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT),
             frame_pacer: FramePacer::new(now),
             frame_number: 0,
             boot_splash: BootSplash::new(now),
@@ -311,8 +308,7 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 // drawing, so the surface is the live target. Both are settled
                 // before the renderer is borrowed.
                 let splash = self.boot_splash.is_active(Instant::now());
-                let editor_surface =
-                    self.text_editor.is_some() && !splash && !self.game_running();
+                let editor_surface = self.text_editor.is_some() && !splash && !self.game_running();
                 let editor_presentation = !splash
                     && (editor_surface
                         || self.video.dimensions()

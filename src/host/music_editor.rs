@@ -1,8 +1,8 @@
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use super::EDITOR_DISPLAY_WIDTH;
-use super::surface::{Rgba, Surface};
 use super::character_rom::{CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH};
+use super::surface::{Rgba, Surface};
 
 const VOICES: usize = 4;
 const DEFAULT_PATTERN_ROWS: usize = 16;
@@ -1300,7 +1300,6 @@ impl MusicEditor {
     }
 
     pub fn render(&self, surface: &mut Surface) {
-        
         button(surface, 43, 0, " PLAY/STOP ", GRAD_WHITE);
         button(
             surface,
@@ -1964,7 +1963,7 @@ fn fill(surface: &mut Surface, x: usize, y: usize, width: usize, height: usize, 
 }
 fn text(surface: &mut Surface, x: usize, y: usize, value: &str, foreground: u8, background: u8) {
     for (column, byte) in value.bytes().enumerate() {
-        let glyph = CHARACTER_ROM[usize::from(byte.to_ascii_uppercase())];
+        let glyph = CHARACTER_ROM[usize::from(byte)];
         for (row, bits) in glyph.into_iter().enumerate() {
             for bit in 0..GLYPH_WIDTH {
                 let color =
@@ -1976,7 +1975,7 @@ fn text(surface: &mut Surface, x: usize, y: usize, value: &str, foreground: u8, 
 }
 fn text_transparent(surface: &mut Surface, x: usize, y: usize, value: &str, foreground: u8) {
     for (column, byte) in value.bytes().enumerate() {
-        let glyph = CHARACTER_ROM[usize::from(byte.to_ascii_uppercase())];
+        let glyph = CHARACTER_ROM[usize::from(byte)];
         for (row, bits) in glyph.into_iter().enumerate() {
             for bit in 0..GLYPH_WIDTH {
                 if bits & (0x80 >> bit) != 0 {
@@ -2115,10 +2114,7 @@ mod tests {
             (0..400).any(|y| (0..EDITOR_DISPLAY_WIDTH).any(|x| surface.pixel(x, y) == wanted))
         };
         let centered_y = PANE_TOP + (6 + VISIBLE_ROWS / 2) * GLYPH_HEIGHT;
-        assert_eq!(
-            surface.pixel(EDITOR_DISPLAY_WIDTH - 12, centered_y),
-            music_color(PLAYING_BG)
-        );
+        assert_eq!(surface.pixel(EDITOR_DISPLAY_WIDTH - 12, centered_y), music_color(PLAYING_BG));
         assert!(has(GRAD_P1));
         assert!(has(GRAD_P2));
         assert_eq!(surface.pixel(PANE_LEFT, PANE_TOP), music_color(UI_BLACK));

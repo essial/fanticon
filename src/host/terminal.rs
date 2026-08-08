@@ -29,8 +29,8 @@ pub enum AppMode {
 impl AppMode {
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Game => "GAME",
-            Self::Editor => "EDITOR",
+            Self::Game => "Game",
+            Self::Editor => "Editor",
         }
     }
 
@@ -97,7 +97,7 @@ impl Terminal {
         if self.input.len() >= self.columns - 3 || !character.is_ascii() {
             return;
         }
-        let byte = character.to_ascii_uppercase() as u8;
+        let byte = character as u8;
         if byte.is_ascii_graphic() || byte == b' ' {
             self.input.push(character);
             self.put_byte(byte);
@@ -212,14 +212,14 @@ impl Terminal {
         match name.as_str() {
             "" => TerminalAction::None,
             "HELP" if arguments.is_empty() => {
-                self.write("HELP CLS MODE EDITOR GAME EDIT NEW EXIT\n");
-                self.write("ECHO VERSION COLOR CD MKDIR\n");
-                self.write("RMDIR RM DEL DIR LS ASM BUILD RUN DUMP\n");
-                self.write("PLAYNSF NSFPLAY NSFPAUSE NSFSTOP\n");
-                self.write("NSFNEXT NSFPREV NSFLOOP NSFINFO\n");
-                self.write("NSF2MUS INPUT.NSF OUTPUT.MUS [TRACK]\n");
-                self.write("HELP TOPIC FOR ONE OPCODE, DIRECTIVE,\n");
-                self.write("COMMAND, OR GUIDE SECTION BY NAME.\n");
+                self.write("help cls mode editor game edit new exit\n");
+                self.write("echo version color cd mkdir\n");
+                self.write("rmdir rm del dir ls asm build run dump\n");
+                self.write("playnsf nsfplay nsfpause nsfstop\n");
+                self.write("nsfnext nsfprev nsfloop nsfinfo\n");
+                self.write("nsf2mus input.nsf output.mus [track]\n");
+                self.write("Help topic for one opcode, directive,\n");
+                self.write("command, or guide section by name.\n");
                 TerminalAction::None
             }
             "HELP" => {
@@ -231,7 +231,7 @@ impl Terminal {
                 TerminalAction::None
             }
             "MODE" => {
-                self.write("CURRENT MODE: ");
+                self.write("Current mode: ");
                 self.write(self.mode.name());
                 self.newline();
                 TerminalAction::None
@@ -245,7 +245,7 @@ impl Terminal {
                 TerminalAction::None
             }
             "VERSION" => {
-                self.write(concat!("FANTICON ", env!("CARGO_PKG_VERSION"), "\n"));
+                self.write(concat!("Fanticon ", env!("CARGO_PKG_VERSION"), "\n"));
                 TerminalAction::None
             }
             "COLOR" => {
@@ -305,7 +305,7 @@ impl Terminal {
             }
             "RM" | "DEL" => {
                 if arguments.is_empty() || arguments.split_ascii_whitespace().count() != 1 {
-                    self.write_error("USAGE: RM FILE");
+                    self.write_error("Usage: rm file");
                 } else {
                     let result = self.filesystem.borrow_mut().remove_file(arguments);
                     if let Err(error) = result {
@@ -324,7 +324,7 @@ impl Terminal {
                 TerminalAction::None
             }
             _ => {
-                self.write("?UNKNOWN COMMAND: ");
+                self.write("?Unknown command: ");
                 self.write(&name);
                 self.newline();
                 TerminalAction::None
@@ -333,25 +333,25 @@ impl Terminal {
     }
 
     fn show_banner(&mut self) {
-        self.write(concat!("FANTICON SYSTEM ", env!("CARGO_PKG_VERSION"), "\n"));
+        self.write(concat!("Fanticon System ", env!("CARGO_PKG_VERSION"), "\n"));
         self.write(self.mode.name());
-        self.write(" MODE READY.\n");
+        self.write(" mode ready.\n");
         if matches!(self.mode, AppMode::Game) {
-            self.write("TYPE HELP OR EDITOR.\n\n");
+            self.write("Type help or editor.\n\n");
         } else {
-            self.write("NATIVE TOOLS READY. TYPE HELP.\n\n");
+            self.write("Native tools ready. Type help.\n\n");
         }
         self.prompt();
     }
 
     fn write_directory(&mut self, entries: Vec<DirectoryEntry>) {
         if entries.is_empty() {
-            self.write("<EMPTY>\n");
+            self.write("<Empty>\n");
             return;
         }
         for entry in entries {
             if entry.is_directory {
-                self.write("<DIR> ");
+                self.write("<Dir> ");
             } else {
                 self.write("      ");
             }
@@ -386,22 +386,22 @@ impl Terminal {
                     }
                 }
                 if let Some(source) = &entry.source {
-                    self.write(&format!("(FROM {source})\n"));
+                    self.write(&format!("(From {source})\n"));
                 }
             }
-            None => self.write(&format!("?NO HELP FOR {topic}\n")),
+            None => self.write(&format!("?No help for {topic}\n")),
         }
     }
 
     fn set_colors(&mut self, arguments: &str) {
         if arguments.is_empty() {
             let colors = self.colors.get();
-            self.write(&format!("COLOR BG {} FG {}\n", colors.background, colors.foreground));
+            self.write(&format!("Color bg {} fg {}\n", colors.background, colors.foreground));
             return;
         }
         let values = arguments.split_whitespace().collect::<Vec<_>>();
         if values.len() != 2 {
-            self.write_error("USAGE: COLOR BG FG");
+            self.write_error("Usage: color bg fg");
             return;
         }
         match (parse_palette_index(values[0]), parse_palette_index(values[1])) {
@@ -415,18 +415,18 @@ impl Terminal {
     fn build_raw(&mut self, arguments: &str) -> TerminalAction {
         let fields = arguments.split_whitespace().collect::<Vec<_>>();
         if fields.is_empty() || fields.len() > 2 {
-            self.write_error("USAGE: ASM SOURCE [OUTPUT]");
+            self.write_error("Usage: asm source [output]");
             return TerminalAction::None;
         }
         match build_file(&self.filesystem, fields[0], fields.get(1).copied()) {
             Ok(success) => {
-                self.write("BUILT ");
+                self.write("Built ");
                 self.write(&success.output);
                 self.newline();
-                self.write(&format!("ORIGIN ${:04X}  {} BYTES\n", success.origin, success.size));
+                self.write(&format!("Origin ${:04X}  {} bytes\n", success.origin, success.size));
             }
             Err(diagnostics) => {
-                self.write(&format!("{} ERROR(S)\n", diagnostics.len()));
+                self.write(&format!("{} error(s)\n", diagnostics.len()));
                 for diagnostic in diagnostics {
                     self.write(&format!(
                         "{}:{}:{} {}\n",
@@ -444,9 +444,9 @@ impl Terminal {
         }
         match build_project(&self.filesystem) {
             Ok(success) => {
-                self.write(&format!("BUILT {}\n", success.output));
+                self.write(&format!("Built {}\n", success.output));
                 self.write(&format!(
-                    "{}  {} BANK(S)  {} BYTES\n",
+                    "{}  {} bank(s)  {} bytes\n",
                     success.title, success.banks, success.size
                 ));
             }
@@ -461,7 +461,7 @@ impl Terminal {
         } else if arguments.split_whitespace().count() == 1 {
             load_cartridge(&self.filesystem, arguments)
         } else {
-            self.write_error("USAGE: RUN [CARTRIDGE.FCN]");
+            self.write_error("Usage: run [cartridge.fcn]");
             return TerminalAction::None;
         };
         match result {
@@ -476,18 +476,18 @@ impl Terminal {
     fn play_nsf(&mut self, arguments: &str) -> TerminalAction {
         let fields = arguments.split_whitespace().collect::<Vec<_>>();
         if fields.is_empty() || fields.len() > 2 {
-            self.write_error("USAGE: PLAYNSF FILE.NSF [TRACK]");
+            self.write_error("Usage: playnsf file.nsf [track]");
             return TerminalAction::None;
         }
         if !fields[0].to_ascii_lowercase().ends_with(".nsf") {
-            self.write_error("PLAYNSF REQUIRES AN NSF FILE");
+            self.write_error("Playnsf requires an nsf file");
             return TerminalAction::None;
         }
         let track = match fields.get(1) {
             Some(value) => match value.parse::<u8>() {
                 Ok(track) if track != 0 => track,
                 _ => {
-                    self.write_error("TRACK MUST BE 1-255");
+                    self.write_error("Track must be 1-255");
                     return TerminalAction::None;
                 }
             },
@@ -513,14 +513,14 @@ impl Terminal {
             || !fields[0].to_ascii_lowercase().ends_with(".nsf")
             || !fields[1].to_ascii_lowercase().ends_with(".mus")
         {
-            self.write_error("USAGE: NSF2MUS INPUT.NSF OUTPUT.MUS [TRACK]");
+            self.write_error("Usage: nsf2mus input.nsf output.mus [track]");
             return;
         }
         let track = match fields.get(2) {
             Some(value) => match value.parse::<u8>() {
                 Ok(value) if value != 0 => value,
                 _ => {
-                    self.write_error("TRACK MUST BE 1-255");
+                    self.write_error("Track must be 1-255");
                     return;
                 }
             },
@@ -536,12 +536,11 @@ impl Terminal {
         match result {
             Ok(import) => {
                 self.write(&format!(
-                    "WROTE {} ({} VIDEO FRAMES)\n",
-                    fields[1].to_ascii_uppercase(),
-                    import.captured_frames
+                    "Wrote {} ({} video frames)\n",
+                    fields[1], import.captured_frames
                 ));
                 if import.dpcm_omitted {
-                    self.write("WARNING: NSF DPCM CHANNEL WAS OMITTED\n");
+                    self.write("Warning: nsf dpcm channel was omitted\n");
                 }
             }
             Err(error) => self.write_error(&error),
@@ -549,7 +548,7 @@ impl Terminal {
     }
 
     fn write_diagnostics(&mut self, diagnostics: Vec<fanticon::assembler::Diagnostic>) {
-        self.write(&format!("{} ERROR(S)\n", diagnostics.len()));
+        self.write(&format!("{} error(s)\n", diagnostics.len()));
         for diagnostic in diagnostics {
             self.write(&format!(
                 "{}:{}:{} {}\n",
@@ -560,7 +559,7 @@ impl Terminal {
 
     fn new_project(&mut self, name: &str) {
         if name.is_empty() || name.split_whitespace().count() != 1 {
-            self.write_error("USAGE: NEW PROJECT");
+            self.write_error("Usage: new project");
             return;
         }
         let id = match generate_cartridge_id() {
@@ -572,7 +571,7 @@ impl Terminal {
         };
         let output_stem = name.split('.').next().unwrap_or(name);
         let output = format!("{}.fcn", &output_stem[..output_stem.len().min(8)]);
-        let title = name.to_ascii_uppercase();
+        let title = name.to_owned();
         let manifest = match ProjectManifest::template(&title, "main.asm", &output, 0, id) {
             Ok(manifest) => manifest,
             Err(error) => {
@@ -588,7 +587,7 @@ impl Terminal {
             Ok::<(), String>(())
         })();
         match result {
-            Ok(()) => self.write(&format!("CREATED /{}\n", name.to_ascii_lowercase())),
+            Ok(()) => self.write(&format!("Created /{}\n", name.to_ascii_lowercase())),
             Err(error) => self.write_error(&error),
         }
     }
@@ -596,7 +595,7 @@ impl Terminal {
     fn dump(&mut self, arguments: &str) {
         let fields = arguments.split_whitespace().collect::<Vec<_>>();
         if fields.is_empty() || fields.len() > 3 {
-            self.write_error("USAGE: DUMP FILE [OFFSET [LENGTH]]");
+            self.write_error("Usage: dump file [offset [length]]");
             return;
         }
         let offset = match fields.get(1).map_or(Ok(0), |value| parse_dump_number(value)) {
@@ -608,7 +607,7 @@ impl Terminal {
         };
         let length = match fields.get(2).map_or(Ok(128), |value| parse_dump_number(value)) {
             Ok(0) => {
-                self.write_error("LENGTH MUST BE GREATER THAN ZERO");
+                self.write_error("Length must be greater than zero");
                 return;
             }
             Ok(value) => value,
@@ -626,11 +625,11 @@ impl Terminal {
             }
         };
         if bytes.is_empty() {
-            self.write("<EMPTY FILE>\n");
+            self.write("<Empty file>\n");
             return;
         }
         if offset >= bytes.len() {
-            self.write_error("OFFSET OUT OF RANGE");
+            self.write_error("Offset out of range");
             return;
         }
 
@@ -652,11 +651,11 @@ impl Terminal {
                 let character =
                     if byte.is_ascii_graphic() || *byte == b' ' { char::from(*byte) } else { '.' };
                 let color = if *byte == 0 { DUMP_ZERO_COLOR } else { DUMP_ASCII_COLOR };
-                self.put_colored_byte(character.to_ascii_uppercase() as u8, color);
+                self.put_colored_byte(character as u8, color);
             }
             self.newline();
         }
-        self.write(&format!("{} BYTE(S) FROM ${offset:X}\n", end - offset));
+        self.write(&format!("{} byte(s) from ${offset:X}\n", end - offset));
     }
 
     fn prompt(&mut self) {
@@ -679,7 +678,7 @@ impl Terminal {
             if byte == b'\n' {
                 self.newline();
             } else {
-                self.put_byte(byte.to_ascii_uppercase());
+                self.put_byte(byte);
             }
         }
     }
@@ -689,7 +688,7 @@ impl Terminal {
             if byte == b'\n' {
                 self.newline();
             } else {
-                self.put_colored_byte(byte.to_ascii_uppercase(), foreground);
+                self.put_colored_byte(byte, foreground);
             }
         }
     }
@@ -734,9 +733,9 @@ fn parse_dump_number(value: &str) -> Result<usize, String> {
         (10, value)
     };
     if digits.is_empty() {
-        return Err("INVALID NUMBER".to_owned());
+        return Err("Invalid number".to_owned());
     }
-    usize::from_str_radix(digits, radix).map_err(|_| "INVALID NUMBER".to_owned())
+    usize::from_str_radix(digits, radix).map_err(|_| "Invalid number".to_owned())
 }
 
 fn hex_digits(mut value: usize) -> usize {
@@ -815,6 +814,16 @@ mod tests {
     }
 
     #[test]
+    fn command_names_stay_case_insensitive_but_typed_text_keeps_its_case() {
+        let mut terminal = Terminal::new(AppMode::Editor);
+        // The command keyword itself is still case-insensitive...
+        assert_eq!(type_command(&mut terminal, "echo Hello World"), TerminalAction::None);
+        // ...but the argument it echoes back is not silently forced to caps.
+        assert!(screen_text(&terminal).contains("Hello World"));
+        assert!(!screen_text(&terminal).contains("HELLO WORLD"));
+    }
+
+    #[test]
     fn playnsf_loads_a_track_and_radio_commands_are_forwarded() {
         let mut terminal = Terminal::new(AppMode::Editor);
         let mut bytes = vec![0; 0x81];
@@ -880,7 +889,7 @@ mod tests {
         );
         let source = terminal.filesystem.borrow().read_text("tune.mus").unwrap();
         assert!(source.contains(";@FANTICON-MUSIC 2"));
-        assert!(screen_text(&terminal).contains("WROTE TUNE.MUS"));
+        assert!(screen_text(&terminal).contains("Wrote tune.mus"));
     }
 
     #[test]
@@ -955,8 +964,8 @@ mod tests {
         type_command(&mut terminal, "rm ONE.TXT");
         type_command(&mut terminal, "del two.txt");
 
-        assert_eq!(terminal.filesystem.borrow().read_text("one.txt"), Err("FILE NOT FOUND".into()));
-        assert_eq!(terminal.filesystem.borrow().read_text("two.txt"), Err("FILE NOT FOUND".into()));
+        assert_eq!(terminal.filesystem.borrow().read_text("one.txt"), Err("File not found".into()));
+        assert_eq!(terminal.filesystem.borrow().read_text("two.txt"), Err("File not found".into()));
         assert!(terminal.filesystem.borrow().list(None).unwrap()[0].is_directory);
     }
 
@@ -1008,7 +1017,7 @@ mod tests {
         type_command(&mut terminal, "dump bytes.bin $2 2");
         let screen = screen_text(&terminal);
         assert!(screen.contains("2: 41 42                   AB"));
-        assert!(screen.contains("2 BYTE(S) FROM $2"));
+        assert!(screen.contains("2 byte(s) from $2"));
     }
 
     #[test]

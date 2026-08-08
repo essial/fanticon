@@ -362,7 +362,8 @@ fn parse_table_cells(line: &str) -> Vec<String> {
 }
 
 fn is_separator_cells(cells: &[String]) -> bool {
-    !cells.is_empty() && cells.iter().all(|cell| !cell.is_empty() && cell.chars().all(|c| c == '-' || c == ':'))
+    !cells.is_empty()
+        && cells.iter().all(|cell| !cell.is_empty() && cell.chars().all(|c| c == '-' || c == ':'))
 }
 
 /// Recognizes `- `, `* `, `+ `, and `1. `/`1) ` list markers (preserving
@@ -415,8 +416,11 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 /// `Header: value` line per cell, which stays readable at any width instead
 /// of wrapping mid-row and destroying the column alignment.
 fn render_table_block(rows: &[String], width: usize) -> Vec<String> {
-    let parsed: Vec<Vec<String>> =
-        rows.iter().map(|row| parse_table_cells(row)).filter(|cells| !is_separator_cells(cells)).collect();
+    let parsed: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| parse_table_cells(row))
+        .filter(|cells| !is_separator_cells(cells))
+        .collect();
     let Some((header, data)) = parsed.split_first() else { return Vec::new() };
     let columns = header.len();
     let mut widths = vec![0usize; columns];
@@ -567,8 +571,11 @@ impl HelpIndex {
         if query.trim().is_empty() {
             return Vec::new();
         }
-        let mut scored: Vec<(i32, &HelpEntry)> =
-            self.entries.iter().filter_map(|entry| entry.score(query).map(|score| (score, entry))).collect();
+        let mut scored: Vec<(i32, &HelpEntry)> = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.score(query).map(|score| (score, entry)))
+            .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.key.cmp(&b.1.key)));
         scored.into_iter().take(60).map(|(_, entry)| entry).collect()
     }
@@ -581,7 +588,9 @@ impl HelpIndex {
             return None;
         }
         self.entries.iter().find(|entry| entry.key.eq_ignore_ascii_case(key)).or_else(|| {
-            self.entries.iter().find(|entry| entry.aliases.iter().any(|alias| alias.eq_ignore_ascii_case(key)))
+            self.entries
+                .iter()
+                .find(|entry| entry.aliases.iter().any(|alias| alias.eq_ignore_ascii_case(key)))
         })
     }
 
@@ -592,9 +601,10 @@ impl HelpIndex {
         if token.is_empty() {
             return None;
         }
-        self.entries
-            .iter()
-            .find(|entry| matches!(entry.category, HelpCategory::Opcode | HelpCategory::Directive) && entry.key.eq_ignore_ascii_case(token))
+        self.entries.iter().find(|entry| {
+            matches!(entry.category, HelpCategory::Opcode | HelpCategory::Directive)
+                && entry.key.eq_ignore_ascii_case(token)
+        })
     }
 }
 
@@ -734,14 +744,16 @@ mod tests {
 
     #[test]
     fn empty_query_returns_no_results() {
-        let index = HelpIndex { entries: vec![HelpEntry {
-            key: "LDA".to_owned(),
-            category: HelpCategory::Opcode,
-            aliases: Vec::new(),
-            summary: "Load Accumulator".to_owned(),
-            body: Vec::new(),
-            source: None,
-        }] };
+        let index = HelpIndex {
+            entries: vec![HelpEntry {
+                key: "LDA".to_owned(),
+                category: HelpCategory::Opcode,
+                aliases: Vec::new(),
+                summary: "Load Accumulator".to_owned(),
+                body: Vec::new(),
+                source: None,
+            }],
+        };
         assert!(index.search("").is_empty());
         assert!(index.search("   ").is_empty());
         assert_eq!(index.search("lda").len(), 1);
@@ -749,14 +761,16 @@ mod tests {
 
     #[test]
     fn lookup_matches_key_or_alias_case_insensitively() {
-        let index = HelpIndex { entries: vec![HelpEntry {
-            key: "LDA".to_owned(),
-            category: HelpCategory::Opcode,
-            aliases: vec!["LOAD ACCUMULATOR".to_owned()],
-            summary: "Load Accumulator".to_owned(),
-            body: Vec::new(),
-            source: None,
-        }] };
+        let index = HelpIndex {
+            entries: vec![HelpEntry {
+                key: "LDA".to_owned(),
+                category: HelpCategory::Opcode,
+                aliases: vec!["LOAD ACCUMULATOR".to_owned()],
+                summary: "Load Accumulator".to_owned(),
+                body: Vec::new(),
+                source: None,
+            }],
+        };
         assert!(index.lookup("lda").is_some());
         assert!(index.lookup("Load Accumulator").is_some());
         assert!(index.lookup("stx").is_none());

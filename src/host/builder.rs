@@ -103,7 +103,7 @@ pub fn load_cartridge(
                     ram
                 }
             }
-            Err(message) if message == "FILE NOT FOUND" => vec![0; expected],
+            Err(message) if message == "File not found" => vec![0; expected],
             Err(message) => return Err(diagnostic(message)),
         }
     } else {

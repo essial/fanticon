@@ -253,7 +253,7 @@ enum DebugView {
 impl DebugView {
     const ALL: [Self; 6] =
         [Self::State, Self::Code, Self::Memory, Self::Video, Self::Stops, Self::Symbols];
-    const LABELS: [&'static str; 6] = ["STATE", "CODE", "MEMORY", "VIDEO", "STOPS", "SYMBOLS"];
+    const LABELS: [&'static str; 6] = ["State", "Code", "Memory", "Video", "Stops", "Symbols"];
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -722,7 +722,7 @@ impl TextEditor {
             if modifiers.shift_key() && self.music_status.is_some() {
                 return EditorAction::Music(MusicCommand::Stop);
             }
-            let filename = self.filename.clone().unwrap_or_else(|| "UNTITLED.MUS".to_owned());
+            let filename = self.playback_filename();
             if let Some(status) = &self.music_status
                 && status.filename.eq_ignore_ascii_case(&filename)
             {
@@ -739,7 +739,7 @@ impl TextEditor {
             && self.music_active()
             && !self.music_source_active()
         {
-            let filename = self.filename.clone().unwrap_or_else(|| "UNTITLED.MUS".to_owned());
+            let filename = self.playback_filename();
             let source = self.music_tabs[&self.document_id].serialize(&filename);
             return EditorAction::Music(MusicCommand::LoadTracker { filename, source });
         }
@@ -1052,13 +1052,13 @@ impl TextEditor {
     }
 
     pub fn show_debug_error(&mut self, error: String) {
-        self.show_build_message("DEBUG ERROR", &[error]);
+        self.show_build_message("Debug Error", &[error]);
     }
 
     fn toggle_source_breakpoint(&mut self) -> EditorAction {
         let Some(source) = self.filename.clone().filter(|filename| assembly_filename(filename))
         else {
-            self.show_build_message("BREAKPOINT", &["OPEN AN ASM OR INC FILE".to_owned()]);
+            self.show_build_message("Breakpoint", &["Open an ASM or INC file".to_owned()]);
             return EditorAction::None;
         };
         let breakpoint = (source, self.cursor.line);
@@ -1134,7 +1134,7 @@ impl TextEditor {
                 query,
                 replacement,
                 field: SearchField::Query,
-                error: Some("ENTER SEARCH TEXT".to_owned()),
+                error: Some("Enter search text".to_owned()),
             };
             return;
         }
@@ -1178,7 +1178,7 @@ impl TextEditor {
         }
         let matches = line_matches(&self.lines, &self.last_search, false);
         if matches.is_empty() {
-            self.show_build_message("FIND", &[format!("NOT FOUND: {}", self.last_search)]);
+            self.show_build_message("Find", &[format!("Not found: {}", self.last_search)]);
             return;
         }
         let boundary = if forward {
@@ -1240,7 +1240,7 @@ impl TextEditor {
         self.last_search = query.to_owned();
         let results = self.search_project(query, false, false);
         if results.is_empty() {
-            self.show_build_message("PROJECT SEARCH", &[format!("NOT FOUND: {query}")]);
+            self.show_build_message("Project Search", &[format!("Not found: {query}")]);
         } else {
             self.overlay =
                 Overlay::SearchResults { query: query.to_owned(), results, selected: 0, scroll: 0 };
@@ -1311,12 +1311,12 @@ impl TextEditor {
 
     fn goto_symbol_definition(&mut self) {
         let Some(symbol) = self.word_under_cursor() else {
-            self.show_build_message("DEFINITION", &["NO SYMBOL AT CURSOR".to_owned()]);
+            self.show_build_message("Definition", &["No symbol at cursor".to_owned()]);
             return;
         };
         let results = self.search_project(&symbol, true, true);
         let Some(result) = results.first().cloned() else {
-            self.show_build_message("DEFINITION", &[format!("NOT FOUND: {symbol}")]);
+            self.show_build_message("Definition", &[format!("Not found: {symbol}")]);
             return;
         };
         self.navigate_to_result(&result, true);
@@ -1324,12 +1324,12 @@ impl TextEditor {
 
     fn find_symbol_references(&mut self) {
         let Some(symbol) = self.word_under_cursor() else {
-            self.show_build_message("REFERENCES", &["NO SYMBOL AT CURSOR".to_owned()]);
+            self.show_build_message("References", &["No symbol at cursor".to_owned()]);
             return;
         };
         let results = self.search_project(&symbol, true, false);
         if results.is_empty() {
-            self.show_build_message("REFERENCES", &[format!("NOT FOUND: {symbol}")]);
+            self.show_build_message("References", &[format!("Not found: {symbol}")]);
         } else {
             self.overlay =
                 Overlay::SearchResults { query: symbol, results, selected: 0, scroll: 0 };
@@ -1493,8 +1493,8 @@ impl TextEditor {
         };
         filename
             .and_then(|path| path.rsplit('/').next())
-            .map(str::to_ascii_uppercase)
-            .unwrap_or_else(|| format!("UNTITLED{id}"))
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("Untitled{id}"))
     }
 
     fn request_close_tab(&mut self, tab: usize) {
@@ -2061,7 +2061,7 @@ impl TextEditor {
                 self.project_focused = false;
                 self.refresh_project_browser();
             }
-            Err(error) => self.show_build_message("OPEN ERROR", &[error]),
+            Err(error) => self.show_build_message("Open Error", &[error]),
         }
         EditorAction::None
     }
@@ -2129,7 +2129,7 @@ impl TextEditor {
     }
 
     fn render_project_browser(&self, cells: &mut [u8], inverse: &mut [bool]) {
-        put_text_width(cells, 0, 1, " PROJECT", PROJECT_WIDTH);
+        put_text_width(cells, 0, 1, " Project", PROJECT_WIDTH);
         inverse[COLUMNS..COLUMNS + PROJECT_WIDTH].fill(true);
         // The divider doubles up on whichever side holds the keyboard.
         let divider = if self.project_focused { DBL_VERTICAL } else { BOX_VERTICAL };
@@ -2187,8 +2187,8 @@ impl TextEditor {
             };
             let title = filename
                 .and_then(|path| path.rsplit('/').next())
-                .map(str::to_ascii_uppercase)
-                .unwrap_or_else(|| format!("UNTITLED{id}"));
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("Untitled{id}"));
             let mut label = format!(" {title}");
             label.truncate(TAB_WIDTH - 3);
             while label.len() < TAB_WIDTH - 3 {
@@ -2264,7 +2264,7 @@ impl TextEditor {
                     x + 2,
                     y + 3,
                     &format!(
-                        "P ${:02X} {}   CYCLES {}",
+                        "P ${:02X} {}   Cycles {}",
                         snapshot.status,
                         status_flags(snapshot.status),
                         snapshot.cycles
@@ -2275,7 +2275,7 @@ impl TextEditor {
                     x + 2,
                     y + 4,
                     &format!(
-                        "BANK {}:{:02X}   IRQ {:X}/{:X}   RASTER {},{}",
+                        "Bank {}:{:02X}   IRQ {:X}/{:X}   Raster {},{}",
                         bank_kind_name(snapshot.bank_kind),
                         snapshot.bank_number,
                         snapshot.irq_pending,
@@ -2288,7 +2288,7 @@ impl TextEditor {
                     cells,
                     x + 2,
                     y + 5,
-                    &format!("STOP {:?}", snapshot.reason),
+                    &format!("Stop {:?}", snapshot.reason),
                     width - 4,
                 );
                 put_text(
@@ -2296,11 +2296,11 @@ impl TextEditor {
                     x + 2,
                     y + 7,
                     &format!(
-                        "NEXT  {}",
+                        "Next  {}",
                         disassemble_instruction(snapshot.pc, snapshot.instruction_bytes)
                     ),
                 );
-                put_text(cells, x + 2, y + 9, "STACK");
+                put_text(cells, x + 2, y + 9, "Stack");
                 for row in 0..2 {
                     let offset = row * 8;
                     let values = snapshot.stack[offset..offset + 8]
@@ -2315,7 +2315,7 @@ impl TextEditor {
                         &format!("{:02X}: {values}", snapshot.sp.wrapping_add(1 + offset as u8)),
                     );
                 }
-                put_text(cells, x + 2, y + 14, "RECENT INSTRUCTIONS");
+                put_text(cells, x + 2, y + 14, "Recent Instructions");
                 for (row, trace) in snapshot.trace.iter().rev().take(12).enumerate() {
                     put_text_width(
                         cells,
@@ -2329,13 +2329,13 @@ impl TextEditor {
                         width - 4,
                     );
                 }
-                put_text(cells, x + 2, y + 29, "AUDIO");
+                put_text(cells, x + 2, y + 29, "Audio");
                 put_text(
                     cells,
                     x + 2,
                     y + 30,
                     &format!(
-                        "P1 {:02X}/{:03X}  P2 {:02X}/{:03X}  TRI {:02X}/{:03X}  NOI {:02X}/{:X}",
+                        "P1 {:02X}/{:03X}  P2 {:02X}/{:03X}  Tri {:02X}/{:03X}  Noi {:02X}/{:X}",
                         snapshot.apu.pulse_control[0],
                         snapshot.apu.pulse_timer[0],
                         snapshot.apu.pulse_control[1],
@@ -2429,10 +2429,10 @@ impl TextEditor {
                     cells,
                     x + 2,
                     y + 2,
-                    "BREAKPOINTS AND WATCHPOINTS                 DEL = REMOVE",
+                    "Breakpoints and Watchpoints                 Del = Remove",
                 );
                 if snapshot.stops.is_empty() {
-                    put_text(cells, x + 2, y + 4, "NO MANAGED STOPS");
+                    put_text(cells, x + 2, y + 4, "No managed stops");
                 }
                 for (row, stop) in snapshot.stops.iter().take(36).enumerate() {
                     put_text_width(cells, x + 2, y + 4 + row, &format_debug_stop(*stop), width - 4);
@@ -2448,7 +2448,7 @@ impl TextEditor {
                     cells,
                     x + 2,
                     y + 2,
-                    "SYMBOLS                 ENTER = MEMORY   W = WATCH/UNWATCH",
+                    "Symbols                 Enter = Memory   W = Watch/Unwatch",
                 );
                 for (row, (name, symbol)) in self
                     .debug_symbols
@@ -2478,7 +2478,7 @@ impl TextEditor {
                     }
                 }
                 if !self.debug_watches.is_empty() {
-                    put_text(cells, x + 2, y + height - 6, "WATCHES");
+                    put_text(cells, x + 2, y + height - 6, "Watches");
                     for (row, name) in self.debug_watches.iter().take(4).enumerate() {
                         if let Some(symbol) = self.debug_symbols.get(name) {
                             put_text(
@@ -2506,12 +2506,12 @@ impl TextEditor {
         y: usize,
         width: usize,
     ) {
-        let pages = ["OVERVIEW", "PALETTE", "TILEMAP", "SPRITES"];
+        let pages = ["Overview", "Palette", "Tilemap", "Sprites"];
         put_text(
             cells,
             x + 2,
             y + 2,
-            &format!("VIDEO  < {} >   LEFT/RIGHT CHANGES PAGE", pages[self.debug_video_page]),
+            &format!("Video  < {} >   Left/Right changes page", pages[self.debug_video_page]),
         );
         match self.debug_video_page {
             0 => {
@@ -2521,7 +2521,7 @@ impl TextEditor {
                     x + 2,
                     y + 4,
                     &format!(
-                        "MODE ${:02X}  CONTROL ${:02X}  BACKDROP ${:02X}",
+                        "Mode ${:02X}  Control ${:02X}  Backdrop ${:02X}",
                         video.mode, video.control, video.backdrop
                     ),
                 );
@@ -2530,7 +2530,7 @@ impl TextEditor {
                     x + 2,
                     y + 5,
                     &format!(
-                        "SCROLL X {:4}  Y {:4}    RASTER IRQ X {:3}  Y {:3}",
+                        "Scroll X {:4}  Y {:4}    Raster IRQ X {:3}  Y {:3}",
                         video.scroll_x, video.scroll_y, video.raster_x, video.raster_y
                     ),
                 );
@@ -2539,19 +2539,19 @@ impl TextEditor {
                     x + 2,
                     y + 6,
                     &format!(
-                        "BEAM X {:3}  Y {:3}    BITMAP PAL {:X}  SPRITE OVERFLOW {}",
+                        "Beam X {:3}  Y {:3}    Bitmap Pal {:X}  Sprite overflow {}",
                         snapshot.raster_dot,
                         snapshot.raster_line,
                         video.bitmap_palette,
-                        if video.sprite_overflow { "YES" } else { "NO" }
+                        if video.sprite_overflow { "Yes" } else { "No" }
                     ),
                 );
-                put_text(cells, x + 2, y + 8, "VRAM LAYOUT");
-                put_text(cells, x + 2, y + 9, "$0000-$1FFF  256 TILE PATTERNS");
-                put_text(cells, x + 2, y + 10, "$2000-$27FF  64X32 TILE MAP");
-                put_text(cells, x + 2, y + 11, "$2800-$2FFF  TILE ATTRIBUTES");
-                put_text(cells, x + 2, y + 12, "$3000-$30FF  32 SPRITES");
-                put_text(cells, x + 2, y + 13, "$4000-$BFFF  BITMAP");
+                put_text(cells, x + 2, y + 8, "VRAM Layout");
+                put_text(cells, x + 2, y + 9, "$0000-$1FFF  256 tile patterns");
+                put_text(cells, x + 2, y + 10, "$2000-$27FF  64x32 tile map");
+                put_text(cells, x + 2, y + 11, "$2800-$2FFF  Tile attributes");
+                put_text(cells, x + 2, y + 12, "$3000-$30FF  32 sprites");
+                put_text(cells, x + 2, y + 13, "$4000-$BFFF  Bitmap");
             }
             1 => {
                 for row in 0..16 {
@@ -2563,7 +2563,7 @@ impl TextEditor {
                 }
             }
             2 => {
-                put_text(cells, x + 2, y + 4, "TILE MAP (TOP-LEFT 16X16 OF 64X32)");
+                put_text(cells, x + 2, y + 4, "Tile map (top-left 16x16 of 64x32)");
                 for row in 0..16 {
                     let values = (0..16)
                         .map(|column| {
@@ -2581,7 +2581,7 @@ impl TextEditor {
                 }
             }
             _ => {
-                put_text(cells, x + 2, y + 4, "SPRITE  X    Y   TILE ATTR PAL");
+                put_text(cells, x + 2, y + 4, "Sprite  X    Y   Tile Attr Pal");
                 for sprite in 0..32 {
                     let base = 0x3000 + sprite * 8;
                     let data = &snapshot.video.video_ram[base..base + 8];
@@ -2617,7 +2617,7 @@ impl TextEditor {
         let mut backgrounds = [background; COLUMNS * ROWS];
         let mut background_gradients = [false; COLUMNS * ROWS];
 
-        put_text(&mut cells, 0, 0, " FILE  EDIT  BUILD  DEBUG  MUSIC  HELP");
+        put_text(&mut cells, 0, 0, " File  Edit  Build  Debug  Music  Help");
         if let Some(status) = &self.music_status {
             let text = status.display_marquee(self.music_marquee_offset);
             let start = COLUMNS.saturating_sub(text.len());
@@ -2644,7 +2644,7 @@ impl TextEditor {
                     let index =
                         (screen_y + EDITOR_FIRST_ROW) * COLUMNS + EDITOR_CODE_START + screen_x;
                     let source_column = self.scroll_column + screen_x;
-                    cells[index] = byte.to_ascii_uppercase();
+                    cells[index] = byte;
                     if let Some(syntax) = &syntax
                         && let Some(color) = syntax.get(source_column)
                     {
@@ -2699,7 +2699,7 @@ impl TextEditor {
             self.render_scrollbar(&mut cells, &mut foregrounds);
         }
 
-        let name = self.filename.as_deref().unwrap_or("UNTITLED.TXT");
+        let name = self.filename.as_deref().unwrap_or("Untitled.txt");
         let dirty = if self.dirty { "*" } else { " " };
         let status = self
             .debug_paused()
@@ -2899,7 +2899,9 @@ impl TextEditor {
                     Key::Named(NamedKey::PageDown) => {
                         let max_scroll = results
                             .get(*selected)
-                            .map(|entry| help_preview_lines(entry).len().saturating_sub(HELP_VISIBLE))
+                            .map(|entry| {
+                                help_preview_lines(entry).len().saturating_sub(HELP_VISIBLE)
+                            })
                             .unwrap_or(0);
                         *preview_scroll = (*preview_scroll + HELP_VISIBLE).min(max_scroll);
                     }
@@ -3039,7 +3041,7 @@ impl TextEditor {
             } else if let Some((query, replacement)) = replace_all {
                 let count = self.replace_all(&query, &replacement);
                 self.last_search = query;
-                self.show_build_message("REPLACE", &[format!("REPLACED {count} MATCHES")]);
+                self.show_build_message("Replace", &[format!("Replaced {count} matches")]);
             }
             return EditorAction::None;
         }
@@ -3058,7 +3060,7 @@ impl TextEditor {
                             self.switch_tab(tab);
                             self.open_dialog(DialogKind::SaveAs);
                         }
-                        Err(error) => self.show_build_message("SAVE ERROR", &[error]),
+                        Err(error) => self.show_build_message("Save Error", &[error]),
                     }
                 }
                 _ => {}
@@ -3161,7 +3163,7 @@ impl TextEditor {
             && self.music_active()
             && !self.music_source_active()
         {
-            let filename = self.filename.clone().unwrap_or_else(|| "UNTITLED.MUS".to_owned());
+            let filename = self.playback_filename();
             if let Some(status) = &self.music_status
                 && status.filename.eq_ignore_ascii_case(&filename)
             {
@@ -3220,8 +3222,8 @@ impl TextEditor {
             (MenuKind::File, 12) => {
                 if self.any_dirty_tabs() {
                     self.show_build_message(
-                        "UNSAVED TABS",
-                        &["SAVE OR CLOSE DIRTY TABS BEFORE EXIT".to_owned()],
+                        "Unsaved Tabs",
+                        &["Save or close dirty tabs before exit".to_owned()],
                     );
                 } else {
                     return EditorAction::Exit;
@@ -3343,7 +3345,7 @@ impl TextEditor {
                 }
             }
             Overlay::Dialog { kind, input, error } => {
-                let title = if *kind == DialogKind::Open { "OPEN FILE" } else { "SAVE FILE" };
+                let title = if *kind == DialogKind::Open { "Open File" } else { "Save File" };
                 let width = 32;
                 let height = 8;
                 let x = (COLUMNS - width) / 2;
@@ -3359,9 +3361,9 @@ impl TextEditor {
                 );
                 put_text_width(cells, x + 3, y, title, width - 6);
                 put_cell(cells, x + 2, y + 2, SYMBOL_ARROW_RIGHT);
-                put_text(cells, x + 4, y + 2, "NAME:");
+                put_text(cells, x + 4, y + 2, "Name:");
                 put_text_width(cells, x + 10, y + 2, input, width - 11);
-                put_text(cells, x + 3, y + height - 2, "ENTER=OK  ESC=CANCEL");
+                put_text(cells, x + 3, y + height - 2, "Enter=OK  Esc=Cancel");
                 if let Some(error) = error {
                     put_cell(cells, x + 2, y + 4, SYMBOL_CROSS);
                     put_text_width(cells, x + 4, y + 4, error, width - 5);
@@ -3369,14 +3371,14 @@ impl TextEditor {
             }
             Overlay::DebugPrompt { kind, input, error } => {
                 let title = match kind {
-                    DebugPromptKind::ReadWatchpoint => "READ WATCHPOINT",
-                    DebugPromptKind::WriteWatchpoint => "WRITE WATCHPOINT",
-                    DebugPromptKind::RasterBreakpoint => "RASTER BREAKPOINT",
+                    DebugPromptKind::ReadWatchpoint => "Read Watchpoint",
+                    DebugPromptKind::WriteWatchpoint => "Write Watchpoint",
+                    DebugPromptKind::RasterBreakpoint => "Raster Breakpoint",
                 };
                 let label = if *kind == DebugPromptKind::RasterBreakpoint {
-                    "LINE,DOT:"
+                    "Line,Dot:"
                 } else {
-                    "ADDRESS:"
+                    "Address:"
                 };
                 let width = 42;
                 let height = 9;
@@ -3395,7 +3397,7 @@ impl TextEditor {
                 put_cell(cells, x + 2, y + 2, SYMBOL_ARROW_RIGHT);
                 put_text(cells, x + 4, y + 2, label);
                 put_text_width(cells, x + 14, y + 2, input, width - 16);
-                put_text(cells, x + 3, y + height - 2, "ENTER=ADD  ESC=CANCEL");
+                put_text(cells, x + 3, y + height - 2, "Enter=Add  Esc=Cancel");
                 if let Some(error) = error {
                     put_cell(cells, x + 2, y + 4, SYMBOL_CROSS);
                     put_text_width(cells, x + 4, y + 4, error, width - 6);
@@ -3409,14 +3411,14 @@ impl TextEditor {
                     background_gradients,
                     inverse,
                     style,
-                    "BUILD",
-                    &["ASSEMBLING...".to_owned()],
+                    "Build",
+                    &["Assembling...".to_owned()],
                 );
             }
             Overlay::Message { title, lines } => {
-                let message_style = if title == "BUILD SUCCESSFUL" {
+                let message_style = if title == "Build Successful" {
                     CellStyle::new(UI_WHITE_COLOR, UI_SUCCESS_BACKGROUND)
-                } else if title.contains("ERROR") {
+                } else if title.contains("Error") {
                     CellStyle::new(UI_WHITE_COLOR, UI_ERROR_BACKGROUND)
                 } else {
                     style
@@ -3441,16 +3443,16 @@ impl TextEditor {
                     background_gradients,
                     inverse,
                     style,
-                    "UNSAVED TAB",
+                    "Unsaved Tab",
                     &[name],
                 );
             }
             Overlay::SearchPrompt { mode, query, replacement, field, error } => {
                 let title = match mode {
-                    SearchMode::Find => "FIND",
-                    SearchMode::Replace => "FIND AND REPLACE",
-                    SearchMode::Project => "FIND IN PROJECT",
-                    SearchMode::GoToLine => "GO TO LINE",
+                    SearchMode::Find => "Find",
+                    SearchMode::Replace => "Find and Replace",
+                    SearchMode::Project => "Find in Project",
+                    SearchMode::GoToLine => "Go to Line",
                 };
                 let width = 54;
                 let height = if *mode == SearchMode::Replace { 11 } else { 9 };
@@ -3466,7 +3468,7 @@ impl TextEditor {
                     style,
                 );
                 put_text_width(cells, x + 3, y, title, width - 6);
-                let query_label = if *mode == SearchMode::GoToLine { "LINE:" } else { "FIND:" };
+                let query_label = if *mode == SearchMode::GoToLine { "Line:" } else { "Find:" };
                 put_cell(
                     cells,
                     x + 2,
@@ -3482,16 +3484,16 @@ impl TextEditor {
                         y + 4,
                         if *field == SearchField::Replacement { SYMBOL_ARROW_RIGHT } else { b' ' },
                     );
-                    put_text(cells, x + 4, y + 4, "REPLACE:");
+                    put_text(cells, x + 4, y + 4, "Replace:");
                     put_text_width(cells, x + 13, y + 4, replacement, width - 15);
                     put_text(
                         cells,
                         x + 3,
                         y + height - 2,
-                        "ENTER=NEXT  F8=ALL  TAB=FIELD  ESC=CANCEL",
+                        "Enter=Next  F8=All  Tab=Field  Esc=Cancel",
                     );
                 } else {
-                    put_text(cells, x + 3, y + height - 2, "ENTER=OK  ESC=CANCEL");
+                    put_text(cells, x + 3, y + height - 2, "Enter=OK  Esc=Cancel");
                 }
                 if let Some(error) = error {
                     put_cell(cells, x + 2, y + height - 4, SYMBOL_CROSS);
@@ -3517,14 +3519,14 @@ impl TextEditor {
                     cells,
                     SEARCH_RESULTS_X + 3,
                     SEARCH_RESULTS_Y,
-                    &format!("SEARCH: {query}  {} MATCHES", results.len()),
+                    &format!("Search: {query}  {} matches", results.len()),
                     SEARCH_RESULTS_WIDTH - 6,
                 );
                 put_text(
                     cells,
                     SEARCH_RESULTS_X + 2,
                     SEARCH_RESULTS_Y + 2,
-                    "FILE:LINE:COL  SOURCE",
+                    "File:Line:Col  Source",
                 );
                 for (screen_row, result) in
                     results.iter().skip(*scroll).take(SEARCH_RESULTS_VISIBLE).enumerate()
@@ -3555,7 +3557,7 @@ impl TextEditor {
                     cells,
                     SEARCH_RESULTS_X + 2,
                     SEARCH_RESULTS_Y + SEARCH_RESULTS_HEIGHT - 2,
-                    "ENTER/CLICK=OPEN  ESC=CLOSE",
+                    "Enter/Click=Open  Esc=Close",
                 );
             }
             Overlay::BankUsage { entries, scroll } => {
@@ -3570,7 +3572,7 @@ impl TextEditor {
                     CellRect { x, y, width: BANK_USAGE_WIDTH, height: BANK_USAGE_HEIGHT },
                     style,
                 );
-                put_text_width(cells, x + 3, y, "ROM BANK USAGE", BANK_USAGE_WIDTH - 6);
+                put_text_width(cells, x + 3, y, "ROM Bank Usage", BANK_USAGE_WIDTH - 6);
                 for (screen_row, entry) in
                     entries.iter().skip(*scroll).take(BANK_USAGE_VISIBLE).enumerate()
                 {
@@ -3579,8 +3581,7 @@ impl TextEditor {
                     let used = entry.used;
                     let free = entry.free();
                     let percent = if entry.capacity == 0 { 0 } else { used * 100 / entry.capacity };
-                    let line =
-                        format!("{label:<8}{used:>6}B USED {free:>6}B FREE {percent:>3}%");
+                    let line = format!("{label:<8}{used:>6}B Used {free:>6}B Free {percent:>3}%");
                     put_text_width(cells, x + 2, row, &line, BANK_USAGE_WIDTH - 4);
                 }
                 if entries.len() > BANK_USAGE_VISIBLE {
@@ -3589,11 +3590,11 @@ impl TextEditor {
                         cells,
                         x + 2,
                         y + BANK_USAGE_HEIGHT - 3,
-                        &format!("{}-{} OF {}", *scroll + 1, shown_end, entries.len()),
+                        &format!("{}-{} of {}", *scroll + 1, shown_end, entries.len()),
                         BANK_USAGE_WIDTH - 4,
                     );
                 }
-                put_text(cells, x + 2, y + BANK_USAGE_HEIGHT - 2, "ENTER/ESC=CLOSE");
+                put_text(cells, x + 2, y + BANK_USAGE_HEIGHT - 2, "Enter/Esc=Close");
             }
             Overlay::About { .. } => {
                 let x = (COLUMNS - ABOUT_WIDTH) / 2;
@@ -3607,16 +3608,16 @@ impl TextEditor {
                     CellRect { x, y, width: ABOUT_WIDTH, height: ABOUT_HEIGHT },
                     style,
                 );
-                put_text_width(cells, x + 3, y, "ABOUT FANTICON", ABOUT_WIDTH - 6);
+                put_text_width(cells, x + 3, y, "About Fanticon", ABOUT_WIDTH - 6);
                 put_text_width(cells, x + 16, y + 18, "FANTICON", 10);
                 put_text_width(
                     cells,
                     x + 14,
                     y + 19,
-                    concat!("VERSION ", env!("CARGO_PKG_VERSION")),
+                    concat!("Version ", env!("CARGO_PKG_VERSION")),
                     16,
                 );
-                put_text_width(cells, x + 10, y + 21, "ENTER/ESC/CLICK=CLOSE", 22);
+                put_text_width(cells, x + 10, y + 21, "Enter/Esc/Click=Close", 22);
             }
             Overlay::HelpFinder { query, results, selected, scroll, preview_scroll } => {
                 draw_dialog(
@@ -3628,8 +3629,8 @@ impl TextEditor {
                     CellRect { x: HELP_X, y: HELP_Y, width: HELP_WIDTH, height: HELP_HEIGHT },
                     style,
                 );
-                put_text_width(cells, HELP_X + 3, HELP_Y, "HELP FINDER", HELP_WIDTH - 6);
-                put_text(cells, HELP_X + 2, HELP_Y + 2, "FIND:");
+                put_text_width(cells, HELP_X + 3, HELP_Y, "Help Finder", HELP_WIDTH - 6);
+                put_text(cells, HELP_X + 2, HELP_Y + 2, "Find:");
                 put_text_width(cells, HELP_X + 8, HELP_Y + 2, query, HELP_WIDTH - 10);
 
                 let list_x = HELP_X + 2;
@@ -3646,22 +3647,29 @@ impl TextEditor {
                 // opcode/directive/command/guide content.
                 let muted_start = header_row * COLUMNS + list_x;
                 let list_label = if query.trim().is_empty() {
-                    "TYPE TO SEARCH..."
+                    "Type to search..."
                 } else if results.is_empty() {
-                    "NO MATCHES"
+                    "No matches"
                 } else {
                     ""
                 };
                 if list_label.is_empty() {
-                    let text = format!("{} MATCH{}", results.len(), if results.len() == 1 { "" } else { "ES" });
+                    let text = format!(
+                        "{} match{}",
+                        results.len(),
+                        if results.len() == 1 { "" } else { "es" }
+                    );
                     put_text_width(cells, list_x, header_row, &text, HELP_LIST_WIDTH);
                 } else {
                     put_text_width(cells, list_x, header_row, list_label, HELP_LIST_WIDTH);
                 }
-                foregrounds[muted_start..(muted_start + HELP_LIST_WIDTH).min(header_row * COLUMNS + divider_x)]
+                foregrounds[muted_start
+                    ..(muted_start + HELP_LIST_WIDTH).min(header_row * COLUMNS + divider_x)]
                     .fill(ASM_COMMENT_COLOR);
 
-                for (screen_row, entry) in results.iter().skip(*scroll).take(HELP_VISIBLE).enumerate() {
+                for (screen_row, entry) in
+                    results.iter().skip(*scroll).take(HELP_VISIBLE).enumerate()
+                {
                     let row = content_row + screen_row;
                     let index = *scroll + screen_row;
                     // The key is colored by category (matching ASM syntax
@@ -3687,7 +3695,13 @@ impl TextEditor {
                     for (index, line) in
                         preview_lines.iter().skip(*preview_scroll).take(HELP_VISIBLE).enumerate()
                     {
-                        put_text_width(cells, preview_x, content_row + index, line, HELP_PREVIEW_WIDTH);
+                        put_text_width(
+                            cells,
+                            preview_x,
+                            content_row + index,
+                            line,
+                            HELP_PREVIEW_WIDTH,
+                        );
                     }
                     if preview_lines.len() > HELP_VISIBLE {
                         let position = format!(
@@ -3697,8 +3711,15 @@ impl TextEditor {
                             preview_lines.len()
                         );
                         let position_start = (content_row - 1) * COLUMNS + preview_x;
-                        put_text_width(cells, preview_x, content_row - 1, &position, HELP_PREVIEW_WIDTH);
-                        foregrounds[position_start..position_start + position.len().min(HELP_PREVIEW_WIDTH)]
+                        put_text_width(
+                            cells,
+                            preview_x,
+                            content_row - 1,
+                            &position,
+                            HELP_PREVIEW_WIDTH,
+                        );
+                        foregrounds[position_start
+                            ..position_start + position.len().min(HELP_PREVIEW_WIDTH)]
                             .fill(ASM_COMMENT_COLOR);
                     }
                 }
@@ -3731,7 +3752,9 @@ impl TextEditor {
     }
 
     fn refresh_help_finder(&mut self) {
-        if let Overlay::HelpFinder { query, results, selected, scroll, preview_scroll } = &mut self.overlay {
+        if let Overlay::HelpFinder { query, results, selected, scroll, preview_scroll } =
+            &mut self.overlay
+        {
             *results = shared_help_index().search(query);
             *selected = 0;
             *scroll = 0;
@@ -3746,7 +3769,7 @@ impl TextEditor {
 
     fn open_debug_prompt(&mut self, kind: DebugPromptKind) {
         if !self.debug_active {
-            self.show_build_message("DEBUGGER", &["START A DEBUG SESSION FIRST".to_owned()]);
+            self.show_build_message("Debugger", &["Start a debug session first".to_owned()]);
             return;
         }
         self.overlay = Overlay::DebugPrompt { kind, input: String::new(), error: None };
@@ -3808,14 +3831,14 @@ impl TextEditor {
         self.sync_active_document();
         if self.tabs.iter().any(|document| document.dirty && document.filename.is_none()) {
             self.show_build_message(
-                "SAVE ALL",
-                &["SAVE UNTITLED TABS WITH SAVE AS FIRST".to_owned()],
+                "Save All",
+                &["Save untitled tabs with Save As first".to_owned()],
             );
             return;
         }
         match self.save_named_tabs() {
-            Ok(()) => self.show_build_message("SAVE ALL", &["ALL NAMED FILES SAVED".to_owned()]),
-            Err(error) => self.show_build_message("SAVE ERROR", &[error]),
+            Ok(()) => self.show_build_message("Save All", &["All named files saved".to_owned()]),
+            Err(error) => self.show_build_message("Save Error", &[error]),
         }
     }
 
@@ -3939,7 +3962,7 @@ impl TextEditor {
 
     fn perform_build(&mut self) {
         if let Err(error) = self.save_named_tabs() {
-            self.show_build_message("BUILD ERROR", &[error]);
+            self.show_build_message("Build Error", &[error]);
             return;
         }
         if self.pending_bank_usage {
@@ -3963,8 +3986,8 @@ impl TextEditor {
                 }
             } else {
                 self.show_build_message(
-                    "BUILD ERROR",
-                    &["ROM BANK USAGE REQUIRES A FANTICON PROJECT".to_owned()],
+                    "Build Error",
+                    &["ROM Bank Usage requires a Fanticon project".to_owned()],
                 );
             }
             return;
@@ -3978,7 +4001,7 @@ impl TextEditor {
                     self.debug_symbols = launch.symbols.clone();
                     self.debug_snapshot = None;
                     self.debug_active = true;
-                    self.show_build_message("BUILD SUCCESSFUL", &[format!("RUNNING: {title}")]);
+                    self.show_build_message("Build Successful", &[format!("Running: {title}")]);
                     self.refresh_project_browser();
                     self.pending_launch = Some(launch);
                 }
@@ -4000,14 +4023,14 @@ impl TextEditor {
                     self.diagnostics.clear();
                     self.diagnostic_index = None;
                     self.build_message =
-                        Some(format!("BUILT {} {} BYTES", success.output, success.size));
+                        Some(format!("Built {} {} bytes", success.output, success.size));
                     self.show_build_message(
-                        "BUILD SUCCESSFUL",
+                        "Build Successful",
                         &[
-                            format!("OUTPUT: {}", success.output),
-                            format!("TITLE: {}", success.title),
-                            format!("ROM BANKS: {}", success.banks),
-                            format!("SIZE: {} BYTES", success.size),
+                            format!("Output: {}", success.output),
+                            format!("Title: {}", success.title),
+                            format!("ROM banks: {}", success.banks),
+                            format!("Size: {} bytes", success.size),
                         ],
                     );
                     self.refresh_project_browser();
@@ -4026,15 +4049,15 @@ impl TextEditor {
         let Some(filename) = self.filename.clone() else {
             self.diagnostics.clear();
             self.diagnostic_index = None;
-            self.build_message = Some("SAVE AS ASM/INC BEFORE BUILD".to_owned());
-            self.show_build_message("BUILD ERROR", &["SAVE AS ASM/INC BEFORE BUILD".to_owned()]);
+            self.build_message = Some("Save as ASM/INC before build".to_owned());
+            self.show_build_message("Build Error", &["Save as ASM/INC before build".to_owned()]);
             return;
         };
         if !assembly_filename(&filename) {
             self.diagnostics.clear();
             self.diagnostic_index = None;
-            self.build_message = Some("BUILD REQUIRES AN ASM/INC FILE".to_owned());
-            self.show_build_message("BUILD ERROR", &["BUILD REQUIRES AN ASM/INC FILE".to_owned()]);
+            self.build_message = Some("Build requires an ASM/INC file".to_owned());
+            self.show_build_message("Build Error", &["Build requires an ASM/INC file".to_owned()]);
             return;
         }
 
@@ -4044,15 +4067,15 @@ impl TextEditor {
                 self.diagnostics.clear();
                 self.diagnostic_index = None;
                 self.build_message = Some(format!(
-                    "BUILT {} ${:04X} {} BYTES",
+                    "Built {} ${:04X} {} bytes",
                     success.output, success.origin, success.size
                 ));
                 self.show_build_message(
-                    "BUILD SUCCESSFUL",
+                    "Build Successful",
                     &[
-                        format!("OUTPUT: {}", success.output),
-                        format!("ORIGIN: ${:04X}", success.origin),
-                        format!("SIZE: {} BYTES", success.size),
+                        format!("Output: {}", success.output),
+                        format!("Origin: ${:04X}", success.origin),
+                        format!("Size: {} bytes", success.size),
                     ],
                 );
                 self.refresh_project_browser();
@@ -4069,7 +4092,7 @@ impl TextEditor {
 
     fn move_diagnostic(&mut self, forward: bool) {
         if self.diagnostics.is_empty() {
-            self.build_message = Some("NO BUILD ERRORS".to_owned());
+            self.build_message = Some("No build errors".to_owned());
             return;
         }
         let current = self.diagnostic_index.unwrap_or(0);
@@ -4086,11 +4109,11 @@ impl TextEditor {
         let Some(index) = self.diagnostic_index else { return };
         let Some(diagnostic) = self.diagnostics.get(index) else { return };
         let mut lines = vec![
-            format!("ERROR {} OF {}", index + 1, self.diagnostics.len()),
+            format!("Error {} of {}", index + 1, self.diagnostics.len()),
             format!("{}:{}:{}", diagnostic.source, diagnostic.line, diagnostic.column),
         ];
         lines.extend(wrap_dialog_text(&diagnostic.message, 30));
-        self.show_build_message("BUILD ERRORS", &lines);
+        self.show_build_message("Build Errors", &lines);
     }
 
     fn show_build_message(&mut self, title: &str, lines: &[String]) {
@@ -4143,7 +4166,7 @@ impl TextEditor {
                     .as_deref()
                     .is_some_and(|open| open.eq_ignore_ascii_case(filename))
         }) {
-            return Err("FILE IS ALREADY OPEN".to_owned());
+            return Err("File is already open".to_owned());
         }
         if self.graphics_active() {
             let palette_document = self.graphics_tabs[&self.document_id].is_palette_document();
@@ -4324,13 +4347,13 @@ impl TextEditor {
         let palette = match self.ensure_default_palette() {
             Ok(palette) => palette,
             Err(error) => {
-                self.show_build_message("PALETTE ERROR", &[error]);
+                self.show_build_message("Palette Error", &[error]);
                 return;
             }
         };
         let mut graphics = GraphicsEditor::with_shared_palette(DEFAULT_PALETTE_FILE);
         let _ = graphics.replace_palette(palette.palette());
-        document.lines = normalized_lines(&graphics.serialize("UNTITLED.GFX"));
+        document.lines = normalized_lines(&graphics.serialize("Untitled.gfx"));
         self.graphics_tabs.insert(document.id, graphics);
         self.tabs.push(document.clone());
         self.active_tab = self.tabs.len() - 1;
@@ -4343,7 +4366,8 @@ impl TextEditor {
         self.sync_active_document();
         let mut document = self.blank_document();
         let music = MusicEditor::default();
-        document.lines = normalized_lines(&music.serialize("UNTITLED.MUS"));
+        document.lines =
+            normalized_lines(&music.serialize(&format!("Untitled{}.mus", document.id)));
         self.music_tabs.insert(document.id, music);
         self.tabs.push(document.clone());
         self.active_tab = self.tabs.len() - 1;
@@ -4356,7 +4380,7 @@ impl TextEditor {
         if let Err(error) =
             self.ensure_default_palette().and_then(|_| self.load(DEFAULT_PALETTE_FILE))
         {
-            self.show_build_message("PALETTE ERROR", &[error]);
+            self.show_build_message("Palette Error", &[error]);
         } else {
             self.refresh_project_browser();
         }
@@ -4735,7 +4759,7 @@ impl TextEditor {
             self.cursor.column >= *start && self.cursor.column <= *start + token.len()
         })?;
         let entry = shared_help_index().ambient_gloss(token)?;
-        let name = self.filename.as_deref().unwrap_or("UNTITLED.TXT");
+        let name = self.filename.as_deref().unwrap_or("Untitled.txt");
         let dirty = if self.dirty { "*" } else { " " };
         Some(format!(
             " {name}{dirty}  LN {} COL {}  {}: {}",
@@ -4762,8 +4786,19 @@ impl TextEditor {
         self.music_source_views.contains(&self.document_id)
     }
 
+    /// The name used to identify this document's tracker song to the shared
+    /// `MusicRadio` for play/pause/stop routing. Every unsaved document must
+    /// get a *distinct* placeholder here: two different "Untitled.mus" tabs
+    /// sharing one literal name would make the radio's currently-playing
+    /// filename match either tab's placeholder, so playing one and then
+    /// trying to play the other would look up as "already playing" and just
+    /// toggle pause/stop instead of loading the second song's actual data.
+    fn playback_filename(&self) -> String {
+        self.filename.clone().unwrap_or_else(|| format!("Untitled{}.mus", self.document_id))
+    }
+
     fn tracker_play_stop_command(&self) -> MusicCommand {
-        let filename = self.filename.clone().unwrap_or_else(|| "UNTITLED.MUS".to_owned());
+        let filename = self.playback_filename();
         if self
             .music_status
             .as_ref()
@@ -4784,12 +4819,12 @@ impl TextEditor {
                 }
                 Err(error) => {
                     self.music_source_views.insert(self.document_id);
-                    self.show_build_message("MUSIC SOURCE ERROR", &[error]);
+                    self.show_build_message("Music Source Error", &[error]);
                 }
             }
         } else if let Some(music) = self.music_tabs.get(&self.document_id) {
-            let filename = self.filename.as_deref().unwrap_or("UNTITLED.MUS");
-            self.lines = normalized_lines(&music.serialize(filename));
+            let filename = self.playback_filename();
+            self.lines = normalized_lines(&music.serialize(&filename));
             self.cursor = Position::default();
             self.selection_anchor = None;
             self.scroll_line = 0;
@@ -4800,7 +4835,7 @@ impl TextEditor {
 
     fn toggle_graphics_source_view(&mut self) {
         if self.graphics_source_views.remove(&self.document_id) {
-            let filename = self.filename.as_deref().unwrap_or("UNTITLED.GFX");
+            let filename = self.filename.as_deref().unwrap_or("Untitled.gfx");
             match self.parse_graphics_asset(filename, &self.lines.join("\n")) {
                 Ok(graphics) => {
                     self.graphics_tabs.insert(self.document_id, graphics);
@@ -4809,11 +4844,11 @@ impl TextEditor {
                 }
                 Err(error) => {
                     self.graphics_source_views.insert(self.document_id);
-                    self.show_build_message("GFX SOURCE ERROR", &[error]);
+                    self.show_build_message("Gfx Source Error", &[error]);
                 }
             }
         } else if let Some(graphics) = self.graphics_tabs.get(&self.document_id) {
-            let filename = self.filename.as_deref().unwrap_or("UNTITLED.GFX");
+            let filename = self.filename.as_deref().unwrap_or("Untitled.gfx");
             self.lines = normalized_lines(&graphics.serialize(filename));
             self.cursor = Position::default();
             self.selection_anchor = None;
@@ -4986,67 +5021,67 @@ fn collect_project_files(
 
 fn bank_usage_label(section: SymbolSection) -> String {
     match section {
-        SymbolSection::Fixed => "FIXED".to_owned(),
-        SymbolSection::Bank(bank) => format!("BANK {bank}"),
+        SymbolSection::Fixed => "Fixed".to_owned(),
+        SymbolSection::Bank(bank) => format!("Bank {bank}"),
     }
 }
 
 fn menu_items(menu: MenuKind) -> &'static [&'static str] {
     match menu {
         MenuKind::File => &[
-            "NEW TEXT",
-            "NEW GRAPHICS",
-            "NEW PALETTE",
-            "NEW MUSIC",
-            "OPEN...",
+            "New Text",
+            "New Graphics",
+            "New Palette",
+            "New Music",
+            "Open...",
             "",
-            "SAVE",
-            "SAVE AS...",
-            "SAVE ALL",
+            "Save",
+            "Save As...",
+            "Save All",
             "",
-            "CLOSE TAB",
+            "Close Tab",
             "",
-            "EXIT",
+            "Exit",
         ],
         MenuKind::Edit => &[
-            "UNDO",
+            "Undo",
             "",
-            "CUT",
-            "COPY",
-            "PASTE",
-            "SELECT ALL",
+            "Cut",
+            "Copy",
+            "Paste",
+            "Select All",
             "",
-            "FIND",
-            "REPLACE",
-            "PROJECT FIND",
-            "GO TO LINE",
+            "Find",
+            "Replace",
+            "Project Find",
+            "Go To Line",
             "",
-            "BACK",
-            "FORWARD",
+            "Back",
+            "Forward",
         ],
         MenuKind::Build => {
-            &["ASSEMBLE", "BUILD & RUN", "", "NEXT ERROR", "PREV ERROR", "", "ROM USAGE"]
+            &["Assemble", "Build & Run", "", "Next Error", "Prev Error", "", "ROM Usage"]
         }
         MenuKind::Debug => &[
-            "START/CONTINUE",
-            "STOP",
-            "TOGGLE BREAK",
+            "Start/Continue",
+            "Stop",
+            "Toggle Break",
             "",
-            "STEP OVER",
-            "STEP INTO",
-            "STEP OUT",
-            "STEP CYCLE",
+            "Step Over",
+            "Step Into",
+            "Step Out",
+            "Step Cycle",
             "",
-            "READ WATCH",
-            "WRITE WATCH",
-            "RASTER BREAK",
+            "Read Watch",
+            "Write Watch",
+            "Raster Break",
             "",
-            "CLEAR BREAKS",
+            "Clear Breaks",
             "",
-            "DEBUG PANEL",
+            "Debug Panel",
         ],
-        MenuKind::Music => &["PLAY/PAUSE", "PREVIOUS", "NEXT", "LOOP", "", "STOP"],
-        MenuKind::Help => &["FIND HELP", "ABOUT"],
+        MenuKind::Music => &["Play/Pause", "Previous", "Next", "Loop", "", "Stop"],
+        MenuKind::Help => &["Find Help", "About"],
     }
 }
 
@@ -5084,72 +5119,66 @@ const fn menu_bar_hit(column: usize) -> Option<MenuKind> {
 fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
     match menu {
         MenuKind::File => &[
-            "NEW TEXT  N",
-            "NEW GFX   G",
-            "NEW PAL   P",
-            "NEW MUSIC M",
-            "OPEN      O",
+            "New Text  N",
+            "New Gfx   G",
+            "New Pal   P",
+            "New Music M",
+            "Open      O",
             "",
-            "SAVE      S",
-            "SAVE AS   A",
-            "SAVE ALL  L",
+            "Save      S",
+            "Save As   A",
+            "Save All  L",
             "",
-            "CLOSE TAB W",
+            "Close Tab W",
             "",
-            "EXIT      X",
+            "Exit      X",
         ],
         MenuKind::Edit => &[
-            "UNDO      U",
+            "Undo      U",
             "",
-            "CUT       T",
-            "COPY      C",
-            "PASTE     P",
-            "SELECT ALL A",
+            "Cut       T",
+            "Copy      C",
+            "Paste     P",
+            "Select All A",
             "",
-            "FIND      F",
-            "REPLACE   R",
-            "PROJ FIND J",
-            "GO LINE   G",
+            "Find      F",
+            "Replace   R",
+            "Proj Find J",
+            "Go Line   G",
             "",
-            "BACK      K",
-            "FORWARD   L",
+            "Back      K",
+            "Forward   L",
         ],
-        MenuKind::Build => &[
-            "ASSEMBLE  B",
-            "BUILD+RUN F5",
-            "",
-            "NEXT ERR  N",
-            "PREV ERR  P",
-            "",
-            "ROM USAGE  U",
-        ],
+        MenuKind::Build => {
+            &["Assemble  B", "Build+Run F5", "", "Next Err  N", "Prev Err  P", "", "ROM Usage  U"]
+        }
         MenuKind::Debug => &[
-            "CONTINUE             F5",
-            "STOP           SHIFT+F5",
-            "TOGGLE BREAK         F9",
+            "Continue             F5",
+            "Stop           Shift+F5",
+            "Toggle Break         F9",
             "",
-            "STEP OVER           F10",
-            "STEP INTO           F11",
-            "STEP OUT      SHIFT+F11",
-            "STEP CYCLE CTRL/CMD+F11",
+            "Step Over           F10",
+            "Step Into           F11",
+            "Step Out      Shift+F11",
+            "Step Cycle Ctrl/Cmd+F11",
             "",
-            "READ WATCH            R",
-            "WRITE WATCH           W",
-            "RASTER BREAK          A",
+            "Read Watch            R",
+            "Write Watch           W",
+            "Raster Break          A",
             "",
-            "CLEAR BREAKS          C",
+            "Clear Breaks          C",
             "",
-            "DEBUG PANEL  CTRL/CMD+D",
+            "Debug Panel  Ctrl/Cmd+D",
         ],
         MenuKind::Music => &[
-            "PLAY/PAUSE          F7",
-            "PREVIOUS      SHIFT+F8",
-            "NEXT                F8",
-            "LOOP       CTRL/CMD+F8",
+            "Play/Pause          F7",
+            "Previous      Shift+F8",
+            "Next                F8",
+            "Loop       Ctrl/Cmd+F8",
             "",
-            "STOP          SHIFT+F7",
+            "Stop          Shift+F7",
         ],
-        MenuKind::Help => &["FIND HELP F1", "ABOUT      A"],
+        MenuKind::Help => &["Find Help F1", "About      A"],
     }
 }
 
@@ -5241,9 +5270,9 @@ fn render_message_box(
         CellRect { x, y, width, height },
         style,
     );
-    let symbol = if title == "BUILD SUCCESSFUL" {
+    let symbol = if title == "Build Successful" {
         SYMBOL_CHECK
-    } else if title.contains("ERROR") {
+    } else if title.contains("Error") {
         SYMBOL_CROSS
     } else {
         SYMBOL_BUSY
@@ -5256,9 +5285,9 @@ fn render_message_box(
     let footer = match title {
         // One way out gets one label. Enter and Escape both dismiss, so they
         // share a single action instead of posing as a choice.
-        "BUILD ERRORS" => "F4=NEXT  ENTER/ESC=CLOSE",
-        "UNSAVED TAB" => "S=SAVE  D=DISCARD  ESC=CANCEL",
-        _ => "ENTER/ESC=CLOSE",
+        "Build Errors" => "F4=Next  Enter/Esc=Close",
+        "Unsaved Tab" => "S=Save  D=Discard  Esc=Cancel",
+        _ => "Enter/Esc=Close",
     };
     put_text(cells, x + 2, y + height - 2, footer);
 }
@@ -5443,7 +5472,7 @@ fn put_text_width(cells: &mut [u8], x: usize, y: usize, text: &str, width: usize
         return;
     }
     for (offset, byte) in text.bytes().take(width.min(COLUMNS.saturating_sub(x))).enumerate() {
-        cells[y * COLUMNS + x + offset] = byte.to_ascii_uppercase();
+        cells[y * COLUMNS + x + offset] = byte;
     }
 }
 
@@ -5735,19 +5764,19 @@ fn execution_section(snapshot: &DebugSnapshot) -> Option<SymbolSection> {
 fn parse_debug_number(input: &str) -> Result<u16, String> {
     let input = input.trim();
     if input.is_empty() {
-        return Err("VALUE REQUIRED".to_owned());
+        return Err("Value required".to_owned());
     }
     let (digits, radix) = input.strip_prefix('$').map_or_else(
         || input.strip_prefix("0x").map_or((input, 10), |digits| (digits, 16)),
         |digits| (digits, 16),
     );
-    u16::from_str_radix(digits, radix).map_err(|_| "ENTER A 16-BIT ADDRESS".to_owned())
+    u16::from_str_radix(digits, radix).map_err(|_| "Enter a 16-bit address".to_owned())
 }
 
 fn parse_raster_breakpoint(input: &str) -> Result<(u16, u16), String> {
     let fields = input.split([',', ':', ' ']).filter(|field| !field.is_empty()).collect::<Vec<_>>();
     if fields.len() != 2 {
-        return Err("USE LINE,DOT".to_owned());
+        return Err("Use line,dot".to_owned());
     }
     let line = parse_debug_number(fields[0])?;
     let dot = parse_debug_number(fields[1])?;
@@ -5779,20 +5808,20 @@ fn bank_kind_name(kind: u8) -> &'static str {
 
 fn symbol_section_name(section: SymbolSection) -> String {
     match section {
-        SymbolSection::Fixed => "FIXED".to_owned(),
-        SymbolSection::Bank(bank) => format!("BANK {bank:02X}"),
+        SymbolSection::Fixed => "Fixed".to_owned(),
+        SymbolSection::Bank(bank) => format!("Bank {bank:02X}"),
     }
 }
 
 fn format_debug_stop(stop: DebugStop) -> String {
     match stop {
-        DebugStop::Instruction(address) => format!("EXECUTION BREAKPOINT   ${address:04X}"),
+        DebugStop::Instruction(address) => format!("Execution breakpoint   ${address:04X}"),
         DebugStop::Source { section, address } => {
-            format!("SOURCE BREAKPOINT      ${address:04X}  {}", symbol_section_name(section))
+            format!("Source breakpoint      ${address:04X}  {}", symbol_section_name(section))
         }
-        DebugStop::MemoryRead(address) => format!("READ WATCHPOINT        ${address:04X}"),
-        DebugStop::MemoryWrite(address) => format!("WRITE WATCHPOINT       ${address:04X}"),
-        DebugStop::Raster { dot, line } => format!("RASTER BREAKPOINT      LINE {line} DOT {dot}"),
+        DebugStop::MemoryRead(address) => format!("Read watchpoint        ${address:04X}"),
+        DebugStop::MemoryWrite(address) => format!("Write watchpoint       ${address:04X}"),
+        DebugStop::Raster { dot, line } => format!("Raster breakpoint      Line {line} Dot {dot}"),
     }
 }
 
@@ -5880,7 +5909,6 @@ fn assembly_definition(line: &str) -> Option<&str> {
 fn search_preview(line: &str) -> String {
     line.trim().chars().take(48).collect()
 }
-
 
 /// Resolve one of the editor's cell colors to true color.
 ///
@@ -6014,7 +6042,9 @@ fn pad_to_column(output: &mut String, column: usize) {
 /// formatting and syntax coloring never treat a macro's semicolon-separated
 /// argument list as a trailing comment.
 fn is_macro_invocation(line: &str) -> bool {
-    line.split_whitespace().take(2).any(|field| matches!(field.to_ascii_uppercase().as_str(), "PMC" | ">>>"))
+    line.split_whitespace()
+        .take(2)
+        .any(|field| matches!(field.to_ascii_uppercase().as_str(), "PMC" | ">>>"))
 }
 
 fn split_assembly_comment(line: &str) -> (&str, Option<&str>) {
@@ -6039,7 +6069,8 @@ fn assembly_syntax_colors(line: &str, default: u8) -> Vec<u8> {
         return colors;
     }
 
-    let (code, comment) = if is_macro_invocation(trimmed) { (line, None) } else { split_assembly_comment(line) };
+    let (code, comment) =
+        if is_macro_invocation(trimmed) { (line, None) } else { split_assembly_comment(line) };
     if let Some(comment) = comment {
         let start = comment.as_ptr() as usize - line.as_ptr() as usize;
         colors[start..].fill(ASM_COMMENT_COLOR);
@@ -6368,7 +6399,7 @@ mod tests {
             CellStyle::new(UI_WHITE_COLOR, 0),
         );
         assert_eq!(cells[2 * COLUMNS + 1], b'N');
-        assert_eq!(cells[2 * COLUMNS + 2], b'E');
+        assert_eq!(cells[2 * COLUMNS + 2], b'e');
         assert!(inverse[2 * COLUMNS + 1]);
         assert!(
             cells[7 * COLUMNS + 1..7 * COLUMNS + 15].iter().all(|cell| *cell == BOX_HORIZONTAL)
@@ -6464,9 +6495,7 @@ mod tests {
             editor.music_status.as_ref().unwrap().display_marquee(editor.music_marquee_offset);
         let music_start = COLUMNS - music_text.len();
         let first_cell = (0..GLYPH_HEIGHT)
-            .flat_map(|y| {
-                (0..GLYPH_WIDTH).map(move |x| (music_start * GLYPH_WIDTH + x, y))
-            })
+            .flat_map(|y| (0..GLYPH_WIDTH).map(move |x| (music_start * GLYPH_WIDTH + x, y)))
             .map(|(x, y)| surface.pixel(x, y))
             .collect::<Vec<_>>();
         // Shading darkens both down the cell, so match the unshaded top row.
@@ -6942,10 +6971,7 @@ mod tests {
                 PhysicalKey::Code(KeyCode::Digit5),
                 ModifiersState::empty(),
             ),
-            EditorAction::Debug(DebugCommand::WriteMemory {
-                address: 0xc100,
-                value: 0xa5,
-            })
+            EditorAction::Debug(DebugCommand::WriteMemory { address: 0xc100, value: 0xa5 })
         );
         assert_eq!(
             editor.handle_key(
@@ -6999,9 +7025,8 @@ mod tests {
         editor.render_scrollbar(&mut cells, &mut foregrounds);
         assert_eq!(at(&cells, COLUMNS - 1, EDITOR_FIRST_ROW), SYMBOL_ARROW_UP);
         assert_eq!(at(&cells, COLUMNS - 1, EDITOR_FIRST_ROW + TEXT_ROWS - 1), SYMBOL_ARROW_DOWN);
-        let track: Vec<u8> = (1..TEXT_ROWS - 1)
-            .map(|row| at(&cells, COLUMNS - 1, EDITOR_FIRST_ROW + row))
-            .collect();
+        let track: Vec<u8> =
+            (1..TEXT_ROWS - 1).map(|row| at(&cells, COLUMNS - 1, EDITOR_FIRST_ROW + row)).collect();
         assert!(track.contains(&SHADE_MEDIUM), "thumb");
         assert!(track.contains(&SHADE_LIGHT), "track");
         // Text stops one column short so a long line never collides with it.
@@ -7405,6 +7430,29 @@ mod tests {
     }
 
     #[test]
+    fn tab_titles_and_dialog_chrome_no_longer_force_uppercase() {
+        // Filenames are tracked case-insensitively (`self.filename` is
+        // canonicalized to lowercase so "Player.asm" and "player.asm" are the
+        // same open tab); that's a separate, intentional identity rule, not a
+        // rendering bug. What this guards is that rendering stops re-mangling
+        // whatever case is actually stored into all-caps on top of that.
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("Player.asm", "").unwrap();
+        let editor = TextEditor::new(filesystem, shared_ui_colors(), Some("Player.asm".to_owned()));
+        let mut cells = [b' '; COLUMNS * ROWS];
+        let mut foregrounds = [0; COLUMNS * ROWS];
+        let mut inverse = [false; COLUMNS * ROWS];
+
+        editor.render_tabs(&mut cells, &mut foregrounds, &mut inverse);
+
+        let start = COLUMNS + EDITOR_START + 1;
+        let label: String =
+            cells[start..start + TAB_WIDTH].iter().map(|&byte| byte as char).collect();
+        assert!(label.contains("player.asm"), "tab label was {label:?}");
+        assert!(!label.contains("PLAYER.ASM"));
+    }
+
+    #[test]
     fn saving_an_untitled_dirty_tab_from_close_finishes_the_close() {
         let filesystem = shared_filesystem();
         let mut editor = TextEditor::new(filesystem.clone(), shared_ui_colors(), None);
@@ -7431,7 +7479,7 @@ mod tests {
             TextEditor::new(filesystem, shared_ui_colors(), Some("one.txt".to_owned()));
         editor.load("two.txt").unwrap();
 
-        assert_eq!(editor.save_as("ONE.TXT"), Err("FILE IS ALREADY OPEN".to_owned()));
+        assert_eq!(editor.save_as("ONE.TXT"), Err("File is already open".to_owned()));
         assert_eq!(editor.filename.as_deref(), Some("two.txt"));
     }
 
@@ -7629,6 +7677,61 @@ mod tests {
     }
 
     #[test]
+    fn two_unsaved_songs_get_distinct_playback_identities() {
+        // Regression test: two never-saved tracker tabs used to both fall
+        // back to the literal filename "UNTITLED.MUS" for play/pause/stop
+        // routing. That made the radio's "currently playing" filename match
+        // *either* tab's placeholder, so playing the first song and then
+        // pressing play on the second looked like "still playing the same
+        // song" and just toggled pause/stop instead of loading the second
+        // song's actual data.
+        let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
+        editor.new_music_document();
+        let first_id = editor.document_id;
+        let first_start = editor.handle_key(
+            &Key::Named(NamedKey::Space),
+            PhysicalKey::Code(KeyCode::Space),
+            ModifiersState::empty(),
+        );
+        let EditorAction::Music(MusicCommand::LoadTracker { filename: first_filename, .. }) =
+            first_start
+        else {
+            panic!("expected the first song to load: {first_start:?}");
+        };
+
+        editor.new_music_document();
+        let second_id = editor.document_id;
+        assert_ne!(first_id, second_id);
+
+        // The radio is still reporting the first tab's song as playing.
+        editor.set_music_status(Some(MusicStatus {
+            filename: first_filename.clone(),
+            title: first_filename.clone(),
+            artist: "Fanticon Tracker".to_owned(),
+            track: 1,
+            tracks: 1,
+            paused: false,
+            looping: true,
+            position: Some((0, 64)),
+            channel_levels: [0; 4],
+        }));
+
+        let second_start = editor.handle_key(
+            &Key::Named(NamedKey::Space),
+            PhysicalKey::Code(KeyCode::Space),
+            ModifiersState::empty(),
+        );
+        let EditorAction::Music(MusicCommand::LoadTracker { filename: second_filename, .. }) =
+            second_start
+        else {
+            panic!(
+                "second tab's song must load its own data, not toggle the first tab: {second_start:?}"
+            );
+        };
+        assert_ne!(first_filename, second_filename);
+    }
+
+    #[test]
     fn editor_renders_menu_and_document_to_framebuffer() {
         let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
         editor.insert_text("hello");
@@ -7651,6 +7754,28 @@ mod tests {
         let origin_x = EDITOR_CODE_START * GLYPH_WIDTH;
         let origin_y = EDITOR_FIRST_ROW * GLYPH_HEIGHT;
         for (glyph_y, bits) in CHARACTER_ROM[b'A' as usize].iter().copied().enumerate() {
+            for glyph_x in 0..GLYPH_WIDTH {
+                let pixel = surface.pixel(origin_x + glyph_x, origin_y + glyph_y);
+                let is_character = bits & (0x80 >> glyph_x) != 0;
+                let expected =
+                    if is_character { [0, 0, 0, 255] } else { editor_color(UI_WHITE_COLOR) };
+                assert_eq!(pixel, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn lowercase_source_text_renders_as_typed_instead_of_being_forced_uppercase() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("note.txt", "a").unwrap();
+        let editor = TextEditor::new(filesystem, shared_ui_colors(), Some("note.txt".to_owned()));
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+
+        editor.render(&mut surface, true);
+
+        let origin_x = EDITOR_CODE_START * GLYPH_WIDTH;
+        let origin_y = EDITOR_FIRST_ROW * GLYPH_HEIGHT;
+        for (glyph_y, bits) in CHARACTER_ROM[b'a' as usize].iter().copied().enumerate() {
             for glyph_x in 0..GLYPH_WIDTH {
                 let pixel = surface.pixel(origin_x + glyph_x, origin_y + glyph_y);
                 let is_character = bits & (0x80 >> glyph_x) != 0;
@@ -8034,7 +8159,8 @@ mod tests {
         assert!(eom[9..12].iter().all(|color| *color == ASM_MACRO_COLOR));
 
         // Invocation: the PMC keyword and the macro name, but not its args.
-        let invocation = assembly_syntax_colors("         PMC   PRINTAT;message;2;5", ASM_TEXT_COLOR);
+        let invocation =
+            assembly_syntax_colors("         PMC   PRINTAT;message;2;5", ASM_TEXT_COLOR);
         assert!(invocation[9..12].iter().all(|color| *color == ASM_MACRO_COLOR));
         assert!(invocation[15..22].iter().all(|color| *color == ASM_MACRO_COLOR));
         assert_eq!(invocation[22], ASM_TEXT_COLOR);
@@ -8163,10 +8289,10 @@ mod tests {
 
         assert_eq!(filesystem.borrow().read_binary("code.bin").unwrap(), [0xa9, 0x42]);
         assert!(editor.diagnostics.is_empty());
-        assert!(editor.build_message.as_deref().is_some_and(|message| message.contains("BUILT")));
+        assert!(editor.build_message.as_deref().is_some_and(|message| message.contains("Built")));
         assert!(matches!(
             editor.overlay,
-            Overlay::Message { ref title, .. } if title == "BUILD SUCCESSFUL"
+            Overlay::Message { ref title, .. } if title == "Build Successful"
         ));
         let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut surface, false);
@@ -8209,7 +8335,7 @@ mod tests {
         assert!(editor.diagnostics.is_empty());
         assert!(matches!(
             editor.overlay,
-            Overlay::Message { ref title, .. } if title == "BUILD SUCCESSFUL"
+            Overlay::Message { ref title, .. } if title == "Build Successful"
         ));
     }
 
@@ -8271,7 +8397,7 @@ mod tests {
         assert!(matches!(
             editor.overlay,
             Overlay::Message { ref title, ref lines }
-                if title == "BUILD ERROR" && lines[0].contains("ROM BANK USAGE")
+                if title == "Build Error" && lines[0].contains("ROM Bank Usage")
         ));
     }
 
@@ -8288,7 +8414,7 @@ mod tests {
 
         assert!(editor.diagnostics.iter().any(|diagnostic| {
             diagnostic.source.eq_ignore_ascii_case("fanticon.cfg")
-                && diagnostic.message == "TEXT FILE IS NOT UTF-8"
+                && diagnostic.message == "Text file is not UTF-8"
         }));
         assert!(
             !editor
@@ -8313,7 +8439,7 @@ mod tests {
         assert!(editor.line_has_error(1));
         assert!(matches!(
             editor.overlay,
-            Overlay::Message { ref title, .. } if title == "BUILD ERRORS"
+            Overlay::Message { ref title, .. } if title == "Build Errors"
         ));
         let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
         editor.render(&mut surface, false);

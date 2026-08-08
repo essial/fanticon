@@ -62,7 +62,7 @@ impl ConsoleFilesystem {
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { directories, .. } => {
                 if !directories.contains(&requested) {
-                    return Err("DIRECTORY NOT FOUND".to_owned());
+                    return Err("Directory not found".to_owned());
                 }
                 self.cwd = requested;
             }
@@ -81,19 +81,19 @@ impl ConsoleFilesystem {
                 let parent = canonical_directory(root, &parent)?;
                 let name = requested.last().expect("non-root path");
                 if case_insensitive_child(&parent, name)?.is_some() {
-                    return Err("DIRECTORY ALREADY EXISTS".to_owned());
+                    return Err("Directory already exists".to_owned());
                 }
                 let target = parent.join(name);
-                std::fs::create_dir(&target).map_err(|error| io_error("MKDIR", error))?;
+                std::fs::create_dir(&target).map_err(|error| io_error("mkdir", error))?;
             }
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { directories, .. } => {
                 let parent = requested[..requested.len() - 1].to_vec();
                 if !directories.contains(&parent) {
-                    return Err("PARENT DIRECTORY NOT FOUND".to_owned());
+                    return Err("Parent directory not found".to_owned());
                 }
                 if !directories.insert(requested) {
-                    return Err("DIRECTORY ALREADY EXISTS".to_owned());
+                    return Err("Directory already exists".to_owned());
                 }
             }
             #[cfg(all(not(target_arch = "wasm32"), not(test)))]
@@ -105,7 +105,7 @@ impl ConsoleFilesystem {
     pub fn remove_directory(&mut self, path: &str) -> Result<(), String> {
         let requested = self.normalize_non_root(path)?;
         if self.cwd.starts_with(&requested) {
-            return Err("DIRECTORY IS IN USE".to_owned());
+            return Err("Directory is in use".to_owned());
         }
         match &mut self.backend {
             #[cfg(not(target_arch = "wasm32"))]
@@ -113,12 +113,12 @@ impl ConsoleFilesystem {
                 let target = canonical_directory(root, &requested)?;
                 let target_relative = relative_components(root, &target)?;
                 if target_relative.is_empty() {
-                    return Err("ROOT IS PROTECTED".to_owned());
+                    return Err("Root is protected".to_owned());
                 }
                 if self.cwd.starts_with(&target_relative) {
-                    return Err("DIRECTORY IS IN USE".to_owned());
+                    return Err("Directory is in use".to_owned());
                 }
-                std::fs::remove_dir(target).map_err(|error| io_error("RMDIR", error))?;
+                std::fs::remove_dir(target).map_err(|error| io_error("rmdir", error))?;
             }
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { directories, files } => {
@@ -126,13 +126,13 @@ impl ConsoleFilesystem {
                     .iter()
                     .any(|entry| entry.len() > requested.len() && entry.starts_with(&requested))
                 {
-                    return Err("DIRECTORY NOT EMPTY".to_owned());
+                    return Err("Directory not empty".to_owned());
                 }
                 if files.keys().any(|entry| entry.starts_with(&requested)) {
-                    return Err("DIRECTORY NOT EMPTY".to_owned());
+                    return Err("Directory not empty".to_owned());
                 }
                 if !directories.remove(&requested) {
-                    return Err("DIRECTORY NOT FOUND".to_owned());
+                    return Err("Directory not found".to_owned());
                 }
             }
             #[cfg(all(not(target_arch = "wasm32"), not(test)))]
@@ -149,19 +149,19 @@ impl ConsoleFilesystem {
                 let parent = canonical_directory(root, &requested[..requested.len() - 1])?;
                 let name = requested.last().expect("non-root file path");
                 let target = case_insensitive_child(&parent, name)?
-                    .ok_or_else(|| "FILE NOT FOUND".to_owned())?;
+                    .ok_or_else(|| "File not found".to_owned())?;
                 if !target.is_file() {
-                    return Err("NOT A FILE".to_owned());
+                    return Err("Not a file".to_owned());
                 }
-                std::fs::remove_file(target).map_err(|error| io_error("DELETE", error))?;
+                std::fs::remove_file(target).map_err(|error| io_error("delete", error))?;
             }
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { directories, files } => {
                 if directories.contains(&requested) {
-                    return Err("NOT A FILE".to_owned());
+                    return Err("Not a file".to_owned());
                 }
                 if files.remove(&requested).is_none() {
-                    return Err("FILE NOT FOUND".to_owned());
+                    return Err("File not found".to_owned());
                 }
             }
             #[cfg(all(not(target_arch = "wasm32"), not(test)))]
@@ -177,11 +177,11 @@ impl ConsoleFilesystem {
             Backend::Native { root } => {
                 let directory = canonical_directory(root, &requested)?;
                 let mut entries = std::fs::read_dir(directory)
-                    .map_err(|error| io_error("DIR", error))?
+                    .map_err(|error| io_error("dir", error))?
                     .map(|entry| {
-                        let entry = entry.map_err(|error| io_error("DIR", error))?;
+                        let entry = entry.map_err(|error| io_error("dir", error))?;
                         let file_type =
-                            entry.file_type().map_err(|error| io_error("DIR", error))?;
+                            entry.file_type().map_err(|error| io_error("dir", error))?;
                         Ok(DirectoryEntry {
                             name: entry.file_name().to_string_lossy().into_owned(),
                             is_directory: file_type.is_dir(),
@@ -195,7 +195,7 @@ impl ConsoleFilesystem {
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { directories, files } => {
                 if !directories.contains(&requested) {
-                    return Err("DIRECTORY NOT FOUND".to_owned());
+                    return Err("Directory not found".to_owned());
                 }
                 let mut entries = directories
                     .iter()
@@ -227,7 +227,7 @@ impl ConsoleFilesystem {
     }
 
     pub fn read_text(&self, path: &str) -> Result<String, String> {
-        String::from_utf8(self.read_binary(path)?).map_err(|_| "TEXT FILE IS NOT UTF-8".to_owned())
+        String::from_utf8(self.read_binary(path)?).map_err(|_| "Text file is not UTF-8".to_owned())
     }
 
     pub fn read_binary(&self, path: &str) -> Result<Vec<u8>, String> {
@@ -237,13 +237,13 @@ impl ConsoleFilesystem {
             Backend::Native { root } => {
                 let path = canonical_path(root, &requested)?;
                 if !path.is_file() {
-                    return Err("NOT A FILE".to_owned());
+                    return Err("Not a file".to_owned());
                 }
-                std::fs::read(path).map_err(|error| io_error("OPEN", error))
+                std::fs::read(path).map_err(|error| io_error("open", error))
             }
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { files, .. } => {
-                files.get(&requested).cloned().ok_or_else(|| "FILE NOT FOUND".to_owned())
+                files.get(&requested).cloned().ok_or_else(|| "File not found".to_owned())
             }
             #[cfg(all(not(target_arch = "wasm32"), not(test)))]
             Backend::Unavailable(error) => Err(error.clone()),
@@ -263,27 +263,27 @@ impl ConsoleFilesystem {
                 let name = requested.last().expect("non-root file path");
                 let path = match case_insensitive_child(&parent, name)? {
                     Some(path) => {
-                        let path = path.canonicalize().map_err(|error| io_error("SAVE", error))?;
+                        let path = path.canonicalize().map_err(|error| io_error("save", error))?;
                         if !path.starts_with(root) {
-                            return Err("CANNOT LEAVE ROOT".to_owned());
+                            return Err("Cannot leave root".to_owned());
                         }
                         if !path.is_file() {
-                            return Err("NOT A FILE".to_owned());
+                            return Err("Not a file".to_owned());
                         }
                         path
                     }
                     None => parent.join(name),
                 };
-                std::fs::write(path, bytes).map_err(|error| io_error("SAVE", error))
+                std::fs::write(path, bytes).map_err(|error| io_error("save", error))
             }
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { directories, files } => {
                 let parent = requested[..requested.len() - 1].to_vec();
                 if !directories.contains(&parent) {
-                    return Err("PARENT DIRECTORY NOT FOUND".to_owned());
+                    return Err("Parent directory not found".to_owned());
                 }
                 if directories.contains(&requested) {
-                    return Err("NOT A FILE".to_owned());
+                    return Err("Not a file".to_owned());
                 }
                 files.insert(requested, bytes.to_vec());
                 Ok(())
@@ -307,17 +307,17 @@ impl ConsoleFilesystem {
                 {
                     use std::io::Write;
                     let mut file = std::fs::File::create(&temporary)
-                        .map_err(|error| io_error("SAVE", error))?;
-                    file.write_all(bytes).map_err(|error| io_error("SAVE", error))?;
-                    file.sync_all().map_err(|error| io_error("SAVE", error))?;
+                        .map_err(|error| io_error("save", error))?;
+                    file.write_all(bytes).map_err(|error| io_error("save", error))?;
+                    file.sync_all().map_err(|error| io_error("save", error))?;
                 }
-                std::fs::rename(&temporary, destination).map_err(|error| io_error("SAVE", error))
+                std::fs::rename(&temporary, destination).map_err(|error| io_error("save", error))
             }
             #[cfg(any(target_arch = "wasm32", test))]
             Backend::Memory { directories, files } => {
                 let parent = requested[..requested.len() - 1].to_vec();
                 if !directories.contains(&parent) {
-                    return Err("PARENT DIRECTORY NOT FOUND".to_owned());
+                    return Err("Parent directory not found".to_owned());
                 }
                 files.insert(requested, bytes.to_vec());
                 Ok(())
@@ -343,18 +343,18 @@ impl ConsoleFilesystem {
             .create(true)
             .truncate(false)
             .open(lock_path)
-            .map_err(|error| io_error("SAVE LOCK", error))?;
+            .map_err(|error| io_error("save lock", error))?;
         match file.try_lock_exclusive() {
             Ok(()) => Ok(Some(file)),
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(error) => Err(io_error("SAVE LOCK", error)),
+            Err(error) => Err(io_error("save lock", error)),
         }
     }
 
     fn normalize(&self, path: &str) -> Result<Vec<String>, String> {
         let path = path.trim();
         if path.is_empty() {
-            return Err("PATH REQUIRED".to_owned());
+            return Err("Path required".to_owned());
         }
         let mut components =
             if path.starts_with(['/', '\\']) { Vec::new() } else { self.cwd.clone() };
@@ -363,7 +363,7 @@ impl ConsoleFilesystem {
                 "" | "." => {}
                 ".." => {
                     if components.pop().is_none() {
-                        return Err("CANNOT LEAVE ROOT".to_owned());
+                        return Err("Cannot leave root".to_owned());
                     }
                 }
                 component => {
@@ -377,7 +377,7 @@ impl ConsoleFilesystem {
 
     fn normalize_non_root(&self, path: &str) -> Result<Vec<String>, String> {
         let path = self.normalize(path)?;
-        if path.is_empty() { Err("ROOT IS PROTECTED".to_owned()) } else { Ok(path) }
+        if path.is_empty() { Err("Root is protected".to_owned()) } else { Ok(path) }
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -398,15 +398,15 @@ impl ConsoleFilesystem {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn native(root: PathBuf) -> Result<Self, String> {
-        std::fs::create_dir_all(&root).map_err(|error| io_error("CREATE ROOT", error))?;
-        let root = root.canonicalize().map_err(|error| io_error("OPEN ROOT", error))?;
+        std::fs::create_dir_all(&root).map_err(|error| io_error("create root", error))?;
+        let root = root.canonicalize().map_err(|error| io_error("open root", error))?;
         Ok(Self { backend: Backend::Native { root }, cwd: Vec::new() })
     }
 }
 
 fn validate_name(name: &str) -> Result<(), String> {
     if name.chars().any(char::is_whitespace) {
-        return Err("SPACES NOT ALLOWED IN NAMES".to_owned());
+        return Err("Spaces not allowed in names".to_owned());
     }
 
     let mut parts = name.split('.');
@@ -419,7 +419,7 @@ fn validate_name(name: &str) -> Result<(), String> {
         || !stem.bytes().all(valid_name_byte)
         || extension.is_some_and(|extension| !extension.bytes().all(valid_name_byte))
     {
-        return Err("NAME MUST USE 8.3 FORMAT".to_owned());
+        return Err("Name must use 8.3 format".to_owned());
     }
     Ok(())
 }
@@ -432,14 +432,14 @@ const fn valid_name_byte(byte: u8) -> bool {
 fn documents_root() -> Result<PathBuf, String> {
     dirs::document_dir()
         .map(|documents| documents.join("Fanticon"))
-        .ok_or_else(|| "USER DOCUMENTS DIRECTORY NOT FOUND".to_owned())
+        .ok_or_else(|| "User documents directory not found".to_owned())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn canonical_directory(root: &Path, components: &[String]) -> Result<PathBuf, String> {
     let path = canonical_path(root, components)?;
     if !path.is_dir() {
-        return Err("NOT A DIRECTORY".to_owned());
+        return Err("Not a directory".to_owned());
     }
     Ok(path)
 }
@@ -449,19 +449,19 @@ fn canonical_path(root: &Path, components: &[String]) -> Result<PathBuf, String>
     let mut path = root.to_owned();
     for component in components {
         path = case_insensitive_child(&path, component)?
-            .ok_or_else(|| "DIRECTORY NOT FOUND".to_owned())?;
+            .ok_or_else(|| "Directory not found".to_owned())?;
     }
-    let path = path.canonicalize().map_err(|error| io_error("PATH", error))?;
+    let path = path.canonicalize().map_err(|error| io_error("path", error))?;
     if !path.starts_with(root) {
-        return Err("CANNOT LEAVE ROOT".to_owned());
+        return Err("Cannot leave root".to_owned());
     }
     Ok(path)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn case_insensitive_child(directory: &Path, name: &str) -> Result<Option<PathBuf>, String> {
-    for entry in std::fs::read_dir(directory).map_err(|error| io_error("PATH", error))? {
-        let entry = entry.map_err(|error| io_error("PATH", error))?;
+    for entry in std::fs::read_dir(directory).map_err(|error| io_error("path", error))? {
+        let entry = entry.map_err(|error| io_error("path", error))?;
         if entry.file_name().to_string_lossy().eq_ignore_ascii_case(name) {
             return Ok(Some(entry.path()));
         }
@@ -472,7 +472,7 @@ fn case_insensitive_child(directory: &Path, name: &str) -> Result<Option<PathBuf
 #[cfg(not(target_arch = "wasm32"))]
 fn relative_components(root: &Path, path: &Path) -> Result<Vec<String>, String> {
     path.strip_prefix(root)
-        .map_err(|_| "CANNOT LEAVE ROOT".to_owned())?
+        .map_err(|_| "Cannot leave root".to_owned())?
         .iter()
         .map(|part| {
             part.to_str()
@@ -494,8 +494,8 @@ mod tests {
     #[test]
     fn memory_filesystem_cannot_escape_root() {
         let mut filesystem = ConsoleFilesystem::memory();
-        assert_eq!(filesystem.change_directory(".."), Err("CANNOT LEAVE ROOT".to_owned()));
-        assert_eq!(filesystem.remove_directory("/"), Err("ROOT IS PROTECTED".to_owned()));
+        assert_eq!(filesystem.change_directory(".."), Err("Cannot leave root".to_owned()));
+        assert_eq!(filesystem.remove_directory("/"), Err("Root is protected".to_owned()));
     }
 
     #[test]
@@ -515,11 +515,11 @@ mod tests {
         let mut filesystem = ConsoleFilesystem::memory();
         assert_eq!(
             filesystem.create_directory("my game"),
-            Err("SPACES NOT ALLOWED IN NAMES".to_owned())
+            Err("Spaces not allowed in names".to_owned())
         );
         assert_eq!(
             filesystem.change_directory("folder name/child"),
-            Err("SPACES NOT ALLOWED IN NAMES".to_owned())
+            Err("Spaces not allowed in names".to_owned())
         );
         assert!(filesystem.list(None).unwrap().is_empty());
     }
@@ -530,19 +530,19 @@ mod tests {
         filesystem.create_directory("12345678.abc").unwrap();
         assert_eq!(
             filesystem.create_directory("123456789"),
-            Err("NAME MUST USE 8.3 FORMAT".to_owned())
+            Err("Name must use 8.3 format".to_owned())
         );
         assert_eq!(
             filesystem.create_directory("file.long"),
-            Err("NAME MUST USE 8.3 FORMAT".to_owned())
+            Err("Name must use 8.3 format".to_owned())
         );
         assert_eq!(
             filesystem.create_directory("two.dots.txt"),
-            Err("NAME MUST USE 8.3 FORMAT".to_owned())
+            Err("Name must use 8.3 format".to_owned())
         );
         assert_eq!(
             filesystem.create_directory("bad$name"),
-            Err("NAME MUST USE 8.3 FORMAT".to_owned())
+            Err("Name must use 8.3 format".to_owned())
         );
     }
 
@@ -562,11 +562,11 @@ mod tests {
         let mut filesystem = ConsoleFilesystem::memory();
         filesystem.write_text("Notes.Txt", "temporary").unwrap();
         filesystem.remove_file("NOTES.TXT").unwrap();
-        assert_eq!(filesystem.read_text("notes.txt"), Err("FILE NOT FOUND".to_owned()));
+        assert_eq!(filesystem.read_text("notes.txt"), Err("File not found".to_owned()));
 
         filesystem.create_directory("assets").unwrap();
-        assert_eq!(filesystem.remove_file("ASSETS"), Err("NOT A FILE".to_owned()));
-        assert_eq!(filesystem.remove_file("missing.bin"), Err("FILE NOT FOUND".to_owned()));
+        assert_eq!(filesystem.remove_file("ASSETS"), Err("Not a file".to_owned()));
+        assert_eq!(filesystem.remove_file("missing.bin"), Err("File not found".to_owned()));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -589,7 +589,7 @@ mod tests {
         filesystem.create_directory("project").unwrap();
         filesystem.change_directory("project").unwrap();
         assert_eq!(filesystem.current_directory(), "/project");
-        assert_eq!(filesystem.change_directory("../.."), Err("CANNOT LEAVE ROOT".to_owned()));
+        assert_eq!(filesystem.change_directory("../.."), Err("Cannot leave root".to_owned()));
         filesystem.change_directory("/").unwrap();
         filesystem.remove_directory("project").unwrap();
         filesystem.change_directory("MIXCASE").unwrap();

@@ -110,6 +110,13 @@ struct Statement {
 #[derive(Clone)]
 struct MacroDefinition {
     body: Vec<SourceLine>,
+    parameters: Vec<MacroParameter>,
+}
+
+#[derive(Clone)]
+struct MacroParameter {
+    name: String,
+    default: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,6 +172,10 @@ where
     let root = source_lines(source_name, source);
     let included = expand_includes(root, &mut loader, &mut diagnostics, 0);
     let expanded = expand_macros(included, &mut diagnostics);
+    let expanded = expand_repeat_blocks(expanded, &mut diagnostics);
+    let expanded = expand_conditionals(expanded, &mut diagnostics);
+    let expanded = expand_procedure_scopes(expanded, &mut diagnostics);
+    let expanded = expand_dummy_sections(expanded, &mut diagnostics);
     let statements = expanded.iter().map(parse_statement).collect::<Vec<_>>();
     let (plan, symbols) = plan_program(&statements, &mut diagnostics);
     if !diagnostics.is_empty() {
@@ -193,6 +204,10 @@ where
     let root = source_lines(source_name, source);
     let included = expand_includes(root, &mut loader, &mut diagnostics, 0);
     let expanded = expand_macros(included, &mut diagnostics);
+    let expanded = expand_repeat_blocks(expanded, &mut diagnostics);
+    let expanded = expand_conditionals(expanded, &mut diagnostics);
+    let expanded = expand_procedure_scopes(expanded, &mut diagnostics);
+    let expanded = expand_dummy_sections(expanded, &mut diagnostics);
     let statements = expanded.iter().map(parse_statement).collect::<Vec<_>>();
     let mut common = Vec::new();
     let mut blocks = Vec::<Block>::new();
@@ -596,6 +611,13 @@ fn expand_macros(lines: Vec<SourceLine>, diagnostics: &mut Vec<Diagnostic>) -> V
             index += 1;
             continue;
         };
+        let parameters = match parse_macro_parameters(&statement.operand) {
+            Ok(parameters) => parameters,
+            Err(message) => {
+                error(diagnostics, &lines[index], message);
+                Vec::new()
+            }
+        };
         let mut body = Vec::new();
         index += 1;
         while index < lines.len() {
@@ -611,16 +633,61 @@ fn expand_macros(lines: Vec<SourceLine>, diagnostics: &mut Vec<Diagnostic>) -> V
         } else {
             index += 1;
         }
-        if definitions.insert(name.clone(), MacroDefinition { body }).is_some() {
+        if definitions.insert(name.clone(), MacroDefinition { body, parameters }).is_some() {
             error(diagnostics, &lines[index.saturating_sub(1)], format!("duplicate macro {name}"));
         }
     }
 
     let mut output = Vec::new();
+    let mut expansion_id = 0u64;
     for line in ordinary {
-        expand_macro_line(&line, &definitions, &mut output, diagnostics, 0);
+        expand_macro_line(&line, &definitions, &mut output, diagnostics, &mut expansion_id, 0);
     }
     output
+}
+
+fn parse_macro_parameters(operand: &str) -> Result<Vec<MacroParameter>, String> {
+    let operand = operand.trim();
+    let operand = if operand.starts_with(';') {
+        ""
+    } else {
+        operand.split_once(" ;").map_or(operand, |(parameters, _)| parameters.trim_end())
+    };
+    if operand.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut parameters = Vec::new();
+    let mut saw_default = false;
+    for raw in split_macro_arguments(operand) {
+        let (name, default) = raw
+            .split_once('=')
+            .map_or((raw.as_str(), None), |(name, value)| (name, Some(value.trim().to_owned())));
+        let name = name.trim().to_ascii_uppercase();
+        if name.is_empty()
+            || !name.as_bytes()[0].is_ascii_alphabetic()
+            || !name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(
+                "macro parameter names must begin with a letter and use A-Z, 0-9, or _".to_owned()
+            );
+        }
+        if parameters.iter().any(|parameter: &MacroParameter| parameter.name == name) {
+            return Err(format!("duplicate macro parameter {name}"));
+        }
+        if default.as_deref() == Some("") {
+            return Err(format!("macro parameter {name} has an empty default"));
+        }
+        if default.is_some() {
+            saw_default = true;
+        } else if saw_default {
+            return Err("required macro parameters cannot follow defaulted parameters".to_owned());
+        }
+        parameters.push(MacroParameter { name, default });
+    }
+    if parameters.len() > 32 {
+        return Err("macros support at most 32 named parameters".to_owned());
+    }
+    Ok(parameters)
 }
 
 fn expand_macro_line(
@@ -628,6 +695,7 @@ fn expand_macro_line(
     definitions: &HashMap<String, MacroDefinition>,
     output: &mut Vec<SourceLine>,
     diagnostics: &mut Vec<Diagnostic>,
+    expansion_id: &mut u64,
     depth: usize,
 ) {
     if depth >= 32 {
@@ -663,15 +731,109 @@ fn expand_macro_line(
         return;
     };
     let arguments = split_macro_arguments(&arguments);
-    for body_line in &definition.body {
-        let mut text = body_line.text.clone();
-        for parameter in (1..=8).rev() {
-            let value = arguments.get(parameter - 1).map_or("", String::as_str);
-            text = text.replace(&format!("]{parameter}"), value);
+    let mut replacements = Vec::<(String, String)>::new();
+    if definition.parameters.is_empty() {
+        for parameter in 1..=8 {
+            replacements.push((
+                parameter.to_string(),
+                arguments.get(parameter - 1).cloned().unwrap_or_default(),
+            ));
         }
-        let expanded = SourceLine { source: line.source.clone(), line: line.line, text };
-        expand_macro_line(&expanded, definitions, output, diagnostics, depth + 1);
+    } else {
+        if arguments.len() > definition.parameters.len() {
+            error(
+                diagnostics,
+                line,
+                format!(
+                    "macro {name} takes at most {} argument(s), got {}",
+                    definition.parameters.len(),
+                    arguments.len()
+                ),
+            );
+            return;
+        }
+        for (index, parameter) in definition.parameters.iter().enumerate() {
+            let value = arguments
+                .get(index)
+                .filter(|value| !value.is_empty())
+                .cloned()
+                .or_else(|| parameter.default.clone());
+            let Some(value) = value else {
+                error(
+                    diagnostics,
+                    line,
+                    format!("macro {name} is missing argument {} ({})", index + 1, parameter.name),
+                );
+                return;
+            };
+            replacements.push((parameter.name.clone(), value.clone()));
+            replacements.push(((index + 1).to_string(), value));
+        }
     }
+    replacements.sort_by(|left, right| right.0.len().cmp(&left.0.len()));
+    let current_expansion = *expansion_id;
+    *expansion_id = expansion_id.wrapping_add(1);
+    for body_line in &definition.body {
+        let text = rewrite_macro_text(&body_line.text, &replacements, current_expansion);
+        let expanded = SourceLine { source: line.source.clone(), line: line.line, text };
+        expand_macro_line(&expanded, definitions, output, diagnostics, expansion_id, depth + 1);
+    }
+}
+
+fn rewrite_macro_text(text: &str, replacements: &[(String, String)], expansion_id: u64) -> String {
+    let bytes = text.as_bytes();
+    let mut output = String::with_capacity(text.len());
+    let mut index = 0;
+    let mut quote = None;
+    while index < bytes.len() {
+        let character = bytes[index] as char;
+        if quote.is_none() && character == ';' {
+            output.push_str(&text[index..]);
+            break;
+        }
+        if matches!(character, '\'' | '"') {
+            if quote == Some(character) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(character);
+            }
+            output.push(character);
+            index += 1;
+            continue;
+        }
+        if quote.is_none()
+            && character == ']'
+            && let Some((name, value)) = replacements.iter().find(|(name, _)| {
+                text[index + 1..]
+                    .get(..name.len())
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name))
+                    && text
+                        .as_bytes()
+                        .get(index + 1 + name.len())
+                        .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
+            })
+        {
+            output.push_str(value);
+            index += name.len() + 1;
+            continue;
+        }
+        if quote.is_none()
+            && character == '@'
+            && bytes.get(index + 1).is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+        {
+            let start = index + 1;
+            let mut end = start + 1;
+            while bytes.get(end).is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_') {
+                end += 1;
+            }
+            output.push_str(&format!("__M{expansion_id}_{}", &text[start..end]));
+            index = end;
+            continue;
+        }
+        output.push(character);
+        index += 1;
+    }
+    output
 }
 
 /// Returns the raw, un-comment-stripped text following a macro invocation's
@@ -699,13 +861,458 @@ fn split_macro_arguments(arguments: &str) -> Vec<String> {
     }
 }
 
+fn expand_repeat_blocks(
+    lines: Vec<SourceLine>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<SourceLine> {
+    let mut symbols = BTreeMap::new();
+    expand_repeat_sequence(&lines, &mut symbols, diagnostics)
+}
+
+fn expand_repeat_sequence(
+    lines: &[SourceLine],
+    symbols: &mut BTreeMap<String, i32>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<SourceLine> {
+    let mut output = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let statement = parse_statement(&lines[index]);
+        if matches!(statement.operation.as_deref(), Some("--^" | "ENDREP")) {
+            error(diagnostics, &lines[index], "repeat terminator has no matching LUP or REPEAT");
+            index += 1;
+            continue;
+        }
+        if !matches!(statement.operation.as_deref(), Some("LUP" | "REPEAT")) {
+            record_compile_constant(&statement, symbols, &lines[index], diagnostics);
+            output.push(lines[index].clone());
+            index += 1;
+            continue;
+        }
+
+        let arguments = split_macro_arguments(&statement.operand);
+        let expression = arguments.first().map_or("", String::as_str);
+        let parameter = arguments
+            .get(1)
+            .map(|name| name.trim().trim_start_matches(']').to_ascii_uppercase())
+            .unwrap_or_else(|| "I".to_owned());
+        if parameter.is_empty()
+            || !parameter.as_bytes()[0].is_ascii_alphabetic()
+            || !parameter.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            error(diagnostics, &lines[index], "repeat parameter must be an identifier");
+        }
+        let count = match evaluate(expression, symbols, 0) {
+            Ok(Some(value)) if (0..=65_535).contains(&value) => value as usize,
+            Ok(Some(_)) => {
+                error(diagnostics, &lines[index], "repeat count must be from 0 through 65535");
+                0
+            }
+            Ok(None) => {
+                error(diagnostics, &lines[index], "repeat count must be resolved when encountered");
+                0
+            }
+            Err(message) => {
+                error(diagnostics, &lines[index], message);
+                0
+            }
+        };
+
+        let body_start = index + 1;
+        let mut depth = 1usize;
+        index = body_start;
+        while index < lines.len() && depth != 0 {
+            match parse_statement(&lines[index]).operation.as_deref() {
+                Some("LUP" | "REPEAT") => depth += 1,
+                Some("--^" | "ENDREP") => depth -= 1,
+                _ => {}
+            }
+            index += 1;
+        }
+        if depth != 0 {
+            error(
+                diagnostics,
+                &lines[body_start.saturating_sub(1)],
+                "repeat block is missing --^ or ENDREP",
+            );
+            break;
+        }
+        let body_end = index - 1;
+        for iteration in 0..count {
+            let replacements = [
+                (parameter.clone(), iteration.to_string()),
+                ("#".to_owned(), iteration.to_string()),
+            ];
+            let repeated = lines[body_start..body_end]
+                .iter()
+                .map(|line| SourceLine {
+                    source: line.source.clone(),
+                    line: line.line,
+                    text: rewrite_repeat_text(&line.text, &replacements),
+                })
+                .collect::<Vec<_>>();
+            output.extend(expand_repeat_sequence(&repeated, symbols, diagnostics));
+        }
+    }
+    output
+}
+
+fn rewrite_repeat_text(text: &str, replacements: &[(String, String)]) -> String {
+    let bytes = text.as_bytes();
+    let mut output = String::with_capacity(text.len());
+    let mut index = 0;
+    let mut quote = None;
+    while index < bytes.len() {
+        let character = bytes[index] as char;
+        if quote.is_none() && character == ';' {
+            output.push_str(&text[index..]);
+            break;
+        }
+        if matches!(character, '\'' | '"') {
+            if quote == Some(character) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(character);
+            }
+            output.push(character);
+            index += 1;
+            continue;
+        }
+        if quote.is_none()
+            && character == ']'
+            && let Some((name, value)) = replacements.iter().find(|(name, _)| {
+                text[index + 1..]
+                    .get(..name.len())
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(name))
+                    && text
+                        .as_bytes()
+                        .get(index + 1 + name.len())
+                        .is_none_or(|byte| !byte.is_ascii_alphanumeric() && *byte != b'_')
+            })
+        {
+            output.push_str(value);
+            index += name.len() + 1;
+            continue;
+        }
+        output.push(character);
+        index += 1;
+    }
+    output
+}
+
+fn record_compile_constant(
+    statement: &Statement,
+    symbols: &mut BTreeMap<String, i32>,
+    line: &SourceLine,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !matches!(statement.operation.as_deref(), Some("EQU" | "EQ")) {
+        return;
+    }
+    let Some(label) = &statement.label else { return };
+    match evaluate(&statement.operand, symbols, 0) {
+        Ok(Some(value)) => {
+            symbols.insert(label.clone(), value);
+        }
+        Ok(None) => {}
+        Err(message) => error(diagnostics, line, message),
+    }
+}
+
+fn expand_conditionals(
+    lines: Vec<SourceLine>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<SourceLine> {
+    struct Conditional {
+        parent_active: bool,
+        condition: bool,
+        else_seen: bool,
+    }
+
+    let mut output = Vec::new();
+    let mut symbols = BTreeMap::new();
+    let mut stack = Vec::<Conditional>::new();
+    let mut active = true;
+    for line in lines {
+        let statement = parse_statement(&line);
+        match statement.operation.as_deref() {
+            Some("DO" | "IF") => {
+                let condition = if active {
+                    match evaluate(&statement.operand, &symbols, 0) {
+                        Ok(Some(value)) => value != 0,
+                        Ok(None) => {
+                            error(
+                                diagnostics,
+                                &line,
+                                "conditional expression must be resolved when encountered",
+                            );
+                            false
+                        }
+                        Err(message) => {
+                            error(diagnostics, &line, message);
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+                stack.push(Conditional { parent_active: active, condition, else_seen: false });
+                active &= condition;
+            }
+            Some("ELSE") => {
+                let Some(frame) = stack.last_mut() else {
+                    error(diagnostics, &line, "ELSE has no matching DO or IF");
+                    continue;
+                };
+                if frame.else_seen {
+                    error(diagnostics, &line, "conditional block contains more than one ELSE");
+                }
+                frame.else_seen = true;
+                active = frame.parent_active && !frame.condition;
+            }
+            Some("FIN" | "ENDIF") => {
+                let Some(frame) = stack.pop() else {
+                    error(diagnostics, &line, "conditional terminator has no matching DO or IF");
+                    continue;
+                };
+                active = frame.parent_active;
+            }
+            _ if active => {
+                record_compile_constant(&statement, &mut symbols, &line, diagnostics);
+                output.push(line);
+            }
+            _ => {}
+        }
+    }
+    if !stack.is_empty() {
+        let line = output.last().cloned().unwrap_or(SourceLine {
+            source: "<memory>".to_owned(),
+            line: 1,
+            text: String::new(),
+        });
+        error(diagnostics, &line, "conditional block is missing FIN or ENDIF");
+    }
+    output
+}
+
+fn expand_procedure_scopes(
+    lines: Vec<SourceLine>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<SourceLine> {
+    let mut output = Vec::new();
+    let mut procedure = None::<String>;
+    for line in lines {
+        let statement = parse_statement(&line);
+        match statement.operation.as_deref() {
+            Some("PROC") => {
+                let Some(name) = statement.label else {
+                    error(diagnostics, &line, "PROC requires a name in the label field");
+                    continue;
+                };
+                if procedure.is_some() {
+                    error(diagnostics, &line, "procedure scopes cannot nest");
+                    continue;
+                }
+                procedure = Some(name.clone());
+                output.push(SourceLine { source: line.source, line: line.line, text: name });
+            }
+            Some("ENDPROC") => {
+                if procedure.take().is_none() {
+                    error(diagnostics, &line, "ENDPROC has no matching PROC");
+                }
+            }
+            _ => {
+                let text = procedure.as_deref().map_or_else(
+                    || line.text.clone(),
+                    |name| rewrite_procedure_locals(&line.text, name),
+                );
+                output.push(SourceLine { text, ..line });
+            }
+        }
+    }
+    if let Some(name) = procedure {
+        let line = output.last().cloned().unwrap_or(SourceLine {
+            source: "<memory>".to_owned(),
+            line: 1,
+            text: String::new(),
+        });
+        error(diagnostics, &line, format!("procedure {name} is missing ENDPROC"));
+    }
+    output
+}
+
+fn rewrite_procedure_locals(text: &str, procedure: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut output = String::with_capacity(text.len() + procedure.len());
+    let mut index = 0;
+    let mut quote = None;
+    while index < bytes.len() {
+        let character = bytes[index] as char;
+        if quote.is_none() && character == ';' {
+            output.push_str(&text[index..]);
+            break;
+        }
+        if matches!(character, '\'' | '"') {
+            if quote == Some(character) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(character);
+            }
+            output.push(character);
+            index += 1;
+            continue;
+        }
+        let previous_is_identifier = index
+            .checked_sub(1)
+            .and_then(|previous| bytes.get(previous))
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.'));
+        if quote.is_none()
+            && character == '.'
+            && !previous_is_identifier
+            && bytes.get(index + 1).is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+        {
+            output.push_str(procedure);
+        }
+        output.push(character);
+        index += 1;
+    }
+    output
+}
+
+fn expand_dummy_sections(
+    lines: Vec<SourceLine>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<SourceLine> {
+    struct DummySection {
+        prefix: Option<String>,
+        start: i32,
+        offset: i32,
+    }
+
+    let mut output = Vec::new();
+    let mut symbols = BTreeMap::new();
+    let mut dummy = None::<DummySection>;
+    for line in lines {
+        let statement = parse_statement(&line);
+        if let Some(section) = dummy.as_mut() {
+            if statement.operation.as_deref() == Some("DEND") {
+                if let Some(prefix) = &section.prefix {
+                    let name = format!("{prefix}.SIZE");
+                    let value = section.offset - section.start;
+                    symbols.insert(name.clone(), value);
+                    output.push(SourceLine {
+                        source: line.source,
+                        line: line.line,
+                        text: format!("{name} EQU {value}"),
+                    });
+                }
+                dummy = None;
+                continue;
+            }
+            if statement.operation.is_none() {
+                continue;
+            }
+            let Some(label) = statement.label else {
+                error(diagnostics, &line, "DUM entries require a label");
+                continue;
+            };
+            let name =
+                section.prefix.as_ref().map_or(label.clone(), |prefix| format!("{prefix}.{label}"));
+            match statement.operation.as_deref() {
+                Some("DS") => {
+                    let size = match evaluate(&statement.operand, &symbols, 0) {
+                        Ok(Some(value)) if value >= 0 => value,
+                        Ok(Some(_)) => {
+                            error(diagnostics, &line, "DUM field size cannot be negative");
+                            0
+                        }
+                        Ok(None) => {
+                            error(diagnostics, &line, "DUM field size must be resolved");
+                            0
+                        }
+                        Err(message) => {
+                            error(diagnostics, &line, message);
+                            0
+                        }
+                    };
+                    symbols.insert(name.clone(), section.offset);
+                    output.push(SourceLine {
+                        source: line.source.clone(),
+                        line: line.line,
+                        text: format!("{name} EQU {}", section.offset),
+                    });
+                    section.offset = match section.offset.checked_add(size) {
+                        Some(value) => value,
+                        None => {
+                            error(diagnostics, &line, "DUM layout overflows expression range");
+                            section.offset
+                        }
+                    };
+                }
+                Some("EQU" | "EQ") => {
+                    let value = match evaluate(&statement.operand, &symbols, 0) {
+                        Ok(Some(value)) => value,
+                        Ok(None) => {
+                            error(diagnostics, &line, "DUM constant must be resolved");
+                            0
+                        }
+                        Err(message) => {
+                            error(diagnostics, &line, message);
+                            0
+                        }
+                    };
+                    symbols.insert(name.clone(), value);
+                    output.push(SourceLine {
+                        source: line.source,
+                        line: line.line,
+                        text: format!("{name} EQU {value}"),
+                    });
+                }
+                _ => error(diagnostics, &line, "DUM supports labeled DS, EQU, and EQ entries"),
+            }
+            continue;
+        }
+
+        if statement.operation.as_deref() == Some("DEND") {
+            error(diagnostics, &line, "DEND has no matching DUM");
+            continue;
+        }
+        if statement.operation.as_deref() == Some("DUM") {
+            let start = match evaluate(&statement.operand, &symbols, 0) {
+                Ok(Some(value)) => value,
+                Ok(None) => {
+                    error(diagnostics, &line, "DUM origin must be resolved");
+                    0
+                }
+                Err(message) => {
+                    error(diagnostics, &line, message);
+                    0
+                }
+            };
+            dummy = Some(DummySection { prefix: statement.label, start, offset: start });
+            continue;
+        }
+        record_compile_constant(&statement, &mut symbols, &line, diagnostics);
+        output.push(line);
+    }
+    if let Some(section) = dummy {
+        let line = output.last().cloned().unwrap_or(SourceLine {
+            source: "<memory>".to_owned(),
+            line: 1,
+            text: String::new(),
+        });
+        let name = section.prefix.as_deref().unwrap_or("anonymous");
+        error(diagnostics, &line, format!("DUM section {name} is missing DEND"));
+    }
+    output
+}
+
 fn parse_statement(line: &SourceLine) -> Statement {
-    let macro_invocation = line
-        .text
-        .split_whitespace()
-        .take(2)
-        .any(|field| matches!(field.to_ascii_uppercase().as_str(), "PMC" | ">>>"));
-    let code = if macro_invocation { line.text.as_str() } else { strip_comment(&line.text) };
+    let preserves_semicolon_arguments = line.text.split_whitespace().take(2).any(|field| {
+        matches!(field.to_ascii_uppercase().as_str(), "MAC" | "PMC" | ">>>" | "LUP" | "REPEAT")
+    });
+    let code =
+        if preserves_semicolon_arguments { line.text.as_str() } else { strip_comment(&line.text) };
     let trimmed = code.trim();
     if trimmed.is_empty() || trimmed.starts_with('*') {
         return Statement {
@@ -1281,6 +1888,10 @@ enum Token {
     ShiftLeft,
     ShiftRight,
     Not,
+    Equal,
+    NotEqual,
+    LessOrEqual,
+    GreaterOrEqual,
 }
 
 fn evaluate(
@@ -1424,6 +2035,14 @@ fn tokenize_expression(expression: &str, address: u16) -> Result<Vec<Token>, Str
                 tokens.push(Token::Not);
                 index += 1;
             }
+            b'=' if bytes.get(index + 1) == Some(&b'=') => {
+                tokens.push(Token::Equal);
+                index += 2;
+            }
+            b'!' if bytes.get(index + 1) == Some(&b'=') => {
+                tokens.push(Token::NotEqual);
+                index += 2;
+            }
             b'(' => {
                 tokens.push(Token::LeftParen);
                 index += 1;
@@ -1436,8 +2055,16 @@ fn tokenize_expression(expression: &str, address: u16) -> Result<Vec<Token>, Str
                 tokens.push(Token::ShiftLeft);
                 index += 2;
             }
+            b'<' if bytes.get(index + 1) == Some(&b'=') => {
+                tokens.push(Token::LessOrEqual);
+                index += 2;
+            }
             b'>' if bytes.get(index + 1) == Some(&b'>') => {
                 tokens.push(Token::ShiftRight);
+                index += 2;
+            }
+            b'>' if bytes.get(index + 1) == Some(&b'=') => {
+                tokens.push(Token::GreaterOrEqual);
                 index += 2;
             }
             b'<' => {
@@ -1531,12 +2158,18 @@ impl ExpressionParser<'_> {
 
 fn binary_operator(token: &Token) -> Option<(u8, &Token)> {
     let precedence = match token {
-        Token::Or => 1,
-        Token::Xor => 2,
-        Token::And => 3,
-        Token::ShiftLeft | Token::ShiftRight => 4,
-        Token::Plus | Token::Minus => 5,
-        Token::Multiply | Token::Divide => 6,
+        Token::Equal
+        | Token::NotEqual
+        | Token::Low
+        | Token::High
+        | Token::LessOrEqual
+        | Token::GreaterOrEqual => 1,
+        Token::Or => 2,
+        Token::Xor => 3,
+        Token::And => 4,
+        Token::ShiftLeft | Token::ShiftRight => 5,
+        Token::Plus | Token::Minus => 6,
+        Token::Multiply | Token::Divide => 7,
         _ => return None,
     };
     Some((precedence, token))
@@ -1554,6 +2187,12 @@ fn apply_binary(operation: &Token, left: i32, right: i32) -> Result<i32, String>
         Token::Xor => Ok(left ^ right),
         Token::ShiftLeft => Ok(left.wrapping_shl(right as u32)),
         Token::ShiftRight => Ok(left.wrapping_shr(right as u32)),
+        Token::Equal => Ok(i32::from(left == right)),
+        Token::NotEqual => Ok(i32::from(left != right)),
+        Token::Low => Ok(i32::from(left < right)),
+        Token::High => Ok(i32::from(left > right)),
+        Token::LessOrEqual => Ok(i32::from(left <= right)),
+        Token::GreaterOrEqual => Ok(i32::from(left >= right)),
         _ => unreachable!("only binary operators are passed here"),
     }
 }
@@ -1585,6 +2224,19 @@ fn is_known_operation(operation: &str) -> bool {
                 | "PMC"
                 | "<<<"
                 | ">>>"
+                | "DO"
+                | "IF"
+                | "ELSE"
+                | "FIN"
+                | "ENDIF"
+                | "LUP"
+                | "REPEAT"
+                | "--^"
+                | "ENDREP"
+                | "PROC"
+                | "ENDPROC"
+                | "DUM"
+                | "DEND"
                 | "END"
         )
 }
@@ -1997,6 +2649,150 @@ LOADIMM  MAC
 "#;
         let program = assemble(source).unwrap();
         assert_eq!(program.bytes, [0xa9, 0x42, 0x85, 0x20]);
+    }
+
+    #[test]
+    fn named_macro_parameters_support_defaults_and_positional_aliases() {
+        let source = r#"
+STORE    MAC   VALUE;DEST=$20
+         LDA   #]VALUE
+         STA   ]DEST
+         LDX   #]1
+         EOM
+         ORG   $1000
+         STORE $42
+         STORE $18;$30
+"#;
+        let program = assemble(source).unwrap();
+        assert_eq!(
+            program.bytes,
+            [0xa9, 0x42, 0x85, 0x20, 0xa2, 0x42, 0xa9, 0x18, 0x85, 0x30, 0xa2, 0x18]
+        );
+    }
+
+    #[test]
+    fn macro_local_labels_are_unique_per_nested_expansion() {
+        let source = r#"
+WAIT     MAC   COUNT
+         LDX   #]COUNT
+@LOOP    DEX
+         BNE   @LOOP
+         EOM
+TWICE    MAC   COUNT
+         WAIT  ]COUNT
+         WAIT  ]COUNT
+         EOM
+         ORG   $1000
+         TWICE 2
+         TWICE 3
+"#;
+        let program = assemble(source).unwrap();
+        assert_eq!(
+            program.bytes,
+            [
+                0xa2, 2, 0xca, 0xd0, 0xfd, 0xa2, 2, 0xca, 0xd0, 0xfd, 0xa2, 3, 0xca, 0xd0, 0xfd,
+                0xa2, 3, 0xca, 0xd0, 0xfd
+            ]
+        );
+    }
+
+    #[test]
+    fn compile_time_conditionals_support_nesting_aliases_and_comparisons() {
+        let source = r#"
+VERSION  EQU   2
+         ORG   $1000
+         IF    VERSION >= 2
+         LDA   #1
+         DO    VERSION == 3
+         LDX   #0
+         ELSE
+         LDX   #2
+         FIN
+         ELSE
+         LDA   #0
+         ENDIF
+"#;
+        let program = assemble(source).unwrap();
+        assert_eq!(program.bytes, [0xa9, 1, 0xa2, 2]);
+    }
+
+    #[test]
+    fn repeat_blocks_support_named_indexes_and_nesting() {
+        let source = r#"
+         ORG   $1000
+         REPEAT 3;ROW
+         DFB   ]ROW
+         LUP   2;COLUMN
+         DFB   ]ROW*10+]COLUMN
+         --^
+         ENDREP
+"#;
+        let program = assemble(source).unwrap();
+        assert_eq!(program.bytes, [0, 0, 1, 1, 10, 11, 2, 20, 21]);
+    }
+
+    #[test]
+    fn procedure_scopes_make_dot_labels_local() {
+        let source = r#"
+         ORG   $1000
+FIRST    PROC
+.LOOP    DEX
+         BNE   .LOOP
+         RTS
+         ENDPROC
+SECOND   PROC
+.LOOP    DEY
+         BNE   .LOOP
+         JSR   FIRST
+         RTS
+         ENDPROC
+"#;
+        let program = assemble(source).unwrap();
+        assert_eq!(
+            program.bytes,
+            [0xca, 0xd0, 0xfd, 0x60, 0x88, 0xd0, 0xfd, 0x20, 0x00, 0x10, 0x60]
+        );
+        assert_eq!(program.symbols["FIRST.LOOP"], 0x1000);
+        assert_eq!(program.symbols["SECOND.LOOP"], 0x1004);
+    }
+
+    #[test]
+    fn dummy_sections_define_prefixed_layouts_without_emitting_bytes() {
+        let source = r#"
+PLAYER   DUM   0
+X        DS    2
+Y        DS    1
+FLAGS    DS    1
+         DEND
+         ORG   $1000
+HERO     DS    PLAYER.SIZE
+         LDA   HERO+PLAYER.Y
+"#;
+        let program = assemble(source).unwrap();
+        assert_eq!(program.bytes, [0, 0, 0, 0, 0xad, 0x02, 0x10]);
+        assert_eq!(program.symbols["PLAYER.X"], 0);
+        assert_eq!(program.symbols["PLAYER.Y"], 2);
+        assert_eq!(program.symbols["PLAYER.FLAGS"], 3);
+        assert_eq!(program.symbols["PLAYER.SIZE"], 4);
+    }
+
+    #[test]
+    fn modern_macro_errors_report_bad_arguments_and_unclosed_blocks() {
+        let missing =
+            assemble("COPY MAC SOURCE;DEST\n NOP\n EOM\n ORG $1000\n COPY $20").unwrap_err();
+        assert!(missing[0].message.contains("missing argument 2 (DEST)"));
+
+        let unclosed = assemble(" ORG $1000\n IF 1\n NOP").unwrap_err();
+        assert!(unclosed.iter().any(|diagnostic| diagnostic.message.contains("missing FIN")));
+
+        let repeat = assemble(" ORG $1000\n REPEAT 2;I\n DFB ]I").unwrap_err();
+        assert!(repeat.iter().any(|diagnostic| diagnostic.message.contains("missing --^")));
+
+        let procedure = assemble(" ORG $1000\nBROKEN PROC\n RTS").unwrap_err();
+        assert!(procedure.iter().any(|diagnostic| diagnostic.message.contains("missing ENDPROC")));
+
+        let dummy = assemble("THING DUM 0\nFIELD DS 1").unwrap_err();
+        assert!(dummy.iter().any(|diagnostic| diagnostic.message.contains("missing DEND")));
     }
 
     #[test]

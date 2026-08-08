@@ -56,8 +56,9 @@ letterboxing, scanlines, phosphor beam shaping, and composite color bleed.
 - **Four-voice audio** — two pulse channels, triangle, and noise, NES-shaped
   and exactly timed against the CPU clock.
 - **Native development tools** — a full-screen code editor, a macro assembler
-  with Merlin-style syntax, project manifests, and an integrated debugger with
-  breakpoints and raster triggers.
+  with named/defaulted parameters, private labels, compile-time conditionals and
+  repetition, project manifests, and an integrated debugger with breakpoints and
+  raster triggers.
 - **Versioned `.FCN` cartridges** — 4 MiB ROM banking, battery-backed save
   RAM, and CRC-checked headers.
 - **Cross-platform** — native Windows, Linux, and macOS builds (x86_64 and
@@ -79,7 +80,7 @@ modes, the embedded character ROM, native commands, and future tool dispatch.
 The [graphics editor](documentation/graphics-editor.md) documents `.GFX` resident
 sets, shared `.PAL` resources, tile/map/sprite/bitmap tools, and direct VM loading.
 The [macro assembler](documentation/assembler.md) documents building raw `.BIN`
-files, supported syntax and directives, Merlin-style macros, and diagnostics.
+files, supported syntax and directives, modern macros, and diagnostics.
 The [system architecture](documentation/system-architecture.md) defines the VM's
 clock tree, memory and I/O maps, tile/bitmap video, sprites, NES-like audio,
 controllers, interrupts, timers, and cartridge-visible reset model.

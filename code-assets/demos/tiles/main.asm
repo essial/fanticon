@@ -52,24 +52,14 @@ COPY     LDA   PATTERN,X
 ; X also selects changing palette banks.
          LDX   #0
 MAPLOOP  LDA   #1
-         STA   $A000,X
-         STA   $A100,X
-         STA   $A200,X
-         STA   $A300,X
-         STA   $A400,X
-         STA   $A500,X
-         STA   $A600,X
-         STA   $A700,X
+         REPEAT 8;PAGE
+         STA   $A000+]PAGE*$100,X
+         ENDREP
          TXA
          AND   #$0F
-         STA   $A800,X
-         STA   $A900,X
-         STA   $AA00,X
-         STA   $AB00,X
-         STA   $AC00,X
-         STA   $AD00,X
-         STA   $AE00,X
-         STA   $AF00,X
+         REPEAT 8;PAGE
+         STA   $A800+]PAGE*$100,X
+         ENDREP
          INX
          BNE   MAPLOOP
 

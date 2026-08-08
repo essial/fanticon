@@ -79,7 +79,8 @@ single-character literals. `*` is the address at the current source line.
 
 Unary operators are `+`, `-`, `~`, `<` (low byte), and `>` (high byte). Binary
 operators, from higher to lower precedence, are `* /`, `+ -`, `<< >>`, `&`, `^`,
-and `|`. Parentheses override precedence.
+`|`, and finally the comparisons `<`, `>`, `<=`, `>=`, `==`, and `!=`.
+Comparisons produce 1 when true and 0 when false. Parentheses override precedence.
 
 ```asm
 SCREEN   EQU   $2000
@@ -136,17 +137,21 @@ or be reassigned on later 6502-family CPUs.
 | `HEX` | Emit hexadecimal byte pairs, with spaces or commas allowed |
 | `DS expression` | Reserve and zero-fill a number of bytes |
 | `PUT`, `USE`, `INCLUDE` | Assemble another text file at this location |
+| `IF` / `DO`, `ELSE`, `ENDIF` / `FIN` | Select source at assembly time |
+| `REPEAT` / `LUP`, `ENDREP` / `--^` | Repeat source at assembly time |
+| `name PROC`, `ENDPROC` | Scope dot-prefixed local labels to a procedure |
+| `name DUM origin`, `DEND` | Define a symbol-only data layout |
 | `END` | Mark the logical end of source |
 
 Multiple `ORG` regions are allowed only in increasing address order. Gaps are
 zero-filled in the raw output. Moving backward over output is an error. Includes
 use Fanticon paths and may be nested up to 16 levels.
 
-## Merlin-style macros
+## Modern macros
 
 Define a macro by placing its name in the label field and `MAC` in the operation
-field. End it with `EOM` or `<<<`. Parameters `]1` through `]8` are substituted
-when the macro expands.
+field. End it with `EOM` or `<<<`. Legacy definitions with no parameter list keep
+supporting positional parameters `]1` through `]8`:
 
 ```asm
 LOADIMM  MAC
@@ -159,9 +164,126 @@ LOADIMM  MAC
 ```
 
 `PMC name;arg1;arg2` and `>>> name;arg1;arg2` invoke a macro. A macro name may
-also be used directly in the operation field. Macro expansion may nest up to 32
-levels. Duplicate macro names, unterminated definitions, invalid expanded source,
-and unknown macro calls are reported with their source location.
+also be used directly in the operation field. `PMC` is recommended for
+semicolon-separated calls because it makes the argument list unambiguous to the
+editor.
+
+### Named parameters and defaults
+
+Place a semicolon- or comma-separated parameter list after `MAC`. Named macros
+accept up to 32 parameters. A trailing parameter may provide a default with
+`NAME=value`; every later parameter must also have a default. Named parameters
+are referenced as `]NAME`. Their positional aliases (`]1`, `]2`, and so on) also
+remain available.
+
+```asm
+STORE    MAC   VALUE;DEST=$20
+         LDA   #]VALUE
+         STA   ]DEST
+         EOM
+
+         PMC   STORE;$42       ; uses default destination $20
+         PMC   STORE;$18;$30
+```
+
+An omitted or empty argument uses its default. Missing required arguments,
+extra arguments, duplicate parameter names, and required parameters following a
+default are errors at the invocation or definition line.
+
+### Hygienic local labels
+
+A label beginning with `@` inside a macro is private to that expansion. Fanticon
+rewrites its definition and every reference to a unique internal symbol, including
+inside nested macro calls. The same macro can therefore be invoked repeatedly
+without caller-supplied label suffixes.
+
+```asm
+WAITX    MAC   COUNT
+         LDX   #]COUNT
+@LOOP    DEX
+         BNE   @LOOP
+         EOM
+
+         PMC   WAITX;8
+         PMC   WAITX;16
+```
+
+Macro expansion may nest up to 32 levels. Substitution does not alter quoted
+strings or comments. Duplicate macro names, unterminated definitions, invalid
+expanded source, and unknown macro calls are reported with their source location.
+
+## Compile-time conditionals
+
+`IF expression` (or Merlin-compatible `DO expression`) includes its block when
+the expression is nonzero. `ELSE` selects the other branch and `ENDIF` (or `FIN`)
+closes the block. Blocks may nest. Expressions can use constants defined by an
+earlier `EQU`; an unresolved condition is an error.
+
+```asm
+DEBUG    EQU   1
+
+         IF    DEBUG & $01
+         LDA   #$E0
+         ELSE
+         LDA   #0
+         ENDIF
+```
+
+Use the assembler's bitwise `&` and `|` operators rather than C-style `&&` and
+`||`.
+
+## Compile-time repetition
+
+`REPEAT count;INDEX` (or `LUP count;INDEX`) expands its body `count` times and
+ends with `ENDREP` (or `--^`). `]INDEX` is the zero-based iteration number;
+`]#` is a short alias. Repeat blocks may nest, use different index names, and
+contain macros or conditionals. The count must be resolved when encountered and
+must be from 0 through 65,535.
+
+```asm
+         REPEAT 8;PAGE
+         STA   $A000+]PAGE*$100,X
+         ENDREP
+```
+
+## Procedure scopes
+
+`name PROC` defines the procedure's ordinary global entry label and opens a
+scope. Within it, labels beginning with `.` are qualified by the procedure name.
+`ENDPROC` closes the scope. Procedures cannot nest, and the directives emit no
+automatic prologue, epilogue, register saves, or `RTS`.
+
+```asm
+UPDATE   PROC
+.LOOP    DEX
+         BNE   .LOOP
+         RTS
+         ENDPROC
+```
+
+The example defines `UPDATE` and `UPDATE.LOOP`. A second procedure may use its
+own `.LOOP` without a collision.
+
+## Symbol-only data layouts
+
+`name DUM origin` opens a dummy layout that assigns addresses without emitting
+bytes. Each entry is a labeled `DS size`, `EQU`, or `EQ`. A named layout prefixes
+every field and defines `name.SIZE` at `DEND`; omit the name for traditional
+global dummy labels. Sizes and constants must resolve when encountered.
+
+```asm
+PLAYER   DUM   0
+X        DS    2
+Y        DS    1
+FLAGS    DS    1
+         DEND
+
+HERO     DS    PLAYER.SIZE
+         LDA   HERO+PLAYER.Y
+```
+
+This defines `PLAYER.X=0`, `PLAYER.Y=2`, `PLAYER.FLAGS=3`, and
+`PLAYER.SIZE=4`, then allocates one instance at `HERO`.
 
 ## Output and limits
 

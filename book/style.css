@@ -8,7 +8,7 @@
   margin-bottom: 1in;
   margin-left: 1.35in;
   margin-right: 0.85in;
-  background-color: #f3ead9;
+  background-color: #ffffff;
 
   @top-right {
     content: string(chapter);
@@ -63,7 +63,7 @@
   margin-bottom: 1in;
   margin-left: 1.35in;
   margin-right: 0.85in;
-  background-color: #f3ead9;
+  background-color: #ffffff;
   @top-right { content: none; }
   @top-left { content: "FANTICON DEVELOPER'S GUIDE"; font-family:"URW Gothic",sans-serif; font-size:8.5pt; letter-spacing:1.5px; color:#6a5a3a; vertical-align: bottom; padding-bottom:6px; }
   @bottom-center { content: counter(page); font-family:"Liberation Mono",monospace; font-size:9pt; color:#6a5a3a; }
@@ -74,7 +74,7 @@
 html, body {
   margin: 0;
   padding: 0;
-  background: #f3ead9;
+  background: #ffffff;
   color: #1c1730;
   font-family: "Lato", "DejaVu Sans", sans-serif;
   font-size: 10.6pt;
@@ -83,7 +83,7 @@ html, body {
 
 /* ---------- palette variables (kept as comments for reference) ----------
    ink       #1c1730
-   paper     #f3ead9
+   paper     #ffffff
    paper-alt #ece0c8
    cyan      #04b8c4
    cyan-bright #03d8e4

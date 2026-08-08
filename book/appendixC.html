@@ -17,7 +17,8 @@
   single-character literals. <code>*</code> is the address at the current source line. Unary
   operators: <code>+ - ~ &lt;</code>(low byte)<code> &gt;</code>(high byte). Binary operators,
   highest to lowest precedence: <code>* /</code>, then <code>+ -</code>, then <code>&lt;&lt; &gt;&gt;</code>,
-  then <code>&amp;</code>, then <code>^</code>, then <code>|</code>. Parentheses override
+  then <code>&amp;</code>, then <code>^</code>, then <code>|</code>, and finally comparisons
+  <code>&lt; &gt; &lt;= &gt;= == !=</code>. Comparisons produce 1 or 0. Parentheses override
   precedence. <code>EQU</code> and layout-determining directives must resolve when encountered
   &mdash; define those constants first; ordinary instruction/data operands may reference labels
   defined later.</p>
@@ -50,6 +51,10 @@
     <tr><td><code>HEX</code></td><td>Emit hexadecimal byte pairs, spaces or commas allowed</td></tr>
     <tr><td><code>DS expr</code></td><td>Reserve and zero-fill a number of bytes</td></tr>
     <tr><td><code>PUT, USE, INCLUDE</code></td><td>Assemble another file at this point (nested up to 16 levels)</td></tr>
+    <tr><td><code>IF/DO, ELSE, ENDIF/FIN</code></td><td>Select source at assembly time</td></tr>
+    <tr><td><code>REPEAT/LUP, ENDREP/--^</code></td><td>Repeat source at assembly time</td></tr>
+    <tr><td><code>name PROC, ENDPROC</code></td><td>Scope dot-prefixed labels to one procedure</td></tr>
+    <tr><td><code>name DUM origin, DEND</code></td><td>Define a symbol-only data layout</td></tr>
     <tr><td><code>END</code></td><td>Mark the logical end of source</td></tr>
   </table>
   <p>Multiple <code>ORG</code> regions are allowed only in increasing address order; gaps are
@@ -66,21 +71,82 @@
   I/O-shadowed page ($C000&ndash;$C0FF within FIXED), selecting an invalid bank, or omitting
   any CPU vector is a build error. Every unwritten ROM byte is <code>$FF</code>.</p>
 
-  <h2>Merlin-style macros</h2>
+  <h2>Modern macros</h2>
   <p>Define a macro with its name in the label field and <code>MAC</code> in the operation
-  field; end with <code>EOM</code> or <code>&lt;&lt;&lt;</code>. Parameters <code>]1</code>
-  through <code>]8</code> substitute on expansion:</p>
-  <pre class="code"><span class="lbl">LOADIMM</span>  <span class="dir">MAC</span>
-         <span class="op">LDA</span>   <span class="dir">#</span>]1
-         <span class="op">STA</span>   ]2
+  field; end with <code>EOM</code> or <code>&lt;&lt;&lt;</code>. A semicolon- or comma-separated
+  parameter list follows <code>MAC</code>. Named parameters use <code>]NAME</code>; a trailing
+  parameter may provide a default with <code>NAME=value</code>. Positional aliases
+  <code>]1</code>, <code>]2</code>, and so on remain available, and old definitions with no
+  declared list retain the original <code>]1</code> through <code>]8</code> behavior:</p>
+  <pre class="code"><span class="lbl">STORE</span>    <span class="dir">MAC</span>   VALUE;DEST=$20
+         <span class="op">LDA</span>   <span class="dir">#</span>]VALUE
+         <span class="op">STA</span>   ]DEST
          <span class="dir">EOM</span>
 
          <span class="dir">ORG</span>   <span class="num">$8000</span>
-         <span class="dir">PMC</span>   LOADIMM;$42;$20</pre>
+         <span class="dir">PMC</span>   STORE;$42
+         <span class="dir">PMC</span>   STORE;$18;$30</pre>
   <p><code>PMC name;arg1;arg2</code> and <code>&gt;&gt;&gt; name;arg1;arg2</code> both invoke a
-  macro; a macro name may also appear directly in the operation field. Expansion nests up to 32
-  levels. Duplicate names, unterminated definitions, invalid expanded source, and unknown macro
-  calls are all reported with their exact source location.</p>
+  macro; a macro name may also appear directly in the operation field. <code>PMC</code> is the
+  clearest form for semicolon-separated calls in the editor. Named definitions accept up to 32
+  parameters. Empty arguments use their defaults. Expansion nests up to 32 levels.</p>
+
+  <h3>Private labels inside a macro</h3>
+  <p>A label beginning with <code>@</code> inside a macro is hygienic: each invocation receives
+  a unique private symbol, and nested expansions remain independent. Reusable loops no longer
+  need caller-supplied label suffixes:</p>
+  <pre class="code"><span class="lbl">WAITX</span>    <span class="dir">MAC</span>   COUNT
+         <span class="op">LDX</span>   <span class="dir">#</span>]COUNT
+<span class="lbl">@LOOP</span>    <span class="op">DEX</span>
+         <span class="op">BNE</span>   @LOOP
+         <span class="dir">EOM</span>
+
+         <span class="dir">PMC</span>   WAITX;8
+         <span class="dir">PMC</span>   WAITX;16</pre>
+  <p>Substitution leaves strings and comments unchanged. Missing or extra arguments, invalid
+  parameter declarations, duplicate macro names, unterminated definitions, and unknown calls
+  are reported at their source locations.</p>
+
+  <h2>Compile-time source control</h2>
+  <p><code>IF expression</code> and Merlin-compatible <code>DO expression</code> include a block
+  when the expression is nonzero. <code>ELSE</code> selects the other branch;
+  <code>ENDIF</code> and <code>FIN</code> close it. Conditions may use constants defined by an
+  earlier <code>EQU</code>, including comparison expressions:</p>
+  <pre class="code"><span class="lbl">DEBUG</span>    <span class="dir">EQU</span>   <span class="num">1</span>
+         <span class="dir">IF</span>    DEBUG != 0
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">$E0</span>
+         <span class="dir">ELSE</span>
+         <span class="op">LDA</span>   <span class="dir">#</span><span class="num">0</span>
+         <span class="dir">ENDIF</span></pre>
+  <p><code>REPEAT count;INDEX</code> and Merlin-compatible <code>LUP count;INDEX</code> repeat a
+  block until <code>ENDREP</code> or <code>--^</code>. <code>]INDEX</code> is the zero-based
+  iteration number; <code>]#</code> is its short alias. Blocks may nest:</p>
+  <pre class="code">         <span class="dir">REPEAT</span> 8;PAGE
+         <span class="op">STA</span>   $A000+]PAGE*$100,X
+         <span class="dir">ENDREP</span></pre>
+
+  <h2>Procedure scopes and data layouts</h2>
+  <p><code>name PROC</code> defines a normal entry label and qualifies every dot-prefixed
+  local label until <code>ENDPROC</code>. It adds no hidden register saves, stack frame, return,
+  or cycle cost:</p>
+  <pre class="code"><span class="lbl">UPDATE</span>   <span class="dir">PROC</span>
+<span class="lbl">.LOOP</span>    <span class="op">DEX</span>
+         <span class="op">BNE</span>   .LOOP
+         <span class="op">RTS</span>
+         <span class="dir">ENDPROC</span></pre>
+  <p>The symbols are <code>UPDATE</code> and <code>UPDATE.LOOP</code>. Another procedure can
+  define its own <code>.LOOP</code> without a collision.</p>
+  <p><code>name DUM origin</code> opens a symbol-only layout. Labeled <code>DS</code> fields
+  advance its offset without emitting bytes; <code>DEND</code> defines <code>name.SIZE</code>.
+  Allocate instances with an ordinary <code>DS name.SIZE</code>:</p>
+  <pre class="code"><span class="lbl">PLAYER</span>   <span class="dir">DUM</span>   <span class="num">0</span>
+<span class="lbl">X</span>        <span class="dir">DS</span>    <span class="num">2</span>
+<span class="lbl">Y</span>        <span class="dir">DS</span>    <span class="num">1</span>
+<span class="lbl">FLAGS</span>    <span class="dir">DS</span>    <span class="num">1</span>
+         <span class="dir">DEND</span>
+
+<span class="lbl">HERO</span>     <span class="dir">DS</span>    PLAYER.SIZE
+         <span class="op">LDA</span>   HERO+PLAYER.Y</pre>
 
   <h2>Output and limits</h2>
   <p>Output may span at most the 6502's full 64 KiB address space. Byte and immediate values

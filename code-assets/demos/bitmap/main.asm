@@ -21,6 +21,33 @@ BMPPAL   EQU   $C01D
 PTR      EQU   $20
 PTRHI    EQU   $21
 
+; FILLVRAM demonstrates named/defaulted parameters,
+; compile-time IF, and hygienic @LOCAL labels. Each
+; call receives its own private loop label.
+FILLVRAM MAC   BANK;STOP;RESETPTR=0;INVERT=0
+         LDA   #]BANK
+         STA   BANKNUM
+         IF    ]RESETPTR
+         LDA   #0
+         STA   PTR
+         ENDIF
+         LDA   #$80
+         STA   PTRHI
+         LDY   #0
+@LOOP    TYA
+         EOR   PTRHI
+         IF    ]INVERT
+         EOR   #$FF
+         ENDIF
+         STA   (PTR),Y
+         INY
+         BNE   @LOOP
+         INC   PTRHI
+         LDA   PTRHI
+         CMP   #]STOP
+         BNE   @LOOP
+         EOM
+
 ; ---------------------------------------------------
 ; RESET AND VRAM BANK 1
 ; ---------------------------------------------------
@@ -32,22 +59,7 @@ RESET    SEI
 ; offsets $4000-$7FFF.
          LDA   #2
          STA   BANKKIND
-         LDA   #1
-         STA   BANKNUM
-         LDA   #0
-         STA   PTR
-         LDA   #$80
-         STA   PTRHI
-         LDY   #0
-FILL1    TYA
-         EOR   PTRHI
-         STA   (PTR),Y
-         INY
-         BNE   FILL1
-         INC   PTRHI
-         LDA   PTRHI
-         CMP   #$C0
-         BNE   FILL1
+         PMC   FILLVRAM;1;$C0;1
 
 ; ---------------------------------------------------
 ; VRAM BANK 2
@@ -55,21 +67,7 @@ FILL1    TYA
 ;
 ; Stop at pointer high byte $BD after writing pages
 ; $80-$BC: 61 pages, or the remaining 15,616 bytes.
-         LDA   #2
-         STA   BANKNUM
-         LDA   #$80
-         STA   PTRHI
-         LDY   #0
-FILL2    TYA
-         EOR   PTRHI
-         EOR   #$FF
-         STA   (PTR),Y
-         INY
-         BNE   FILL2
-         INC   PTRHI
-         LDA   PTRHI
-         CMP   #$BD
-         BNE   FILL2
+         PMC   FILLVRAM;2;$BD;0;1
 
 ; ---------------------------------------------------
 ; ENABLE BITMAP DISPLAY

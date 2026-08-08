@@ -253,8 +253,17 @@
   <p><code>$</code> or <code>0x</code> prefixes hexadecimal, <code>%</code> prefixes binary,
   and bare digits are decimal. <code>&lt;</code> and <code>&gt;</code> extract the low and high
   byte of an expression &mdash; you will use those constantly once you start loading 16-bit
-  pointers. The full directive, expression, and Merlin-style macro reference is in
+  pointers. The full directive, expression, and modern macro reference is in
   Appendix&nbsp;C.</p>
+
+  <div class="box tip">
+    <div class="box-title">Macros Scale Past Copy and Paste</div>
+    Fanticon macros can declare named parameters with defaults, use private <code>@LOCAL</code>
+    labels that are unique for every invocation, select source with <code>IF</code>, and generate
+    repeated source with <code>REPEAT</code>. The bitmap, tile, wave, and audio demos use these
+    features where register setup or table-shaped code would otherwise be duplicated. Start
+    with <code>PMC NAME;arg1;arg2</code>; Appendix&nbsp;C gives the complete syntax.
+  </div>
 
   <p>You now have a working assemble loop. Chapter&nbsp;5 wraps a program like this one in a
   cartridge project, points the CPU at it on reset, and puts a color on screen for the

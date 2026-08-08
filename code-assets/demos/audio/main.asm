@@ -33,6 +33,18 @@ MASTER   EQU   $C040
 NOTE     EQU   $20
 COUNT    EQU   $21
 
+; Configure one tonal channel. Named parameters keep
+; each channel's consecutive register block readable.
+SETTONE  MAC   CONTROL;TIMER;BASE
+         LDA   #]CONTROL
+         STA   ]BASE
+         LDA   #<]TIMER
+         STA   ]BASE+1
+         LDA   #>]TIMER
+         STA   ]BASE+2
+         STA   ]BASE+3
+         EOM
+
 ; ---------------------------------------------------
 ; RESET AND CHANNEL SETUP
 ; ---------------------------------------------------
@@ -42,31 +54,13 @@ COUNT    EQU   $21
 RESET    SEI
 
 ; Pulse 1: enable, 50% duty, volume 12, timer $1BD.
-         LDA   #$CC
-         STA   P1CTL
-         LDA   #$BD
-         STA   P1LO
-         LDA   #1
-         STA   P1HI
-         STA   P1RST
+         PMC   SETTONE;$CC;$1BD;P1CTL
 
 ; Pulse 2: enable, 25% duty, volume 8, timer $27A.
-         LDA   #$A8
-         STA   P2CTL
-         LDA   #$7A
-         STA   P2LO
-         LDA   #2
-         STA   P2HI
-         STA   P2RST
+         PMC   SETTONE;$A8;$27A;P2CTL
 
 ; Triangle: fixed amplitude, enabled with timer $0DE.
-         LDA   #$80
-         STA   TRICTL
-         LDA   #$DE
-         STA   TRILO
-         LDA   #0
-         STA   TRIHI
-         STA   TRIRST
+         PMC   SETTONE;$80;$0DE;TRICTL
 
 ; Noise: volume 8, long LFSR mode, period entry 13.
          LDA   #$88

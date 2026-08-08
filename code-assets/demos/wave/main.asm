@@ -61,23 +61,13 @@ COPYTILE LDA   PATTERN,X
 ; and 3 select the RGB entries configured below.
          LDX   #0
 FILLMAP  LDA   #1
-         STA   $A000,X
-         STA   $A100,X
-         STA   $A200,X
-         STA   $A300,X
-         STA   $A400,X
-         STA   $A500,X
-         STA   $A600,X
-         STA   $A700,X
+         REPEAT 8;PAGE
+         STA   $A000+]PAGE*$100,X
+         ENDREP
          LDA   #0
-         STA   $A800,X
-         STA   $A900,X
-         STA   $AA00,X
-         STA   $AB00,X
-         STA   $AC00,X
-         STA   $AD00,X
-         STA   $AE00,X
-         STA   $AF00,X
+         REPEAT 8;PAGE
+         STA   $A800+]PAGE*$100,X
+         ENDREP
          INX
          BNE   FILLMAP
 

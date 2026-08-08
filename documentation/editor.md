@@ -213,14 +213,18 @@ total, the same width as the hand-written dividers throughout Fanticon's own
 source), a blank `;` line, and a matching closing bar, leaving the cursor on
 the blank line ready to type the heading text.
 
-Macro invocations (`PMC name;arg1;arg2`, `>>> name;arg1;arg2`, or a macro name
-used directly in the operation field) are recognized by the same live
-formatter and never reflowed the way an ordinary instruction's operand is:
+Macro definitions with named parameters, repeat headers, and explicit
+invocations (`PMC name;arg1;arg2` or `>>> name;arg1;arg2`) are recognized by the
+same live formatter and never reflowed the way an ordinary instruction's operand is:
 the keyword normalizes to column 9 and the argument list to column 15, exactly
 like an opcode and its operand, but nothing after that point is re-tokenized,
-since a macro's arguments are semicolon-separated rather than whitespace- or
-comment-delimited. See [Fanticon 6502 Macro Assembler](assembler.md) for the
-complete macro syntax.
+since their arguments are semicolon-separated rather than whitespace- or
+comment-delimited. A macro name may still be invoked directly in assembler
+source, but `PMC` is recommended for semicolon-separated calls so the editor can
+distinguish the argument separators from a comment. Named parameters, default
+arguments, hygienic `@LOCAL` labels, `IF`/`DO` conditionals, and
+`REPEAT`/`LUP` blocks are highlighted as part of assembly mode. See
+[Fanticon 6502 Macro Assembler](assembler.md) for the complete syntax.
 
 Assembly produces a raw `.BIN` beside the source by default. The editor shows an
 assembling dialog followed by a success dialog with the output, origin, and size,

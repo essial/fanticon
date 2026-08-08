@@ -6037,14 +6037,12 @@ fn pad_to_column(output: &mut String, column: usize) {
     output.extend(core::iter::repeat_n(' ', spaces));
 }
 
-/// Mirrors the assembler's own macro-invocation detection (`PMC`/`>>>` as
-/// either of the first two whitespace-separated fields) so the editor's live
-/// formatting and syntax coloring never treat a macro's semicolon-separated
-/// argument list as a trailing comment.
+/// Mirrors the assembler's semicolon-argument directives so the editor does
+/// not mistake named macro parameters or repeat indexes for comments.
 fn is_macro_invocation(line: &str) -> bool {
-    line.split_whitespace()
-        .take(2)
-        .any(|field| matches!(field.to_ascii_uppercase().as_str(), "PMC" | ">>>"))
+    line.split_whitespace().take(2).any(|field| {
+        matches!(field.to_ascii_uppercase().as_str(), "MAC" | "PMC" | ">>>" | "LUP" | "REPEAT")
+    })
 }
 
 fn split_assembly_comment(line: &str) -> (&str, Option<&str>) {
@@ -6282,11 +6280,18 @@ fn is_directive(token: &str) -> bool {
             | "ENT"
             | "EXT"
             | "DO"
+            | "IF"
             | "ELSE"
             | "FIN"
+            | "ENDIF"
             | "LUP"
+            | "REPEAT"
+            | "--^"
+            | "ENDREP"
             | "DUM"
             | "DEND"
+            | "PROC"
+            | "ENDPROC"
             | "XC"
             | "MX"
             | "INCLUDE"
@@ -8140,6 +8145,22 @@ mod tests {
             format_assembly_line("PMC PRINTAT;message;2;5"),
             "         PMC   PRINTAT;message;2;5"
         );
+        assert_eq!(
+            format_assembly_line("STORE MAC VALUE;DEST=$20"),
+            "STORE    MAC   VALUE;DEST=$20"
+        );
+        assert_eq!(format_assembly_line("REPEAT 8;INDEX"), "         REPEAT 8;INDEX");
+    }
+
+    #[test]
+    fn modern_macro_directives_are_highlighted_as_directives() {
+        for directive in ["IF", "ELSE", "ENDIF", "REPEAT", "ENDREP", "--^"] {
+            let line = format!("         {directive}   1");
+            let colors = assembly_syntax_colors(&line, ASM_TEXT_COLOR);
+            assert!(
+                colors[9..9 + directive.len()].iter().all(|color| *color == ASM_DIRECTIVE_COLOR)
+            );
+        }
     }
 
     #[test]

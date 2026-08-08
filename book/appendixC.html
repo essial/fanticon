@@ -50,15 +50,68 @@
     <tr><td><code>ASC, TEXT</code></td><td>Emit quoted ASCII strings or byte expressions</td></tr>
     <tr><td><code>HEX</code></td><td>Emit hexadecimal byte pairs, spaces or commas allowed</td></tr>
     <tr><td><code>DS expr</code></td><td>Reserve and zero-fill a number of bytes</td></tr>
-    <tr><td><code>PUT, USE, INCLUDE</code></td><td>Assemble another file at this point (nested up to 16 levels)</td></tr>
+    <tr><td><code>INCLUDE, PUT, USE</code></td><td>Assemble another file at this point (nested up to 16 levels)</td></tr>
     <tr><td><code>IF/DO, ELSE, ENDIF/FIN</code></td><td>Select source at assembly time</td></tr>
     <tr><td><code>REPEAT/LUP, ENDREP/--^</code></td><td>Repeat source at assembly time</td></tr>
     <tr><td><code>name PROC, ENDPROC</code></td><td>Scope dot-prefixed labels to one procedure</td></tr>
     <tr><td><code>name DUM origin, DEND</code></td><td>Define a symbol-only data layout</td></tr>
+    <tr><td><code>REQUIRE_FIXED</code></td><td>Fail unless the current cartridge section is fixed</td></tr>
     <tr><td><code>END</code></td><td>Mark the logical end of source</td></tr>
   </table>
   <p>Multiple <code>ORG</code> regions are allowed only in increasing address order; gaps are
   zero-filled. Moving backward over already-written output is an error.</p>
+
+  <h2>The global hardware include</h2>
+  <p>Every project can load Fanticon's complete v1.0 hardware names and standard helper
+  macros with one line:</p>
+  <pre class="code">         <span class="dir">INCLUDE</span> FANTICON.INC</pre>
+  <p><code>FANTICON.INC</code> is built into the assembler, so it works from every project
+  directory. The name is case-insensitive and reserved. Repeated includes expand only once,
+  which lets a main source and a child include both request it safely. A browsable copy is
+  installed at <code>/FANTICON.INC</code>.</p>
+  <p>The editor opens that path from the embedded system source as a read-only document, so
+  typing and save operations cannot alter it.</p>
+  <p>The constants cover memory regions, registers, bank and IRQ values, video and VRAM
+  layouts, tile and sprite fields, audio controls, controller buttons, timers, vectors,
+  dimensions, and timing. Names match this guide: <code>BANK_KIND</code>,
+  <code>VIDEO_CONTROL</code>, <code>PULSE1_CONTROL</code>, <code>PAD0_STATE</code>, and
+  <code>TIMER0_RELOADL</code> are representative examples.</p>
+  <table>
+    <tr><th>Helper macro</th><th>Purpose</th><th>Clobbers</th></tr>
+    <tr><td><code>SET_BANK kind;number</code></td><td>Select the bank window</td><td>A</td></tr>
+    <tr><td><code>ACK_IRQ mask</code>, <code>SET_IRQS mask</code></td><td>Acknowledge or enable IRQs</td><td>A</td></tr>
+    <tr><td><code>SET_VIDEO</code>, <code>SET_BITMAP</code>, <code>SET_BACKDROP</code></td><td>Configure the display</td><td>A</td></tr>
+    <tr><td><code>SET_SCROLL x;y</code>, <code>SET_RASTER x;y</code></td><td>Write 16-bit coordinates</td><td>A</td></tr>
+    <tr><td><code>SET_COLOR index;color</code></td><td>Write one RGB332 color</td><td>A</td></tr>
+    <tr><td><code>UPLOAD_TILE</code>, <code>FILL_TILEMAP</code>, <code>SET_SPRITE</code></td><td>Prepare mapped VRAM</td><td>A or A, X</td></tr>
+    <tr><td><code>SET_TONE base;control;timer</code></td><td>Configure and reset a tone</td><td>A</td></tr>
+    <tr><td><code>SET_NOISE</code>, <code>SET_AUDIO_MASTER</code>, <code>SILENCE_AUDIO</code></td><td>Configure noise or the final mix</td><td>A</td></tr>
+    <tr><td><code>START_TIMER</code>, <code>STOP_TIMER</code></td><td>Control an interval timer</td><td>A</td></tr>
+    <tr><td><code>READ_FRAME16</code>, <code>READ_TIMER16</code></td><td>Read a latched hardware word</td><td>A</td></tr>
+    <tr><td><code>WAIT_VBLANK</code>, <code>WAIT_NEXT_VBLANK</code></td><td>Wait for VBlank or its next edge</td><td>A</td></tr>
+    <tr><td><code>PUSH_BANK</code>, <code>POP_BANK</code></td><td>Save or restore banking and A</td><td>A / restored</td></tr>
+    <tr><td><code>PUSH_AXY</code>, <code>POP_YXA</code></td><td>Save or restore IRQ registers</td><td>A / A, X, Y</td></tr>
+    <tr><td><code>STORE16</code>, <code>COPY16</code>, <code>ADD16</code>, <code>SUB16</code>, <code>INC16</code>, <code>DEC16</code></td><td>Work with little-endian words</td><td>See source</td></tr>
+  </table>
+  <p>Every helper's source comment states its register effects. Arguments are ordinary
+  assembly-time expressions, and optional arguments use the modern macro default syntax.</p>
+
+  <h3>Procedure emitters</h3>
+  <p>Most helpers expand inline. The opt-in <code>EMIT_VRAM_COPY</code> and
+  <code>EMIT_PAD_SCROLL</code> macros instead generate one named <code>PROC</code> with private
+  dot-local labels. The first copies ROM bank 0 to mapped VRAM bank 0 through a page buffer;
+  the second updates signed scroll words from a controller state byte. Both contain
+  <code>REQUIRE_FIXED</code>, so invoking one in a switchable bank is a build error. Invoke an
+  emitter once while <code>FIXED</code> is selected, then call the generated name:</p>
+  <pre class="code"><span class="lbl">SRC</span>      <span class="dir">EQU</span>   <span class="num">$20</span>
+<span class="lbl">DST</span>      <span class="dir">EQU</span>   <span class="num">$22</span>
+<span class="lbl">LEN</span>      <span class="dir">EQU</span>   <span class="num">$24</span>
+<span class="lbl">BUFFER</span>   <span class="dir">EQU</span>   <span class="num">$0200</span>
+
+         <span class="dir">PMC</span>   EMIT_VRAM_COPY;COPYVRAM;SRC;DST;LEN;BUFFER
+         <span class="op">JSR</span>   COPYVRAM</pre>
+  <p>The caller supplies storage addresses, so including the file alone never reserves RAM or
+  adds runtime code. The Graphics demo shows the complete transfer setup.</p>
 
   <h2>Cartridge-project extensions</h2>
   <table>

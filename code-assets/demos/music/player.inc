@@ -6,6 +6,8 @@
 ; MUSIC_TICK must be called once per video frame.
 ; The player reserves zero-page bytes $30-$41.
 
+         INCLUDE FANTICON.INC
+
 MPPTR    EQU   $30
 MPBASE   EQU   $32
 MPROW    EQU   $34
@@ -18,23 +20,6 @@ MPFRAME  EQU   $3A
 MPFLEN   EQU   $3C
 MPLOOP   EQU   $3E
 MPLOOPF  EQU   $40
-P1CTL    EQU   $C030
-P1LO     EQU   $C031
-P1HI     EQU   $C032
-P1RST    EQU   $C033
-P2CTL    EQU   $C034
-P2LO     EQU   $C035
-P2HI     EQU   $C036
-P2RST    EQU   $C037
-TRICTL   EQU   $C038
-TRILO    EQU   $C039
-TRIHI    EQU   $C03A
-TRIRST   EQU   $C03B
-NOISECTL EQU   $C03C
-NOISEPER EQU   $C03D
-NOISERST EQU   $C03E
-MASTER   EQU   $C040
-
 MUSIC_START
          STX   MPPTR
          STY   MPPTR+1
@@ -62,8 +47,7 @@ MUSIC_START
          STA   MPROW
          LDA   #1
          STA   MPWAIT
-         LDA   #$8F
-         STA   MASTER
+         PMC   SET_AUDIO_MASTER;15
          RTS
 
 ; Version 2 points at one compiled register frame for
@@ -102,16 +86,15 @@ MPSTART2 LDA   #2
          LDA   #0
          STA   MPFRAME
          STA   MPFRAME+1
-         LDA   #$8F
-         STA   MASTER
+         PMC   SET_AUDIO_MASTER;15
          RTS
 
 MUSIC_STOP
          LDA   #0
-         STA   P1CTL
-         STA   P2CTL
-         STA   TRICTL
-         STA   NOISECTL
+         STA   PULSE1_CONTROL
+         STA   PULSE2_CONTROL
+         STA   TRI_CONTROL
+         STA   NOISE_CONTROL
          RTS
 
 MUSIC_TICK
@@ -139,15 +122,15 @@ MPPLAY   LDA   MPTEMPO
          TAX
          LDA   MPTEMP
          ORA   #$C0
-         STA   P1CTL
+         STA   PULSE1_CONTROL
          LDA   MP_PLO,X
-         STA   P1LO
+         STA   PULSE1_LOW
          LDA   MP_PHI,X
-         STA   P1HI
-         STA   P1RST
+         STA   PULSE1_HIGH
+         STA   PULSE1_RESET
          JMP   MPP2
 MPP1OFF  LDA   #0
-         STA   P1CTL
+         STA   PULSE1_CONTROL
 
 ; Pulse 2 uses 25-percent duty.
 MPP2     INY
@@ -163,15 +146,15 @@ MPP2     INY
          TAX
          LDA   MPTEMP
          ORA   #$A0
-         STA   P2CTL
+         STA   PULSE2_CONTROL
          LDA   MP_PLO,X
-         STA   P2LO
+         STA   PULSE2_LOW
          LDA   MP_PHI,X
-         STA   P2HI
-         STA   P2RST
+         STA   PULSE2_HIGH
+         STA   PULSE2_RESET
          JMP   MPTRI
 MPP2OFF  LDA   #0
-         STA   P2CTL
+         STA   PULSE2_CONTROL
 
 ; Triangle treats volume zero as disabled.
 MPTRI    INY
@@ -186,15 +169,15 @@ MPTRI    INY
          BEQ   MPTRIOFF
          TAX
          LDA   #$80
-         STA   TRICTL
+         STA   TRI_CONTROL
          LDA   MP_TLO,X
-         STA   TRILO
+         STA   TRI_LOW
          LDA   MP_THI,X
-         STA   TRIHI
-         STA   TRIRST
+         STA   TRI_HIGH
+         STA   TRI_RESET
          JMP   MPNOISE
 MPTRIOFF LDA   #0
-         STA   TRICTL
+         STA   TRI_CONTROL
 
 ; Noise notes N00-N0F select period entries.
 MPNOISE  INY
@@ -209,14 +192,14 @@ MPNOISE  INY
          BEQ   MPNOFF
          SEC
          SBC   #1
-         STA   NOISEPER
+         STA   NOISE_PERIOD
          LDA   MPTEMP
          ORA   #$80
-         STA   NOISECTL
-         STA   NOISERST
+         STA   NOISE_CONTROL
+         STA   NOISE_RESET
          JMP   MPADV
 MPNOFF   LDA   #0
-         STA   NOISECTL
+         STA   NOISE_CONTROL
 
 ; Move to the next eight-byte tracker row.
 MPADV    CLC
@@ -247,63 +230,63 @@ MPPLAY2  LDY   #0
          BCC   MPV2P2
          LDY   #0
          LDA   (MPPTR),Y
-         STA   P1CTL
+         STA   PULSE1_CONTROL
          INY
          LDA   (MPPTR),Y
-         STA   P1LO
+         STA   PULSE1_LOW
          INY
          LDA   (MPPTR),Y
-         STA   P1HI
+         STA   PULSE1_HIGH
          INY
          LDA   (MPPTR),Y
          BEQ   MPNR1
-         STA   P1RST
+         STA   PULSE1_RESET
 MPNR1    JSR   MPADD4
 MPV2P2   LSR   MPTEMP
          BCC   MPV2TRI
          LDY   #0
          LDA   (MPPTR),Y
-         STA   P2CTL
+         STA   PULSE2_CONTROL
          INY
          LDA   (MPPTR),Y
-         STA   P2LO
+         STA   PULSE2_LOW
          INY
          LDA   (MPPTR),Y
-         STA   P2HI
+         STA   PULSE2_HIGH
          INY
          LDA   (MPPTR),Y
          BEQ   MPNR2
-         STA   P2RST
+         STA   PULSE2_RESET
 MPNR2    JSR   MPADD4
 MPV2TRI  LSR   MPTEMP
          BCC   MPV2NOI
          LDY   #0
          LDA   (MPPTR),Y
-         STA   TRICTL
+         STA   TRI_CONTROL
          INY
          LDA   (MPPTR),Y
-         STA   TRILO
+         STA   TRI_LOW
          INY
          LDA   (MPPTR),Y
-         STA   TRIHI
+         STA   TRI_HIGH
          INY
          LDA   (MPPTR),Y
          BEQ   MPNRT
-         STA   TRIRST
+         STA   TRI_RESET
 MPNRT    JSR   MPADD4
 MPV2NOI  LSR   MPTEMP
          BCC   MPV2ADV
          LDY   #0
          LDA   (MPPTR),Y
-         STA   NOISECTL
+         STA   NOISE_CONTROL
          INY
          LDA   (MPPTR),Y
-         STA   NOISEPER
+         STA   NOISE_PERIOD
          INY
          INY
          LDA   (MPPTR),Y
          BEQ   MPNRN
-         STA   NOISERST
+         STA   NOISE_RESET
 MPNRN    JSR   MPADD4
 MPV2ADV  INC   MPFRAME
          BNE   MPCMP2

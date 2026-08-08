@@ -60,6 +60,13 @@ the hidden I/O page, selecting an invalid bank, or omitting any CPU vector is a
 build error. RESET must target fixed ROM or main RAM. Reset code cannot assume a
 switchable bank other than bank 0.
 
+`REQUIRE_FIXED` asserts that `FIXED` is the currently selected section. It emits
+no bytes. Under `BANK n`, or before any section has been selected, it produces a
+build error at its source line. The standard `EMIT_VRAM_COPY` and
+`EMIT_PAD_SCROLL` macros in `FANTICON.INC` contain this assertion, preventing a
+generated procedure from accidentally landing in switchable ROM. Raw `.BIN`
+assembly has no cartridge sections, so `REQUIRE_FIXED` is a no-op there.
+
 ## Bank-aware symbols
 
 Every label records its CPU address and section identity. Label names remain

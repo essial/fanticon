@@ -247,7 +247,7 @@
     <tr><td><code>ASC</code> / <code>TEXT</code></td><td>Emit a quoted ASCII string</td></tr>
     <tr><td><code>HEX</code></td><td>Emit hex byte pairs directly</td></tr>
     <tr><td><code>DS expr</code></td><td>Reserve and zero-fill a number of bytes</td></tr>
-    <tr><td><code>PUT</code> / <code>USE</code> / <code>INCLUDE</code></td><td>Assemble another file at this point</td></tr>
+    <tr><td><code>INCLUDE</code> / <code>PUT</code> / <code>USE</code></td><td>Assemble another file at this point</td></tr>
     <tr><td><code>END</code></td><td>Mark the logical end of source</td></tr>
   </table>
   <p><code>$</code> or <code>0x</code> prefixes hexadecimal, <code>%</code> prefixes binary,
@@ -258,9 +258,14 @@
 
   <div class="box tip">
     <div class="box-title">Macros Scale Past Copy and Paste</div>
+    Start a cartridge with <code>INCLUDE FANTICON.INC</code> to get the complete hardware
+    constants and standard helpers such as <code>SET_BANK</code>, <code>SET_SPRITE</code>, and
+    <code>SET_TONE</code> from every project directory. Its opt-in <code>EMIT_*</code> helpers
+    can also generate a named <code>PROC</code> for larger reusable routines. Then add
+    game-specific macros:
     Fanticon macros can declare named parameters with defaults, use private <code>@LOCAL</code>
     labels that are unique for every invocation, select source with <code>IF</code>, and generate
-    repeated source with <code>REPEAT</code>. The bitmap, tile, wave, and audio demos use these
+    repeated source with <code>REPEAT</code>. The graphics, bitmap, tile, wave, and audio demos use these
     features where register setup or table-shaped code would otherwise be duplicated. Start
     with <code>PMC NAME;arg1;arg2</code>; Appendix&nbsp;C gives the complete syntax.
   </div>

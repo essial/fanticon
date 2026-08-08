@@ -22,8 +22,16 @@ Every native app build mirrors each child of that directory directly into the
 console's root while preserving unrelated user content. A small hidden manifest
 allows deleted or renamed managed folders to be cleaned up without touching
 folders such as `/music` or `/test`. The included demo projects are therefore
-available under `/demos`, and all console-visible names retain the normal 8.3
-limit.
+available under `/demos`. The standard `/FANTICON.INC` hardware definitions are
+installed beside them and are also built into the assembler, so
+`INCLUDE FANTICON.INC` works from every directory even when no physical copy is
+present. Opening `/FANTICON.INC` always displays the embedded system source and
+marks the tab read-only; typing, replacement, paste, and save operations cannot
+alter it. A same-named file inside a project directory remains an ordinary
+editable document, although the reserved bare include name still resolves to
+the built-in definitions. All console-visible names retain the normal 8.3 limit.
+The integrated F1 Help Finder and console `HELP` command index the include's
+helper names, procedure emitters, signatures, and fixed-section protection.
 
 ## Launching
 
@@ -225,6 +233,8 @@ distinguish the argument separators from a comment. Named parameters, default
 arguments, hygienic `@LOCAL` labels, `IF`/`DO` conditionals, and
 `REPEAT`/`LUP` blocks are highlighted as part of assembly mode. See
 [Fanticon 6502 Macro Assembler](assembler.md) for the complete syntax.
+The standard `EMIT_*` procedure generators also enforce `FIXED` placement at
+build time through `REQUIRE_FIXED`.
 
 Assembly produces a raw `.BIN` beside the source by default. The editor shows an
 assembling dialog followed by a success dialog with the output, origin, and size,

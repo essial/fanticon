@@ -2,25 +2,19 @@
 ; RASTER IRQ COLOR-BAND DEMO
 ; ---------------------------------------------------
 ;
-; Blank-background mode fills every pixel from BGCOLOR.
+; Blank mode fills every pixel from BACKDROP_COLOR.
 ; Raster IRQs change that color at lines 50, 100, and
 ; 150. Line 200 runs in VBlank and prepares the next
 ; frame.
 ;
 ; IRQ bit 1 ($02) is the raster comparator. Writing it
-; to IRQPEND clears only that source.
+; to IRQ_PENDING clears only that source.
+
+         INCLUDE FANTICON.INC
 
 ; ---------------------------------------------------
 ; HARDWARE REGISTERS AND WORK RAM
 ; ---------------------------------------------------
-VMODE    EQU   $C010
-BGCOLOR  EQU   $C012
-RASTXLO  EQU   $C017
-RASTXHI  EQU   $C018
-RASTYLO  EQU   $C019
-RASTYHI  EQU   $C01A
-IRQPEND  EQU   $C002
-IRQEN    EQU   $C003
 STATE    EQU   $20
 
 ; ---------------------------------------------------
@@ -33,17 +27,16 @@ STATE    EQU   $20
 ; remain safe while other banks are selected.
 RESET    SEI
          LDA   #0
-         STA   VMODE
-         STA   RASTXLO
-         STA   RASTXHI
-         STA   RASTYHI
+         STA   VIDEO_MODE
+         STA   RASTER_X_LOW
+         STA   RASTER_X_HIGH
+         STA   RASTER_Y_HIGH
          STA   STATE
          LDA   #$03
-         STA   BGCOLOR
+         STA   BACKDROP_COLOR
          LDA   #50
-         STA   RASTYLO
-         LDA   #2
-         STA   IRQEN
+         STA   RASTER_Y_LOW
+         PMC   SET_IRQS;IRQ_RASTER
          CLI
 LOOP     JMP   LOOP
 
@@ -62,31 +55,31 @@ IRQ      PHA
          CMP   #2
          BEQ   BLUE
          LDA   #$03
-         STA   BGCOLOR
+         STA   BACKDROP_COLOR
          LDA   #50
-         STA   RASTYLO
+         STA   RASTER_Y_LOW
          LDA   #0
          STA   STATE
          BEQ   ACK
 RED      LDA   #$E0
-         STA   BGCOLOR
+         STA   BACKDROP_COLOR
          LDA   #100
-         STA   RASTYLO
+         STA   RASTER_Y_LOW
          INC   STATE
          BNE   ACK
 GREEN    LDA   #$1C
-         STA   BGCOLOR
+         STA   BACKDROP_COLOR
          LDA   #150
-         STA   RASTYLO
+         STA   RASTER_Y_LOW
          INC   STATE
          BNE   ACK
 BLUE     LDA   #$03
-         STA   BGCOLOR
+         STA   BACKDROP_COLOR
          LDA   #200
-         STA   RASTYLO
+         STA   RASTER_Y_LOW
          INC   STATE
-ACK      LDA   #2
-         STA   IRQPEND
+ACK
+         PMC   ACK_IRQ;IRQ_RASTER
          PLA
          RTI
 NMI      RTI

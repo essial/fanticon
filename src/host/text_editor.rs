@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fanticon::{
-    assembler::{BankUsage, CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic, SymbolSection},
+    assembler::{
+        BankUsage, CartridgeSourceMapEntry, CartridgeSymbol, Diagnostic, FANTICON_INCLUDE_NAME,
+        FANTICON_INCLUDE_SOURCE, SymbolSection,
+    },
     debugger::{DebugSnapshot, DebugStop},
     disassemble_instruction, instruction_length,
     machine::{VIDEO_DOTS_PER_CPU_CYCLE, bank_kind},
@@ -1218,7 +1221,7 @@ impl TextEditor {
     }
 
     fn replace_all(&mut self, query: &str, replacement: &str) -> usize {
-        if query.is_empty() || self.debug_read_only() {
+        if query.is_empty() || self.read_only() {
             return 0;
         }
         let matches = line_matches(&self.lines, query, false);
@@ -2687,7 +2690,7 @@ impl TextEditor {
                     if executing && breakpoint {
                         backgrounds[start] = UI_BREAKPOINT_BACKGROUND;
                     }
-                } else if line_index == self.cursor.line && !self.debug_read_only() {
+                } else if line_index == self.cursor.line && !self.read_only() {
                     // Editable buffers mark the caret's line; the debugger's own
                     // blue and red rows above always win when a session is live.
                     let start = row * COLUMNS + EDITOR_START;
@@ -2718,6 +2721,15 @@ impl TextEditor {
                 })
             })
             .or_else(|| self.build_message.as_ref().map(|message| format!(" {message}")))
+            .or_else(|| {
+                self.system_read_only().then(|| {
+                    format!(
+                        " {name}  SYSTEM - READ ONLY  LN {} COL {}",
+                        self.cursor.line + 1,
+                        self.cursor.column + 1
+                    )
+                })
+            })
             .or_else(|| self.ambient_help_status())
             .unwrap_or_else(|| {
                 if self.graphics_active() && !self.graphics_source_active() {
@@ -3852,6 +3864,10 @@ impl TextEditor {
             else {
                 continue;
             };
+            if system_document_filename(&filename) {
+                failure = Some("FANTICON.INC is a read-only system file".to_owned());
+                break;
+            }
             let mut lines = self.tabs[index].lines.clone();
             if self.graphics_tabs.contains_key(&document_id) {
                 if self.graphics_source_views.contains(&document_id) {
@@ -3910,6 +3926,9 @@ impl TextEditor {
         }
         self.sync_active_document();
         let Some(filename) = self.tabs[tab].filename.clone() else { return Ok(false) };
+        if system_document_filename(&filename) {
+            return Err("FANTICON.INC is a read-only system file".to_owned());
+        }
         let document_id = self.tabs[tab].id;
         let mut lines = self.tabs[tab].lines.clone();
         if self.graphics_tabs.contains_key(&document_id) {
@@ -4159,6 +4178,11 @@ impl TextEditor {
     }
 
     fn save_as(&mut self, filename: &str) -> Result<(), String> {
+        if self.system_read_only()
+            || self.filesystem.borrow().is_root_file(filename, FANTICON_INCLUDE_NAME)
+        {
+            return Err("FANTICON.INC is a read-only system file".to_owned());
+        }
         if self.tabs.iter().enumerate().any(|(tab, document)| {
             tab != self.active_tab
                 && document
@@ -4234,8 +4258,14 @@ impl TextEditor {
     }
 
     fn load(&mut self, filename: &str) -> Result<(), String> {
+        let system_file = self.filesystem.borrow().is_root_file(filename, FANTICON_INCLUDE_NAME);
+        let filename = if system_file {
+            format!("/{}", FANTICON_INCLUDE_NAME.to_ascii_lowercase())
+        } else {
+            filename.to_owned()
+        };
         if let Some(tab) = self.tabs.iter().position(|document| {
-            document.filename.as_deref().is_some_and(|open| open.eq_ignore_ascii_case(filename))
+            document.filename.as_deref().is_some_and(|open| open.eq_ignore_ascii_case(&filename))
         }) {
             let disposable_tab = self.active_tab_is_disposable().then_some(self.active_tab);
             self.switch_tab(tab);
@@ -4244,18 +4274,22 @@ impl TextEditor {
             }
             return Ok(());
         }
-        let text = self.filesystem.borrow().read_text(filename)?;
-        let graphics = graphics_asset_filename(filename)
-            .then(|| self.parse_graphics_asset(filename, &text))
+        let text = if system_file {
+            FANTICON_INCLUDE_SOURCE.to_owned()
+        } else {
+            self.filesystem.borrow().read_text(&filename)?
+        };
+        let graphics = graphics_asset_filename(&filename)
+            .then(|| self.parse_graphics_asset(&filename, &text))
             .transpose()?;
-        let music = music_filename(filename).then(|| MusicEditor::parse(&text)).transpose()?;
+        let music = music_filename(&filename).then(|| MusicEditor::parse(&text)).transpose()?;
         let mut lines = text
             .replace("\r\n", "\n")
             .replace('\r', "\n")
             .split('\n')
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        if assembly_filename(filename) {
+        if assembly_filename(&filename) {
             format_assembly_lines(&mut lines);
         }
         if lines.is_empty() {
@@ -4425,11 +4459,17 @@ impl TextEditor {
         }
     }
 
-    /// A debug session owns the source that produced the running cartridge: its
-    /// line numbers back the source map and every resolved breakpoint, so the
-    /// buffer stays read-only until the session stops.
-    fn debug_read_only(&self) -> bool {
-        self.debug_active
+    /// The built-in include is a virtual system document. The managed disk
+    /// copy only makes it discoverable in the project browser; assembly always
+    /// uses the embedded source, so editing that copy would be misleading.
+    fn system_read_only(&self) -> bool {
+        self.filename.as_deref().is_some_and(system_document_filename)
+    }
+
+    /// A debug session also owns the source that produced the running
+    /// cartridge because its line numbers back the source map and breakpoints.
+    fn read_only(&self) -> bool {
+        self.debug_active || self.system_read_only()
     }
 
     /// True only while the machine is stopped, with a snapshot to inspect.
@@ -4438,7 +4478,7 @@ impl TextEditor {
     }
 
     fn undo(&mut self) {
-        if self.debug_read_only() {
+        if self.read_only() {
             return;
         }
         if let Some(snapshot) = self.undo.pop() {
@@ -4453,7 +4493,7 @@ impl TextEditor {
     }
 
     fn insert_text(&mut self, text: &str) {
-        if text.is_empty() || self.debug_read_only() {
+        if text.is_empty() || self.read_only() {
             return;
         }
         // A `;` typed as the only content on a line - typically one that
@@ -4483,7 +4523,7 @@ impl TextEditor {
     }
 
     fn insert_newline(&mut self) {
-        if self.debug_read_only() {
+        if self.read_only() {
             return;
         }
         self.record_undo();
@@ -4515,7 +4555,7 @@ impl TextEditor {
     /// text, then a matching closing bar - mirroring the hand-written
     /// dividers already used throughout the codebase (e.g. `funcs.inc`).
     fn insert_banner_comment(&mut self, fill: char) {
-        if self.debug_read_only() {
+        if self.read_only() {
             return;
         }
         self.record_undo();
@@ -4542,7 +4582,7 @@ impl TextEditor {
     }
 
     fn backspace(&mut self) {
-        if self.debug_read_only() {
+        if self.read_only() {
             return;
         }
         if self.has_selection() {
@@ -4566,7 +4606,7 @@ impl TextEditor {
     }
 
     fn delete_forward(&mut self) {
-        if self.debug_read_only() {
+        if self.read_only() {
             return;
         }
         if self.has_selection() {
@@ -4623,7 +4663,7 @@ impl TextEditor {
     }
 
     fn cut_selection(&mut self) {
-        if self.debug_read_only() {
+        if self.read_only() {
             // Still copy: reading the selection is harmless while paused.
             self.copy_selection();
             return;
@@ -4637,7 +4677,7 @@ impl TextEditor {
     }
 
     fn paste(&mut self) {
-        if self.clipboard.is_empty() || self.debug_read_only() {
+        if self.clipboard.is_empty() || self.read_only() {
             return;
         }
         let clipboard = self.clipboard.clone();
@@ -4695,7 +4735,7 @@ impl TextEditor {
     }
 
     fn format_departed_line(&mut self, line: usize) {
-        if !self.assembly_mode() || self.debug_read_only() {
+        if !self.assembly_mode() || self.read_only() {
             return;
         }
         let formatted = format_assembly_line(&self.lines[line]);
@@ -5749,6 +5789,10 @@ fn assembly_filename(filename: &str) -> bool {
             matches!(extension.to_ascii_lowercase().as_str(), "asm" | "inc")
         })
     })
+}
+
+fn system_document_filename(filename: &str) -> bool {
+    filename.eq_ignore_ascii_case("/fanticon.inc")
 }
 
 fn execution_section(snapshot: &DebugSnapshot) -> Option<SymbolSection> {
@@ -7565,6 +7609,60 @@ mod tests {
         let reopened = TextEditor::new(filesystem, colors, Some("NOTES.TXT".to_owned()));
         assert_eq!(reopened.lines, ["saved text"]);
         assert_eq!(reopened.filename.as_deref(), Some("notes.txt"));
+    }
+
+    #[test]
+    fn built_in_fanticon_include_is_a_virtual_read_only_document() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().write_text("fanticon.inc", "STALE DISK COPY").unwrap();
+        let mut editor = TextEditor::new(
+            filesystem.clone(),
+            shared_ui_colors(),
+            Some("FANTICON.INC".to_owned()),
+        );
+
+        assert_eq!(editor.filename.as_deref(), Some("/fanticon.inc"));
+        assert!(editor.system_read_only());
+        assert!(editor.lines.join("\n").contains("FANTICON_MAJOR"));
+        assert!(!editor.lines.join("\n").contains("STALE DISK COPY"));
+
+        let original = editor.lines.clone();
+        editor.insert_text("CHANGED");
+        editor.insert_newline();
+        editor.backspace();
+        editor.delete_forward();
+        editor.clipboard = "PASTED".to_owned();
+        editor.paste();
+        assert_eq!(editor.replace_all("FANTICON", "BROKEN"), 0);
+        assert_eq!(editor.lines, original);
+        assert!(!editor.dirty);
+        assert_eq!(
+            editor.save_as("copy.inc"),
+            Err("FANTICON.INC is a read-only system file".to_owned())
+        );
+        assert_eq!(filesystem.borrow().read_text("fanticon.inc").unwrap(), "STALE DISK COPY");
+    }
+
+    #[test]
+    fn project_file_named_fanticon_inc_remains_editable() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("project").unwrap();
+        filesystem.borrow_mut().write_text("project/fanticon.inc", "VALUE EQU 1").unwrap();
+        let mut editor = TextEditor::new(
+            filesystem.clone(),
+            shared_ui_colors(),
+            Some("project/fanticon.inc".to_owned()),
+        );
+
+        assert!(!editor.system_read_only());
+        editor.cursor.column = editor.lines[0].len();
+        editor.insert_text(" ; LOCAL");
+        editor.save_as("project/fanticon.inc").unwrap();
+        assert!(filesystem.borrow().read_text("project/fanticon.inc").unwrap().contains("LOCAL"));
+        assert_eq!(
+            editor.save_as("/fanticon.inc"),
+            Err("FANTICON.INC is a read-only system file".to_owned())
+        );
     }
 
     #[test]

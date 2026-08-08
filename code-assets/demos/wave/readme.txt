@@ -13,6 +13,9 @@ line begins.
 This demonstrates timing an effect around real 6502
 cycle costs.
 
+UPLOAD_TILE and FILL_TILEMAP handle the repeated
+VRAM setup while leaving the raster IRQ explicit.
+
 From this folder, enter RUN to build and launch the
 cartridge. There are no controls; press Escape to
 return to the editor or command prompt.

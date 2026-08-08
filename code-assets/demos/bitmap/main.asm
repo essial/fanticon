@@ -10,14 +10,11 @@
 ; PTR/PTRHI form a zero-page indirect pointer. Y fills
 ; one 256-byte page before PTRHI advances.
 
+         INCLUDE FANTICON.INC
+
 ; ---------------------------------------------------
 ; HARDWARE REGISTERS AND WORK RAM
 ; ---------------------------------------------------
-BANKKIND EQU   $C000
-BANKNUM  EQU   $C001
-VMODE    EQU   $C010
-VCTRL    EQU   $C011
-BMPPAL   EQU   $C01D
 PTR      EQU   $20
 PTRHI    EQU   $21
 
@@ -26,7 +23,7 @@ PTRHI    EQU   $21
 ; call receives its own private loop label.
 FILLVRAM MAC   BANK;STOP;RESETPTR=0;INVERT=0
          LDA   #]BANK
-         STA   BANKNUM
+         STA   BANK_NUMBER
          IF    ]RESETPTR
          LDA   #0
          STA   PTR
@@ -55,10 +52,10 @@ FILLVRAM MAC   BANK;STOP;RESETPTR=0;INVERT=0
          FIXED
          ORG   $C100
 RESET    SEI
-; BANKKIND=2 selects VRAM. BANKNUM=1 exposes bitmap
+; BANK_KIND selects VRAM. BANK_NUMBER=1 exposes bitmap
 ; offsets $4000-$7FFF.
-         LDA   #2
-         STA   BANKKIND
+         LDA   #BANK_VRAM
+         STA   BANK_KIND
          PMC   FILLVRAM;1;$C0;1
 
 ; ---------------------------------------------------
@@ -75,12 +72,7 @@ RESET    SEI
 ;
 ; Mode 2 selects packed bitmap fetches. Palette bank 0
 ; makes each nibble select reset entries $00-$0F.
-         LDA   #0
-         STA   BMPPAL
-         LDA   #2
-         STA   VMODE
-         LDA   #1
-         STA   VCTRL
+         PMC   SET_BITMAP;0
 LOOP     JMP   LOOP
 NMI      RTI
 IRQ      RTI

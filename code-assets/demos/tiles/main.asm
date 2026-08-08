@@ -2,7 +2,7 @@
 ; TILEMAP, VRAM, INPUT, AND VBLANK DEMO
 ; ---------------------------------------------------
 ;
-; BANKKIND=2 maps a 16 KiB VRAM bank at $8000-$BFFF.
+; BANK_KIND maps a 16 KiB VRAM bank at $8000-$BFFF.
 ; In VRAM bank 0:
 ;   $8020 = pattern bytes for tile 1
 ;   $A000 = 64x32 tile-number map
@@ -12,20 +12,11 @@
 ; packed bytes describe each row. The high nibble is
 ; the left pixel and the low nibble is the right.
 
+         INCLUDE FANTICON.INC
+
 ; ---------------------------------------------------
 ; HARDWARE REGISTERS
 ; ---------------------------------------------------
-BANKKIND EQU   $C000
-IRQPEND  EQU   $C002
-IRQEN    EQU   $C003
-VMODE    EQU   $C010
-VCTRL    EQU   $C011
-SCRXLO   EQU   $C013
-SCRXHI   EQU   $C014
-SCRYLO   EQU   $C015
-SCRYHI   EQU   $C016
-PAD      EQU   $C050
-
 ; ---------------------------------------------------
 ; RESET AND PATTERN COPY
 ; ---------------------------------------------------
@@ -35,14 +26,9 @@ PAD      EQU   $C050
 RESET    SEI
 ; Select VRAM bank 0 and copy the 32-byte tile pattern
 ; from fixed ROM.
-         LDA   #2
-         STA   BANKKIND
-         LDX   #0
-COPY     LDA   PATTERN,X
-         STA   $8020,X
-         INX
-         CPX   #32
-         BNE   COPY
+         LDA   #BANK_VRAM
+         STA   BANK_KIND
+         PMC   UPLOAD_TILE;1;PATTERN
 
 ; ---------------------------------------------------
 ; TILEMAP SETUP
@@ -53,23 +39,23 @@ COPY     LDA   PATTERN,X
          LDX   #0
 MAPLOOP  LDA   #1
          REPEAT 8;PAGE
-         STA   $A000+]PAGE*$100,X
+         STA   VRAM_MAP_CPU+]PAGE*$100,X
          ENDREP
          TXA
          AND   #$0F
          REPEAT 8;PAGE
-         STA   $A800+]PAGE*$100,X
+         STA   VRAM_ATTR_CPU+]PAGE*$100,X
          ENDREP
          INX
          BNE   MAPLOOP
 
-; Mode 1 selects tiles. VCTRL bit 0 enables the
-; background. IRQEN bit 0 requests one VBlank IRQ per
+; VIDEO_TILEMAP selects tiles. VIDEO_BG enables the
+; background. IRQ_VBLANK requests one interrupt per
 ; frame.
-         LDA   #1
-         STA   VMODE
-         STA   VCTRL
-         STA   IRQEN
+         LDA   #VIDEO_TILEMAP
+         STA   VIDEO_MODE
+         STA   VIDEO_CONTROL
+         STA   IRQ_ENABLE
          CLI
 IDLE     JMP   IDLE
 
@@ -81,34 +67,34 @@ IDLE     JMP   IDLE
 ; The handler updates both bytes of each 16-bit scroll
 ; coordinate. Video hardware wraps them modulo 512x256.
 IRQ      PHA
-         LDA   PAD
-         AND   #4
+         LDA   PAD0_STATE
+         AND   #PAD_LEFT
          BEQ   NOLEFT
-         LDA   SCRXLO
+         LDA   SCROLL_X_LOW
          BNE   LEFTLO
-         DEC   SCRXHI
-LEFTLO   DEC   SCRXLO
-NOLEFT   LDA   PAD
-         AND   #8
+         DEC   SCROLL_X_HIGH
+LEFTLO   DEC   SCROLL_X_LOW
+NOLEFT   LDA   PAD0_STATE
+         AND   #PAD_RIGHT
          BEQ   NORIGHT
-         INC   SCRXLO
+         INC   SCROLL_X_LOW
          BNE   NORIGHT
-         INC   SCRXHI
-NORIGHT  LDA   PAD
-         AND   #1
+         INC   SCROLL_X_HIGH
+NORIGHT  LDA   PAD0_STATE
+         AND   #PAD_UP
          BEQ   NOUP
-         LDA   SCRYLO
+         LDA   SCROLL_Y_LOW
          BNE   UPLO
-         DEC   SCRYHI
-UPLO     DEC   SCRYLO
-NOUP     LDA   PAD
-         AND   #2
+         DEC   SCROLL_Y_HIGH
+UPLO     DEC   SCROLL_Y_LOW
+NOUP     LDA   PAD0_STATE
+         AND   #PAD_DOWN
          BEQ   NODOWN
-         INC   SCRYLO
+         INC   SCROLL_Y_LOW
          BNE   NODOWN
-         INC   SCRYHI
-NODOWN   LDA   #1
-         STA   IRQPEND
+         INC   SCROLL_Y_HIGH
+NODOWN
+         PMC   ACK_IRQ;IRQ_VBLANK
          PLA
          RTI
 NMI      RTI

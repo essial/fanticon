@@ -4,6 +4,10 @@ This is the quick-reference memory map for game code running inside the Fanticon
 VM. All addresses are hexadecimal. Multi-byte registers and values are
 little-endian.
 
+Projects normally use `INCLUDE FANTICON.INC` instead of repeating these
+addresses. The global include defines every register, mask, layout value, and
+standard helper macro; see the [assembler guide](assembler.md#global-hardware-include).
+
 ## CPU address space
 
 ```text

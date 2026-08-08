@@ -199,10 +199,15 @@ mod tests {
         fs::create_dir_all(source.join("demos")).unwrap();
         fs::create_dir_all(destination.join("music")).unwrap();
         fs::write(source.join("demos/readme.txt"), "DEMOS").unwrap();
+        fs::write(source.join("fanticon.inc"), "BANK_KIND EQU $C000").unwrap();
         fs::write(destination.join("music/song.nsf"), "MUSIC").unwrap();
 
         sync_children(&source, &destination).unwrap();
         assert_eq!(fs::read_to_string(destination.join("demos/readme.txt")).unwrap(), "DEMOS");
+        assert_eq!(
+            fs::read_to_string(destination.join("fanticon.inc")).unwrap(),
+            "BANK_KIND EQU $C000"
+        );
         assert_eq!(fs::read_to_string(destination.join("music/song.nsf")).unwrap(), "MUSIC");
 
         fs::remove_dir_all(source.join("demos")).unwrap();

@@ -14,29 +14,14 @@
 ; the 40x25 viewport. More scenery starts outside the
 ; initial view to demonstrate its streaming margin.
 
+         INCLUDE FANTICON.INC
+
 ; ---------------------------------------------------
 ; HARDWARE REGISTERS AND LOADER RAM
 ; ---------------------------------------------------
-BANKKIND EQU   $C000
-BANKNUM  EQU   $C001
-IRQPEND  EQU   $C002
-IRQEN    EQU   $C003
-VMODE    EQU   $C010
-VCTRL    EQU   $C011
-SCRXLO   EQU   $C013
-SCRXHI   EQU   $C014
-SCRYLO   EQU   $C015
-SCRYHI   EQU   $C016
-PALINDEX EQU   $C01B
-PALDATA  EQU   $C01C
-PAD      EQU   $C050
-
-SRCLO    EQU   $20
-SRCHI    EQU   $21
-DSTLO    EQU   $22
-DSTHI    EQU   $23
-LENLO    EQU   $24
-LENHI    EQU   $25
+SRC      EQU   $20
+DST      EQU   $22
+LEN      EQU   $24
 BUFFER   EQU   $0200
 
 ; ---------------------------------------------------
@@ -58,14 +43,14 @@ BUFFER   EQU   $0200
          ORG   $C100
 RESET    SEI
          CLD
-         LDA   #0              ; Cartridge ROM bank 0
-         STA   BANKKIND
-         STA   BANKNUM
-; PALDATA advances after every write.
-         STA   PALINDEX
+         LDA   #BANK_CARTRIDGE ; Cartridge ROM bank 0
+         STA   BANK_KIND
+         STA   BANK_NUMBER
+; PALETTE_DATA advances after every write.
+         STA   PALETTE_INDEX
          LDX   #0
 PALCOPY  LDA   GAME_PAL,X
-         STA   PALDATA
+         STA   PALETTE_DATA
          INX
 ; X wrapping copies all 256 colors.
          BNE   PALCOPY
@@ -78,49 +63,22 @@ PALCOPY  LDA   GAME_PAL,X
 ; length in zero page. CPU destinations $8000,
 ; $A000, and $A800 map to VRAM offsets $0000,
 ; $2000, and $2800 in VRAM bank 0.
-         LDA   #<SCENE_CHR
-         STA   SRCLO
-         LDA   #>SCENE_CHR
-         STA   SRCHI
-         LDA   #$00
-         STA   DSTLO
-         LDA   #$80
-         STA   DSTHI
+         PMC   STORE16;SRC;SCENE_CHR
+         PMC   STORE16;DST;$8000
 ; Pattern length is $2000.
-         LDA   #$00
-         STA   LENLO
-         LDA   #$20
-         STA   LENHI
+         PMC   STORE16;LEN;$2000
          JSR   COPYVRAM
 
-         LDA   #<SCENE_MAP
-         STA   SRCLO
-         LDA   #>SCENE_MAP
-         STA   SRCHI
-         LDA   #$00
-         STA   DSTLO
-         LDA   #$A0
-         STA   DSTHI
+         PMC   STORE16;SRC;SCENE_MAP
+         PMC   STORE16;DST;$A000
 ; Map length is $0800 (2,048 bytes).
-         LDA   #$00
-         STA   LENLO
-         LDA   #$08
-         STA   LENHI
+         PMC   STORE16;LEN;$0800
          JSR   COPYVRAM
 
-         LDA   #<SCENE_ATR
-         STA   SRCLO
-         LDA   #>SCENE_ATR
-         STA   SRCHI
-         LDA   #$00
-         STA   DSTLO
-         LDA   #$A8
-         STA   DSTHI
+         PMC   STORE16;SRC;SCENE_ATR
+         PMC   STORE16;DST;$A800
 ; Attribute length is also $0800.
-         LDA   #$00
-         STA   LENLO
-         LDA   #$08
-         STA   LENHI
+         PMC   STORE16;LEN;$0800
          JSR   COPYVRAM
 
 ; ---------------------------------------------------
@@ -129,26 +87,14 @@ PALCOPY  LDA   GAME_PAL,X
 ;
 ; Pattern 4 begins the aligned 4,5,6,7 composite.
 ; ATTR=$C1 means enabled, 16x16, palette bank 1.
-         LDA   #152
-         STA   $B000           ; X low
-         LDA   #0
-; X bit 8 and behind flag.
-         STA   $B001
-         LDA   #96
-         STA   $B002           ; Y
-         LDA   #4
-         STA   $B003           ; First pattern
-         LDA   #$C1
-; Enable, 16x16 size, and palette 1.
-         STA   $B004
+         PMC   SET_SPRITE;0;152;96;4;$C1
 
 ; Enable tile mode, background, and sprite layers.
-         LDA   #1
-         STA   VMODE
-         LDA   #3
-         STA   VCTRL
-         LDA   #1
-         STA   IRQEN
+         LDA   #VIDEO_TILEMAP
+         STA   VIDEO_MODE
+         LDA   #VIDEO_ALL
+         STA   VIDEO_CONTROL
+         PMC   SET_IRQS;IRQ_VBLANK
          CLI
 IDLE     JMP   IDLE
 
@@ -156,89 +102,43 @@ IDLE     JMP   IDLE
 ; ROM-TO-VRAM BLOCK COPY
 ; ---------------------------------------------------
 ;
-; LENHI counts full 256-byte pages. LENLO is the
+; LEN+1 counts full 256-byte pages. LEN is the
 ; final partial page. Source data stays in cartridge
 ; bank 0 and all destinations stay in VRAM bank 0.
-COPYVRAM LDA   LENHI
-         BEQ   COPYTAIL
-COPYPAGE LDA   #0
-         STA   BANKKIND        ; Expose cartridge data
-         STA   BANKNUM
-         LDY   #0
-READPAGE LDA   (SRCLO),Y
-         STA   BUFFER,Y
-         INY
-         BNE   READPAGE
-         LDA   #2
-; Expose the VRAM destination.
-         STA   BANKKIND
-         LDA   #0
-         STA   BANKNUM
-         LDY   #0
-WRITEPGE LDA   BUFFER,Y
-         STA   (DSTLO),Y
-         INY
-         BNE   WRITEPGE
-         INC   SRCHI
-         INC   DSTHI
-         DEC   LENHI
-         BNE   COPYPAGE
-
-COPYTAIL LDA   LENLO
-         BEQ   COPYDONE
-         LDA   #0
-         STA   BANKKIND
-         STA   BANKNUM
-         LDY   #0
-READTAIL LDA   (SRCLO),Y
-         STA   BUFFER,Y
-         INY
-         CPY   LENLO
-         BNE   READTAIL
-         LDA   #2
-         STA   BANKKIND
-         LDA   #0
-         STA   BANKNUM
-         LDY   #0
-WRITETAL LDA   BUFFER,Y
-         STA   (DSTLO),Y
-         INY
-         CPY   LENLO
-         BNE   WRITETAL
-COPYDONE RTS
+         PMC EMIT_VRAM_COPY;COPYVRAM;SRC;DST;LEN;BUFFER
 
 ; ---------------------------------------------------
 ; VBLANK INPUT AND FOUR-DIRECTION SCROLLING
 ; ---------------------------------------------------
 IRQ      PHA
-         LDA   PAD
-         AND   #4
+         LDA   PAD0_STATE
+         AND   #PAD_LEFT
          BEQ   NOLEFT
-         LDA   SCRXLO
+         LDA   SCROLL_X_LOW
          BNE   LEFTLO
-         DEC   SCRXHI
-LEFTLO   DEC   SCRXLO
-NOLEFT   LDA   PAD
-         AND   #8
+         DEC   SCROLL_X_HIGH
+LEFTLO   DEC   SCROLL_X_LOW
+NOLEFT   LDA   PAD0_STATE
+         AND   #PAD_RIGHT
          BEQ   NORIGHT
-         INC   SCRXLO
+         INC   SCROLL_X_LOW
          BNE   NORIGHT
-         INC   SCRXHI
-NORIGHT  LDA   PAD
-         AND   #1
+         INC   SCROLL_X_HIGH
+NORIGHT  LDA   PAD0_STATE
+         AND   #PAD_UP
          BEQ   NOUP
-         LDA   SCRYLO
+         LDA   SCROLL_Y_LOW
          BNE   UPLO
-         DEC   SCRYHI
-UPLO     DEC   SCRYLO
-NOUP     LDA   PAD
-         AND   #2
+         DEC   SCROLL_Y_HIGH
+UPLO     DEC   SCROLL_Y_LOW
+NOUP     LDA   PAD0_STATE
+         AND   #PAD_DOWN
          BEQ   NODOWN
-         INC   SCRYLO
+         INC   SCROLL_Y_LOW
          BNE   NODOWN
-         INC   SCRYHI
-NODOWN   LDA   #1
-         STA   IRQPEND
+         INC   SCROLL_Y_HIGH
+NODOWN
+         PMC   ACK_IRQ;IRQ_VBLANK
          PLA
          RTI
 NMI      RTI

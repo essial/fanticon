@@ -4,6 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::machine::{BANK_SIZE, FIXED_ROM_END, FIXED_ROM_START};
 
+pub const FANTICON_INCLUDE_NAME: &str = "FANTICON.INC";
+pub const FANTICON_INCLUDE_SOURCE: &str = include_str!("../code-assets/fanticon.inc");
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     pub source: String,
@@ -170,7 +173,8 @@ where
 {
     let mut diagnostics = Vec::new();
     let root = source_lines(source_name, source);
-    let included = expand_includes(root, &mut loader, &mut diagnostics, 0);
+    let mut fanticon_included = false;
+    let included = expand_includes(root, &mut loader, &mut diagnostics, 0, &mut fanticon_included);
     let expanded = expand_macros(included, &mut diagnostics);
     let expanded = expand_repeat_blocks(expanded, &mut diagnostics);
     let expanded = expand_conditionals(expanded, &mut diagnostics);
@@ -202,7 +206,8 @@ where
 
     let mut diagnostics = Vec::new();
     let root = source_lines(source_name, source);
-    let included = expand_includes(root, &mut loader, &mut diagnostics, 0);
+    let mut fanticon_included = false;
+    let included = expand_includes(root, &mut loader, &mut diagnostics, 0, &mut fanticon_included);
     let expanded = expand_macros(included, &mut diagnostics);
     let expanded = expand_repeat_blocks(expanded, &mut diagnostics);
     let expanded = expand_conditionals(expanded, &mut diagnostics);
@@ -243,6 +248,24 @@ where
                     labels: Vec::new(),
                 });
                 current = Some(blocks.len() - 1);
+            }
+            Some("REQUIRE_FIXED") => {
+                if !statement.operand.trim().is_empty() {
+                    statement_error(&mut diagnostics, &statement, "REQUIRE_FIXED takes no operand");
+                }
+                match current.map(|index| blocks[index].section) {
+                    Some(CartridgeSection::Fixed) => {}
+                    Some(CartridgeSection::Bank(bank)) => statement_error(
+                        &mut diagnostics,
+                        &statement,
+                        format!("REQUIRE_FIXED failed while BANK {bank} is selected"),
+                    ),
+                    None => statement_error(
+                        &mut diagnostics,
+                        &statement,
+                        "REQUIRE_FIXED requires a selected FIXED section",
+                    ),
+                }
             }
             _ => {
                 if let Some(index) = current {
@@ -558,6 +581,7 @@ fn expand_includes<F>(
     loader: &mut F,
     diagnostics: &mut Vec<Diagnostic>,
     depth: usize,
+    fanticon_included: &mut bool,
 ) -> Vec<SourceLine>
 where
     F: FnMut(&str) -> Result<String, String>,
@@ -584,15 +608,39 @@ where
             error(diagnostics, &line, "include path is required");
             continue;
         }
+        if is_fanticon_include(path) {
+            if !*fanticon_included {
+                *fanticon_included = true;
+                let nested = source_lines(FANTICON_INCLUDE_NAME, FANTICON_INCLUDE_SOURCE);
+                output.extend(expand_includes(
+                    nested,
+                    loader,
+                    diagnostics,
+                    depth + 1,
+                    fanticon_included,
+                ));
+            }
+            continue;
+        }
         match loader(path) {
             Ok(source) => {
                 let nested = source_lines(path, &source);
-                output.extend(expand_includes(nested, loader, diagnostics, depth + 1));
+                output.extend(expand_includes(
+                    nested,
+                    loader,
+                    diagnostics,
+                    depth + 1,
+                    fanticon_included,
+                ));
             }
             Err(message) => error(diagnostics, &line, format!("cannot include {path}: {message}")),
         }
     }
     output
+}
+
+fn is_fanticon_include(path: &str) -> bool {
+    path.trim_start_matches(['/', '\\']).eq_ignore_ascii_case(FANTICON_INCLUDE_NAME)
 }
 
 fn expand_macros(lines: Vec<SourceLine>, diagnostics: &mut Vec<Diagnostic>) -> Vec<SourceLine> {
@@ -1484,6 +1532,11 @@ fn plan_program_seeded(
                 plan.push(planned);
                 break;
             }
+            "REQUIRE_FIXED" => {
+                if !statement.operand.trim().is_empty() {
+                    statement_error(diagnostics, statement, "REQUIRE_FIXED takes no operand");
+                }
+            }
             mnemonic if is_mnemonic(mnemonic) => {
                 match plan_instruction(mnemonic, &statement.operand, &symbols, address) {
                     Ok((mode, expression)) => {
@@ -2219,6 +2272,7 @@ fn is_known_operation(operation: &str) -> bool {
                 | "INCLUDE"
                 | "BANK"
                 | "FIXED"
+                | "REQUIRE_FIXED"
                 | "MAC"
                 | "EOM"
                 | "PMC"
@@ -2816,6 +2870,94 @@ HERE     EQU   *
         })
         .unwrap();
         assert_eq!(program.bytes, [0xa5, 0x42]);
+    }
+
+    #[test]
+    fn global_fanticon_include_is_builtin_idempotent_and_usable() {
+        let source = r#"
+         INCLUDE FANTICON.INC
+         INCLUDE /fanticon.inc
+         ORG   $8000
+         PMC   SET_BANK;BANK_VRAM;2
+         PMC   ACK_IRQ;IRQ_VBLANK
+         PMC   SET_IRQS;IRQ_RASTER
+         PMC   SET_VIDEO;VIDEO_TILEMAP;VIDEO_ALL
+         PMC   SET_BITMAP;2;VIDEO_ALL
+         PMC   SET_BACKDROP;$49
+         PMC   SET_SCROLL;$1234;$5678
+         PMC   SET_RASTER;220;199
+         PMC   SET_COLOR;3;RGB332_RED
+         PMC   UPLOAD_TILE;1;DATA
+         PMC   FILL_TILEMAP;1;2
+         PMC   SET_SPRITE;0;$1F0;20;4;$C1
+         PMC   SET_TONE;PULSE1_CONTROL;$CC;$1BD
+         PMC   SET_NOISE;$88;13
+         PMC   SET_AUDIO_MASTER;15
+         PMC   SILENCE_AUDIO
+         PMC   START_TIMER;TIMER0_RELOADL;1000
+         PMC   STOP_TIMER;TIMER0_RELOADL
+         PMC   READ_FRAME16;$20
+         PMC   READ_TIMER16;TIMER0_RELOADL;$22
+         PMC   WAIT_VBLANK
+         PMC   WAIT_NEXT_VBLANK
+         PMC   PUSH_BANK
+         PMC   POP_BANK
+         PMC   PUSH_AXY
+         PMC   POP_YXA
+         PMC   STORE16;$24;$CAFE
+         PMC   COPY16;$26;$24
+         PMC   ADD16;$24;$1234
+         PMC   SUB16;$24;$1234
+         PMC   INC16;$24
+         PMC   DEC16;$24
+         PMC   EMIT_VRAM_COPY;VCOPY;$30;$32;$34;$0200
+         PMC   EMIT_PAD_SCROLL;SCROLL;$36;$38
+DATA     DS    TILE_BYTES
+"#;
+        let program = assemble_with_loader("main.asm", source, |_| {
+            panic!("the built-in include must not call the project loader")
+        })
+        .unwrap();
+        assert_eq!(program.origin, 0x8000);
+        assert_eq!(program.symbols["BANK_KIND"], 0xc000);
+        assert_eq!(program.symbols["PAD_START"], 0x80);
+        assert_eq!(program.symbols["VRAM_SPR_CPU"], 0xb000);
+        assert!(program.symbols["VCOPY"] >= 0x8000);
+        assert!(program.symbols["SCROLL"] > program.symbols["VCOPY"]);
+    }
+
+    #[test]
+    fn standard_emitters_require_the_fixed_cartridge_section() {
+        let wrong_bank = r#"
+         INCLUDE FANTICON.INC
+         BANK  3
+         ORG   $8000
+         PMC   EMIT_PAD_SCROLL;SCROLL;$20;$22
+"#;
+        let diagnostics =
+            assemble_cartridge_with_loader("main.asm", wrong_bank, |_| Err("not found".to_owned()))
+                .unwrap_err();
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.source == "main.asm"
+                && diagnostic.line == 5
+                && diagnostic.message == "REQUIRE_FIXED failed while BANK 3 is selected"
+        }));
+
+        let fixed = r#"
+         INCLUDE FANTICON.INC
+         FIXED
+         ORG   $C100
+         PMC   EMIT_PAD_SCROLL;SCROLL;$20;$22
+RESET    JMP   RESET
+NMI      RTI
+IRQ      RTI
+         ORG   VECTOR_NMI
+         DA    NMI,RESET,IRQ
+"#;
+        let cartridge =
+            assemble_cartridge_with_loader("main.asm", fixed, |_| Err("not found".to_owned()))
+                .unwrap();
+        assert_eq!(cartridge.symbols["SCROLL"].section, SymbolSection::Fixed);
     }
 
     #[test]

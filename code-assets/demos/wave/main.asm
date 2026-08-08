@@ -11,25 +11,11 @@
 ; delay the scroll write until HBlank, so the new value
 ; is ready before the next line begins.
 
+         INCLUDE FANTICON.INC
+
 ; ---------------------------------------------------
 ; HARDWARE REGISTERS AND WORK RAM
 ; ---------------------------------------------------
-BANKKIND EQU   $C000
-IRQPEND  EQU   $C002
-IRQEN    EQU   $C003
-VMODE    EQU   $C010
-VCTRL    EQU   $C011
-SCRXLO   EQU   $C013
-SCRXHI   EQU   $C014
-SCRYLO   EQU   $C015
-SCRYHI   EQU   $C016
-RASTXLO  EQU   $C017
-RASTXHI  EQU   $C018
-RASTYLO  EQU   $C019
-RASTYHI  EQU   $C01A
-PALINDEX EQU   $C01B
-PALDATA  EQU   $C01C
-
 PHASE    EQU   $20
 SCANLINE EQU   $21
 
@@ -47,68 +33,52 @@ RESET    SEI
 ; Map VRAM bank 0 at $8000-$BFFF. Tile pattern 1
 ; begins at $8020. Every four-bit 8x8 tile uses
 ; 32 bytes.
-         LDA   #2
-         STA   BANKKIND
-         LDX   #0
-COPYTILE LDA   PATTERN,X
-         STA   $8020,X
-         INX
-         CPX   #32
-         BNE   COPYTILE
+         LDA   #BANK_VRAM
+         STA   BANK_KIND
+         PMC   UPLOAD_TILE;1;PATTERN
 
 ; Fill all 2,048 tile cells with pattern 1. Palette
 ; bank zero is used throughout, so pixel values 1, 2,
 ; and 3 select the RGB entries configured below.
-         LDX   #0
-FILLMAP  LDA   #1
-         REPEAT 8;PAGE
-         STA   $A000+]PAGE*$100,X
-         ENDREP
-         LDA   #0
-         REPEAT 8;PAGE
-         STA   $A800+]PAGE*$100,X
-         ENDREP
-         INX
-         BNE   FILLMAP
+         PMC   FILL_TILEMAP;1;0
 
 ; Tile pixels select palette indexes. Map indexes 1-3
-; to pure RGB332 red, green, and blue. PALDATA advances
-; PALINDEX after every write.
+; to pure RGB332 red, green, and blue. PALETTE_DATA
+; advances PALETTE_INDEX after every write.
          LDA   #1
-         STA   PALINDEX
+         STA   PALETTE_INDEX
          LDA   #$E0
-         STA   PALDATA
+         STA   PALETTE_DATA
          LDA   #$1C
-         STA   PALDATA
+         STA   PALETTE_DATA
          LDA   #$03
-         STA   PALDATA
+         STA   PALETTE_DATA
 
 ; ---------------------------------------------------
 ; VIDEO AND FIRST RASTER EVENT
 ; ---------------------------------------------------
 ;
-; Mode 1 selects tilemap and VCTRL bit 0 enables it.
+; VIDEO_TILEMAP and VIDEO_BG enable the tile layer.
 ; The first comparator waits at line 261 so the first
 ; visible frame begins with line zero prepared.
          LDA   #1
-         STA   VMODE
-         STA   VCTRL
+         STA   VIDEO_MODE
+         STA   VIDEO_CONTROL
          LDA   #0
          STA   PHASE
-         STA   SCRXHI
-         STA   SCRYHI
+         STA   SCROLL_X_HIGH
+         STA   SCROLL_Y_HIGH
          LDA   #$FF
          STA   SCANLINE
          LDA   #220
-         STA   RASTXLO
+         STA   RASTER_X_LOW
          LDA   #0
-         STA   RASTXHI
+         STA   RASTER_X_HIGH
          LDA   #5
-         STA   RASTYLO
+         STA   RASTER_Y_LOW
          LDA   #1
-         STA   RASTYHI
-         LDA   #2
-         STA   IRQEN
+         STA   RASTER_Y_HIGH
+         PMC   SET_IRQS;IRQ_RASTER
          CLI
 IDLE     JMP   IDLE
 
@@ -134,9 +104,9 @@ IRQ      PHA
          STX   SCANLINE
          JSR   SETWAVE
          LDA   SCANLINE
-         STA   RASTYLO
+         STA   RASTER_Y_LOW
          LDA   #0
-         STA   RASTYHI
+         STA   RASTER_Y_HIGH
          JMP   IRQDONE
 
 ; Visible line 199 is followed by VBlank. Wait for line
@@ -145,9 +115,9 @@ WAITFRAME
          LDA   #$FF
          STA   SCANLINE
          LDA   #5
-         STA   RASTYLO
+         STA   RASTER_Y_LOW
          LDA   #1
-         STA   RASTYHI
+         STA   RASTER_Y_HIGH
          JMP   IRQDONE
 
 ; Advance both axes once per frame. Y has a quarter
@@ -163,15 +133,15 @@ NEWFRAME INC   PHASE
          AND   #127
          TAX
          LDA   WAVETAB,X
-         STA   SCRYLO
+         STA   SCROLL_Y_LOW
          LDA   #0
-         STA   RASTYLO
-         STA   RASTYHI
+         STA   RASTER_Y_LOW
+         STA   RASTER_Y_HIGH
 
-; Raster IRQ is bit 1. IRQPEND is write-one-to-clear.
+; IRQ_RASTER is write-one-to-clear in IRQ_PENDING.
 ; Other IRQ sources stay pending when enabled.
-IRQDONE  LDA   #2
-         STA   IRQPEND
+IRQDONE
+         PMC   ACK_IRQ;IRQ_RASTER
          PLA
          TAX
          PLA
@@ -190,7 +160,7 @@ SETWAVE  TXA
          AND   #127
          TAX
          LDA   WAVETAB,X
-         STA   SCRXLO
+         STA   SCROLL_X_LOW
          RTS
 
 WAVETAB  HEX   2021222425262728

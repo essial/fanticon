@@ -6,5 +6,5 @@ lead note and backdrop color four times
 per cycle. Audio uses the host's light
 stereo and reverb presentation effect.
 
-MAIN.ASM uses a named SETTONE macro to make the
-multi-register pulse and triangle setup readable.
+SET_TONE makes multi-register voice setup readable;
+SET_AUDIO_MASTER clearly enables the final mix.

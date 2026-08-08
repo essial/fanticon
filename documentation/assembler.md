@@ -136,16 +136,100 @@ or be reassigned on later 6502-family CPUs.
 | `ASC`, `TEXT` | Emit quoted ASCII strings or byte expressions |
 | `HEX` | Emit hexadecimal byte pairs, with spaces or commas allowed |
 | `DS expression` | Reserve and zero-fill a number of bytes |
-| `PUT`, `USE`, `INCLUDE` | Assemble another text file at this location |
+| `INCLUDE`, `PUT`, `USE` | Assemble another text file at this location |
 | `IF` / `DO`, `ELSE`, `ENDIF` / `FIN` | Select source at assembly time |
 | `REPEAT` / `LUP`, `ENDREP` / `--^` | Repeat source at assembly time |
 | `name PROC`, `ENDPROC` | Scope dot-prefixed local labels to a procedure |
 | `name DUM origin`, `DEND` | Define a symbol-only data layout |
+| `REQUIRE_FIXED` | Fail unless the current cartridge section is `FIXED` |
 | `END` | Mark the logical end of source |
 
 Multiple `ORG` regions are allowed only in increasing address order. Gaps are
 zero-filled in the raw output. Moving backward over output is an error. Includes
 use Fanticon paths and may be nested up to 16 levels.
+
+## Global hardware include
+
+Every project can load Fanticon's standard hardware definitions with:
+
+```asm
+         INCLUDE FANTICON.INC
+```
+
+`FANTICON.INC` is built into the assembler, so this works from every project
+directory and in native, WebAssembly, and in-memory builds. It is a reserved,
+case-insensitive include name and is expanded at most once per assembly, making
+it safe for both a main source and one of its child includes to request it. Native
+builds also install a browsable copy at `/FANTICON.INC`; that managed copy is
+refreshed with the bundled demos. Opening it in the editor displays the embedded
+system source as a read-only document. It cannot be edited or saved because the
+disk copy is only a discoverable view, not the assembler's source of truth.
+
+The include defines the complete v1.0 programming surface: memory regions,
+hardware registers, bank kinds, IRQ masks, video modes and flags, VRAM layout,
+tile and sprite fields, audio controls, controller buttons, timers, vectors,
+screen dimensions, and machine timing. Names match the primary documentation,
+such as `BANK_KIND`, `VIDEO_CONTROL`, `PULSE1_CONTROL`, `PAD0_STATE`, and
+`TIMER0_RELOADL`.
+
+It also provides reusable macros:
+
+| Macro | Purpose | Clobbers |
+| --- | --- | --- |
+| `SET_BANK kind;number` | Select the bank-window backing and bank | A |
+| `ACK_IRQ mask` / `SET_IRQS mask` | Acknowledge or enable IRQ sources | A |
+| `SET_VIDEO mode;layers=VIDEO_BG` | Select video mode and visible layers | A |
+| `SET_BITMAP palette;layers=VIDEO_BG` / `SET_BACKDROP color` | Configure bitmap display or backdrop | A |
+| `SET_SCROLL x;y` / `SET_RASTER x;y` | Write immediate 16-bit coordinates | A |
+| `SET_COLOR index;color` | Write one RGB332 palette entry | A |
+| `UPLOAD_TILE index;source` | Copy one 32-byte tile into mapped VRAM bank 0 | A, X |
+| `FILL_TILEMAP tile;attr` | Fill all tile and attribute map pages | A, X |
+| `SET_SPRITE index;x;y;tile;attr;flags=0` | Initialize one mapped sprite record | A |
+| `SET_TONE base;control;timer` | Configure and reset a pulse or triangle | A |
+| `SET_NOISE control;period` | Configure and reset noise | A |
+| `SET_AUDIO_MASTER volume;enable=AUDIO_ENABLE` / `SILENCE_AUDIO` | Enable master audio or silence every voice | A |
+| `START_TIMER base;reload;control=TIMER_ENABLE` / `STOP_TIMER base` | Start or stop an interval timer | A |
+| `READ_FRAME16 dest` / `READ_TIMER16 base;dest` | Read a hardware word in its required latch order | A |
+| `WAIT_VBLANK` / `WAIT_NEXT_VBLANK` | Wait for live VBlank or the next VBlank edge | A |
+| `PUSH_BANK` / `POP_BANK` | Save or restore bank selection and A | A / restored |
+| `PUSH_AXY` / `POP_YXA` | Save or restore common IRQ registers | A / A, X, Y |
+| `STORE16 dest;value` / `COPY16 dest;source` | Store or copy a little-endian word | A |
+| `ADD16 address;value` / `SUB16 address;value` | Add or subtract an immediate word | A, flags |
+| `INC16 address` / `DEC16 address` | Change a little-endian word | flags / A, flags |
+
+Macro arguments are assembly-time expressions. The complete checked-in source is
+[`code-assets/fanticon.inc`](../code-assets/fanticon.inc); comments beside every
+helper state its register effects.
+
+### Procedure emitters
+
+Most helpers expand inline at each `PMC` call. Two opt-in emitter macros instead
+define a named `PROC` once, including private dot-local labels:
+
+| Emitter | Generated procedure |
+| --- | --- |
+| `EMIT_VRAM_COPY name;src;dst;len;buffer` | Copy ROM bank 0 to mapped VRAM bank 0 through a 256-byte page buffer |
+| `EMIT_PAD_SCROLL name;x;y;pad=PAD0_STATE` | Update signed 16-bit scroll words from a controller state byte |
+
+Invoke an emitter once while `FIXED` is selected, then call the generated name
+with `JSR`. Both standard emitters contain `REQUIRE_FIXED`, so invoking one in a
+switchable `BANK` section is a build error rather than silently placing the
+routine in banked ROM. The caller supplies storage addresses, so the include
+does not reserve RAM or silently add runtime code:
+
+```asm
+SRC      EQU   $20
+DST      EQU   $22
+LEN      EQU   $24
+BUFFER   EQU   $0200
+
+         PMC   EMIT_VRAM_COPY;COPYVRAM;SRC;DST;LEN;BUFFER
+
+         PMC   STORE16;SRC;TILE_DATA
+         PMC   STORE16;DST;VRAM_TILE_CPU
+         PMC   STORE16;LEN;$2000
+         JSR   COPYVRAM
+```
 
 ## Modern macros
 

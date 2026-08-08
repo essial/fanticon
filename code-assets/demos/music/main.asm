@@ -6,9 +6,7 @@
 ; It is still assembler source, so PUT embeds it in the
 ; cartridge. PLAYER.INC writes the real APU registers.
 
-IRQPEND  EQU   $C002
-IRQEN    EQU   $C003
-BGCOLOR  EQU   $C012
+         INCLUDE FANTICON.INC
 
          FIXED
          ORG   $C100
@@ -17,26 +15,17 @@ RESET    SEI
          LDY   #>SONG_MUSIC
          JSR   MUSIC_START
          LDA   #$25
-         STA   BGCOLOR
-         LDA   #1
-         STA   IRQEN
+         STA   BACKDROP_COLOR
+         PMC   SET_IRQS;IRQ_VBLANK
          CLI
 FOREVER  JMP   FOREVER
 
 ; The player advances exactly once per VBlank.
-IRQ      PHA
-         TXA
-         PHA
-         TYA
-         PHA
+IRQ
+         PMC   PUSH_AXY
          JSR   MUSIC_TICK
-         LDA   #1
-         STA   IRQPEND
-         PLA
-         TAY
-         PLA
-         TAX
-         PLA
+         PMC   ACK_IRQ;IRQ_VBLANK
+         PMC   POP_YXA
          RTI
 NMI      RTI
 

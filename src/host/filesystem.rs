@@ -51,6 +51,13 @@ impl ConsoleFilesystem {
         if self.cwd.is_empty() { "/".to_owned() } else { format!("/{}", self.cwd.join("/")) }
     }
 
+    /// Whether `path` resolves to `name` directly under the console root.
+    pub fn is_root_file(&self, path: &str, name: &str) -> bool {
+        self.normalize(path).is_ok_and(|components| {
+            components.len() == 1 && components[0].eq_ignore_ascii_case(name)
+        })
+    }
+
     pub fn change_directory(&mut self, path: &str) -> Result<(), String> {
         let requested = self.normalize(path)?;
         match &self.backend {

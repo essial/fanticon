@@ -113,8 +113,12 @@ cargo run --release
 
 Native app builds mirror each folder inside the repository's `code-assets`
 directory directly into `Documents/Fanticon`. This makes the checked-in examples
-available at `/demos` inside Fanticon while keeping the repository copy
-authoritative and preserving unrelated user files. Set
+available at `/demos` and the standard hardware definitions available at
+`/FANTICON.INC`, while keeping the repository copy authoritative and preserving
+unrelated user files. The assembler also embeds that include, so every project
+can use `INCLUDE FANTICON.INC` on native and web builds. The editor opens the
+root system include from that embedded source as a read-only document; the
+managed disk copy is only there to make it browsable. Set
 `FANTICON_SKIP_CODE_ASSET_SYNC=1` to skip this developer convenience when needed.
 
 ```sh

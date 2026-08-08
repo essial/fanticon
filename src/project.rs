@@ -199,6 +199,30 @@ mod tests {
     }
 
     #[test]
+    fn project_builds_can_always_include_fanticon_definitions() {
+        let manifest = "TITLE=INCLUDE TEST\nID=0123456789ABCDEF\nMAIN=MAIN.ASM\nOUTPUT=GAME.FCN\nSAVE_BANKS=0\nMACHINE=1.0\n";
+        let source = r#"
+         INCLUDE FANTICON.INC
+         FIXED
+         ORG   FIXED_ROM
+RESET    LDA   #RGB332_RED
+         STA   BACKDROP_COLOR
+LOOP     JMP   LOOP
+NMI      RTI
+IRQ      RTI
+         ORG   VECTOR_NMI
+         DA    NMI,RESET,IRQ
+"#;
+        let build = build_project_with_loader(manifest, |path| {
+            path.eq_ignore_ascii_case("main.asm")
+                .then(|| source.to_owned())
+                .ok_or_else(|| "not found".to_owned())
+        })
+        .unwrap();
+        assert_eq!(&build.cartridge.fixed_rom[0x100..0x105], [0xa9, 0xe0, 0x8d, 0x12, 0xc0]);
+    }
+
+    #[test]
     fn manifest_rejects_unknown_keys_and_zero_identity() {
         let base =
             "TITLE=X\nID=0000000000000000\nMAIN=M.ASM\nOUTPUT=X.FCN\nSAVE_BANKS=0\nMACHINE=1.0\n";

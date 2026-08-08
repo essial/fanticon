@@ -8,10 +8,14 @@ art. Map view shows a pannable 40x25 window.
 MAIN.ASM demonstrates the complete runtime path:
 
   1. PUT the PAL and GFX resources in ROM.
-  2. Upload GAME_PAL through PALDATA.
+  2. Upload GAME_PAL through PALETTE_DATA.
   3. Stage GFX pages through normal RAM.
   4. Copy patterns, map, and attributes to VRAM.
   5. Create a sprite from patterns 4 through 7.
+
+STORE16 makes the transfer descriptors readable.
+SET_SPRITE writes the sprite record, and
+EMIT_VRAM_COPY generates the reusable COPYVRAM PROC.
 
 From this folder, use RUN or press F5 in the
 editor. Use the arrow keys to scroll the map.

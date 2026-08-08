@@ -7,5 +7,5 @@ Arrow keys scroll in every direction.
 The 16-bit scroll registers wrap around
 the 320x200 map.
 
-MAIN.ASM uses REPEAT blocks to generate the eight
-tile-map and eight attribute-page stores.
+MAIN.ASM uses UPLOAD_TILE for pattern transfer and
+REPEAT blocks for the eight map and attribute pages.

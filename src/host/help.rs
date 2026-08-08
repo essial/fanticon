@@ -775,4 +775,30 @@ mod tests {
         assert!(index.lookup("Load Accumulator").is_some());
         assert!(index.lookup("stx").is_none());
     }
+
+    #[test]
+    fn integrated_help_covers_fanticon_emitters_and_fixed_placement() {
+        let index = HelpIndex::load();
+
+        let helper = index.lookup("set_audio_master").unwrap();
+        assert_eq!(helper.key, "FANTICON.INC");
+        assert!(helper.body.iter().any(|line| line.contains("READ-ONLY")));
+
+        for name in ["EMIT_VRAM_COPY", "EMIT_PAD_SCROLL"] {
+            let emitter = index.lookup(name).unwrap();
+            assert_eq!(emitter.key, name);
+            assert!(emitter.body.iter().any(|line| line.contains("REQUIRE_FIXED")));
+        }
+
+        let assertion = index.lookup("require_fixed").unwrap();
+        assert!(assertion.body.iter().any(|line| line.contains("BANK n")));
+
+        let emitter_guide = index.lookup("Procedure emitters").unwrap();
+        assert_eq!(emitter_guide.source.as_deref(), Some("ASSEMBLER.MD"));
+        assert!(emitter_guide.body.iter().any(|line| line.contains("REQUIRE_FIXED")));
+
+        let section_guide = index.lookup("ROM sections").unwrap();
+        assert_eq!(section_guide.source.as_deref(), Some("CARTRIDGE-PROJECTS.MD"));
+        assert!(section_guide.body.iter().any(|line| line.contains("REQUIRE_FIXED")));
+    }
 }

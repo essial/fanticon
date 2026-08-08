@@ -21,4 +21,7 @@ Each folder is a complete project. BUILD
 creates its FCN file. RUN builds and
 launches it. Press ESC to return here.
 
+Every MAIN.ASM starts with INCLUDE FANTICON.INC.
+That global file supplies hardware names and macros.
+
 TILES, SPRITES, and GRAPHICS use the arrow keys.

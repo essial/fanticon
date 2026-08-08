@@ -1,20 +1,67 @@
 # Fanticon
 
-Fanticon is a high-performance fantasy console with a cycle-accurate NMOS 6502,
-mapped late-1980s-style video/audio/input hardware, native development tools, and
-versioned bank-switched cartridges.
+Fanticon is a late-1980s-style fantasy console: a cycle-accurate NMOS 6502 CPU,
+tile/sprite/bitmap video, four-voice audio, native development tools, and a
+versioned, bank-switched cartridge format you can build real games on.
 
-## Why Rust
+## Download
 
-The CPU implementation is allocation-free and has no runtime dependency on the
-app host. Build the library with `--no-default-features` to omit all windowing and
-GPU dependencies. Rust compiles to native Windows, Linux, and macOS targets and
-to WebAssembly from the same source. Every `Bus::read` or `Bus::write` is one
-physical CPU cycle, keeping video, audio, timers, and input hardware synchronized.
+Prebuilt binaries for every tagged release are published on the
+[Releases page](https://github.com/essial/fanticon/releases):
 
-The core implements all 256 NMOS opcodes, including undocumented instructions and
-their dummy reads/writes. `Cpu::step` executes one instruction and returns its
-cycle count.
+| Platform | Architecture   | Installer               | Portable                       |
+| -------- | -------------- | ------------------------ | ------------------------------- |
+| Windows  | x86_64 / arm64 | `Fanticon-Setup-*.exe`   | `fanticon-*-windows-*.zip`      |
+| Linux    | x86_64 / arm64 | `fanticon_*.deb`         | `fanticon-*-linux-*.tar.gz`     |
+| macOS    | universal      | `fanticon-*-macos.dmg`   | `fanticon-*-macos-universal.zip`|
+
+Portable archives need no installation: unzip or untar the archive and run
+`fanticon-app` (or `fanticon-app.exe` on Windows) directly. See
+[Building from source](#building-from-source) to build it yourself instead.
+
+## Get started
+
+Launching Fanticon drops you into the native editor's command console.
+
+1. `NEW PROJECT` creates a cartridge project with a manifest and starter source.
+2. Write 6502 assembly in the built-in editor — syntax highlighting, symbol
+   navigation, and inline diagnostics included.
+3. `BUILD` assembles it; `RUN` launches it straight into Game mode.
+4. Press Escape to return to the editor. Battery-backed save RAM is flushed
+   first, so `RUN` is safe to use as a normal play-test loop.
+
+An existing cartridge can be opened with `RUN GAME.FCN` from the console, or
+launched directly:
+
+```sh
+fanticon-app /path/to/GAME.FCN
+```
+
+Cartridges launched this way ignore Escape, since there's no editor session to
+return to. To land straight in Game mode instead of the editor on startup, add
+`--game`.
+
+Game mode is hardware-accurate at 320×200; the native editor runs at 640×400
+with an 80×50 character grid. Both are presented with aspect-correct
+letterboxing, scanlines, phosphor beam shaping, and composite color bleed.
+
+## What you get
+
+- **Cycle-accurate NMOS 6502** — all 256 opcodes, including undocumented
+  instructions, dummy reads/writes, and hardware quirks like RESET's
+  seven-cycle sequence, IRQ/NMI polling behavior, RDY stalls, and SO edges.
+  If it runs on real hardware, it should run here.
+- **320×200 indexed video** with tile, sprite, and bitmap modes, dot-timestamped
+  raster events for mid-frame effects, and a CRT presentation pass.
+- **Four-voice audio** — two pulse channels, triangle, and noise, NES-shaped
+  and exactly timed against the CPU clock.
+- **Native development tools** — a full-screen code editor, a macro assembler
+  with Merlin-style syntax, project manifests, and an integrated debugger with
+  breakpoints and raster triggers.
+- **Versioned `.FCN` cartridges** — 4 MiB ROM banking, battery-backed save
+  RAM, and CRC-checked headers.
+- **Cross-platform** — native Windows, Linux, and macOS builds (x86_64 and
+  arm64), plus WebAssembly from the same source.
 
 ## Documentation
 
@@ -45,15 +92,19 @@ manifests, bank-aware assembly, packaging, launching, and debugger requirements.
 The [system-details checklist](documentation/system-details-checklist.md)
 separates frozen v0.1 contracts from remaining implementation work.
 
-## Run the Fanticon host
+## Building from source
 
-The current app host runs a paced 60 Hz emulation loop and opens a resizable
-8:5 virtual display. Game mode remains hardware-accurate at 320×200; native
-Editor mode uses 640×400 with an 80×50 character grid. Both use aspect-correct
-letterboxing, scanlines, phosphor beam shaping, and composite color bleed. On
-launch, a centered Fanticon logo
-appears for five seconds and can be dismissed by keyboard or mouse after a 500 ms
-guard. The native Editor mode command console then appears by default.
+Clone Fanticon with its test fixtures:
+
+```sh
+git clone --recurse-submodules https://github.com/essial/fanticon.git
+```
+
+For an existing checkout, initialize the submodule once:
+
+```sh
+git submodule update --init --depth 1
+```
 
 ```sh
 cargo run --release
@@ -65,60 +116,40 @@ available at `/demos` inside Fanticon while keeping the repository copy
 authoritative and preserving unrelated user files. Set
 `FANTICON_SKIP_CODE_ASSET_SYNC=1` to skip this developer convenience when needed.
 
-Inside Fanticon, `NEW PROJECT`, `BUILD`, and `RUN` create, package, and launch a
-cartridge project. An existing image can be launched with `RUN GAME.FCN`, or
-directly from the host:
-
 ```sh
-cargo run --release -- /path/to/GAME.FCN
-```
-
-Directly launched games ignore Escape. Games launched by Editor `RUN` return to
-the Editor with Escape after flushing battery-backed RAM.
-
-Start explicitly in Game mode instead:
-
-```sh
-cargo run --release -- --game
+cargo run --release -- /path/to/GAME.FCN   # launch a cartridge directly
+cargo run --release -- --game              # start in Game mode
 ```
 
 In VS Code, install the recommended CodeLLDB and rust-analyzer extensions, then
 press F5 and select **Fanticon App (Debug)**. VS Code builds the correct binary
 automatically before opening the app under the debugger.
 
-## Clock and hardware pins
+### Cross-compiling
 
-`Cpu::clock` advances exactly one physical bus cycle and reports the 6502 `SYNC`
-state, instruction completion, and persistent JAM state. `Cpu::step` is the
-convenience API that loops over the same clock engine, so both APIs share identical
-timing.
-
-The bus supplies logical pin levels through `Bus::pins`:
-
-- RESET performs its seven read-cycle sequence and can recover a jammed CPU.
-- IRQ is level-sensitive and uses the interrupt-disable value sampled before the
-  instruction's final cycle, including the NMOS CLI/SEI polling quirks.
-- NMI is falling-edge-sensitive and remains latched until serviced.
-- RDY repeats read cycles without advancing internal state; writes are not stalled.
-- SO is falling-edge-sensitive and sets the overflow flag.
-
-KIL/JAM opcodes enter a persistent state that repeatedly reads `$FFFF` until
-RESET. The optional `step_fast` profiling path is instruction-atomic and bypasses
-external pin handling; console emulation should use `clock` or `step`.
-
-## Build and test
-
-Clone Fanticon with its test fixtures:
+Use ordinary Rust target triples, for example:
 
 ```sh
-git clone --recurse-submodules <fanticon-repository-url>
+cargo build --release --target x86_64-pc-windows-msvc
+cargo build --release --target aarch64-pc-windows-msvc
+cargo build --release --target x86_64-unknown-linux-gnu
+cargo build --release --target aarch64-unknown-linux-gnu
+cargo build --release --target aarch64-apple-darwin
+rustup target add wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown
 ```
 
-For an existing checkout, initialize the submodule once:
+The `cdylib` output is the WebAssembly-facing library while `rlib` is the
+zero-overhead native integration path — build with `--no-default-features` to
+omit all windowing and GPU dependencies if you only need the CPU/VM core.
 
-```sh
-git submodule update --init --depth 1
-```
+CI builds and tests the library on x86_64 Windows, Linux, and macOS, and on
+native arm64 Linux; it cross-compiles and build-checks arm64 Windows, and
+separately compiles the same core for `wasm32-unknown-unknown`. macOS builds
+run on Apple Silicon runners and cover both `aarch64-apple-darwin` and
+`x86_64-apple-darwin`.
+
+### Testing
 
 Ordinary tests automatically use `tests/SingleStepTests/6502/v1`. The 256 opcode
 files are exposed as 256 independently reported tests and run in parallel by
@@ -168,20 +199,7 @@ second `--`. `SINGLESTEP_6502_DIR` remains available as an optional fixture-path
 override. The fixtures are pinned beneath `tests/` as a Git submodule instead of
 being copied into Fanticon's Git history.
 
-## Cross-platform targets
+## License
 
-Use ordinary Rust target triples, for example:
-
-```sh
-cargo build --release --target x86_64-pc-windows-msvc
-cargo build --release --target x86_64-unknown-linux-gnu
-cargo build --release --target aarch64-apple-darwin
-rustup target add wasm32-unknown-unknown
-cargo build --release --target wasm32-unknown-unknown
-```
-
-The `cdylib` output is the WebAssembly-facing library while `rlib` is the
-zero-overhead native integration path.
-
-CI builds and tests the library on Windows, Linux, and macOS, and separately
-compiles the same core for `wasm32-unknown-unknown`.
+Fanticon is dual-licensed under the [MIT License](LICENSE-MIT) or the
+[Apache License, Version 2.0](LICENSE-APACHE), at your option.

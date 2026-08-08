@@ -17,6 +17,11 @@ MAIN=MAIN.ASM
 OUTPUT=MYGAME.FCN
 SAVE_BANKS=0
 MACHINE=1.0
+AUTHOR=YOUR NAME
+DESCRIPTION=A SHORT DESCRIPTION FOR WEB EXPORTS
+ICON=ICON.PNG
+WEB_BACKGROUND=#08080C
+WEB_FOREGROUND=#EEEEEE
 ```
 
 | Key | Rule |
@@ -27,6 +32,11 @@ MACHINE=1.0
 | `OUTPUT` | 8.3 `.FCN` output filename |
 | `SAVE_BANKS` | 0-4 battery-backed 16 KiB banks |
 | `MACHINE` | Required Fanticon hardware version; `1.0` for v0.1 |
+| `AUTHOR` | Optional 1-64 character export author |
+| `DESCRIPTION` | Optional 1-160 character export description |
+| `ICON` | Optional 8.3 PNG path used by web exports and copied beside binaries |
+| `WEB_BACKGROUND` | Optional HTML shell color in `#RRGGBB`; defaults to `#08080C` |
+| `WEB_FOREGROUND` | Optional HTML shell color in `#RRGGBB`; defaults to `#EEEEEE` |
 
 Unknown keys are build errors in manifest version 1. `NEW` creates the manifest
 and generates a cryptographically random, nonzero 64-bit ID once. Ordinary

@@ -28,6 +28,7 @@ jobs:
           stage="fanticon-${version}-windows-x86_64"
           mkdir -p "$stage"
           cp target/dist/fanticon-app.exe "$stage/"
+          cp target/dist/fanticon-export.exe "$stage/"
           cp -r code-assets/demos "$stage/demos"
           cp -r assets/branding "$stage/branding"
           cp README.md "$stage/"
@@ -48,6 +49,7 @@ jobs:
           Remove-Item -Recurse -Force nsis-payload -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path nsis-payload/demos, nsis-payload/branding | Out-Null
           Copy-Item target/dist/fanticon-app.exe nsis-payload/
+          Copy-Item target/dist/fanticon-export.exe nsis-payload/
           Copy-Item README.md nsis-payload/
           Copy-Item -Recurse code-assets/demos/* nsis-payload/demos/
           Copy-Item -Recurse assets/branding/* nsis-payload/branding/
@@ -77,6 +79,7 @@ jobs:
           stage="fanticon-${version}-windows-arm64"
           mkdir -p "$stage"
           cp target/aarch64-pc-windows-msvc/dist/fanticon-app.exe "$stage/"
+          cp target/aarch64-pc-windows-msvc/dist/fanticon-export.exe "$stage/"
           cp -r code-assets/demos "$stage/demos"
           cp -r assets/branding "$stage/branding"
           cp README.md "$stage/"
@@ -97,6 +100,7 @@ jobs:
           Remove-Item -Recurse -Force nsis-payload -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path nsis-payload/demos, nsis-payload/branding | Out-Null
           Copy-Item target/aarch64-pc-windows-msvc/dist/fanticon-app.exe nsis-payload/
+          Copy-Item target/aarch64-pc-windows-msvc/dist/fanticon-export.exe nsis-payload/
           Copy-Item README.md nsis-payload/
           Copy-Item -Recurse code-assets/demos/* nsis-payload/demos/
           Copy-Item -Recurse assets/branding/* nsis-payload/branding/
@@ -124,7 +128,9 @@ jobs:
           stage="fanticon-${version}-linux-x86_64"
           mkdir -p "$stage"
           cp target/dist/fanticon-app "$stage/"
+          cp target/dist/fanticon-export "$stage/"
           chmod +x "$stage/fanticon-app"
+          chmod +x "$stage/fanticon-export"
           cp -r code-assets/demos "$stage/demos"
           cp -r assets/branding "$stage/branding"
           cp README.md "$stage/"
@@ -146,6 +152,7 @@ jobs:
             "$pkgroot/usr/share/doc/fanticon" "$pkgroot/usr/share/applications" \
             "$pkgroot/usr/share/icons/hicolor/256x256/apps"
           install -m 755 target/dist/fanticon-app "$pkgroot/usr/bin/fanticon-app"
+          install -m 755 target/dist/fanticon-export "$pkgroot/usr/bin/fanticon-export"
           cp -r code-assets/demos/. "$pkgroot/usr/share/fanticon/demos/"
           cp -r assets/branding/. "$pkgroot/usr/share/fanticon/branding/"
           cp README.md "$pkgroot/usr/share/doc/fanticon/"
@@ -174,7 +181,9 @@ jobs:
           stage="fanticon-${version}-linux-arm64"
           mkdir -p "$stage"
           cp target/dist/fanticon-app "$stage/"
+          cp target/dist/fanticon-export "$stage/"
           chmod +x "$stage/fanticon-app"
+          chmod +x "$stage/fanticon-export"
           cp -r code-assets/demos "$stage/demos"
           cp -r assets/branding "$stage/branding"
           cp README.md "$stage/"
@@ -196,6 +205,7 @@ jobs:
             "$pkgroot/usr/share/doc/fanticon" "$pkgroot/usr/share/applications" \
             "$pkgroot/usr/share/icons/hicolor/256x256/apps"
           install -m 755 target/dist/fanticon-app "$pkgroot/usr/bin/fanticon-app"
+          install -m 755 target/dist/fanticon-export "$pkgroot/usr/bin/fanticon-export"
           cp -r code-assets/demos/. "$pkgroot/usr/share/fanticon/demos/"
           cp -r assets/branding/. "$pkgroot/usr/share/fanticon/branding/"
           cp README.md "$pkgroot/usr/share/doc/fanticon/"
@@ -226,7 +236,11 @@ jobs:
           lipo -create -output build/fanticon-app \
             target/aarch64-apple-darwin/dist/fanticon-app \
             target/x86_64-apple-darwin/dist/fanticon-app
+          lipo -create -output build/fanticon-export \
+            target/aarch64-apple-darwin/dist/fanticon-export \
+            target/x86_64-apple-darwin/dist/fanticon-export
           chmod +x build/fanticon-app
+          chmod +x build/fanticon-export
 
       - name: Package portable zip
         run: |
@@ -235,6 +249,7 @@ jobs:
           stage="fanticon-${version}-macos-universal"
           mkdir -p "$stage"
           cp build/fanticon-app "$stage/"
+          cp build/fanticon-export "$stage/"
           cp -r code-assets/demos "$stage/demos"
           cp -r assets/branding "$stage/branding"
           cp README.md "$stage/"
@@ -253,7 +268,9 @@ jobs:
           rm -rf "$app" dmg-root
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           cp build/fanticon-app "$app/Contents/MacOS/fanticon-app"
+          cp build/fanticon-export "$app/Contents/MacOS/fanticon-export"
           chmod +x "$app/Contents/MacOS/fanticon-app"
+          chmod +x "$app/Contents/MacOS/fanticon-export"
           cp assets/branding/Fanticon.icns "$app/Contents/Resources/Fanticon.icns"
           sed "s/__VERSION__/${version}/" packaging/macos/Info.plist.template > "$app/Contents/Info.plist"
           mkdir -p dmg-root
@@ -267,9 +284,210 @@ jobs:
           path: fanticon-*-macos.dmg
           if-no-files-found: error
 
+  runtime-kit:
+    needs: [windows-x86_64, windows-arm64, linux-x86_64, linux-arm64, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x86_64
+          path: inputs/windows-x86_64
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-arm64
+          path: inputs/windows-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-x86_64
+          path: inputs/linux-x86_64
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-arm64
+          path: inputs/linux-arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-universal
+          path: inputs/macos
+
+      - name: Build generic web player
+        run: cargo build --profile dist --locked --target wasm32-unknown-unknown --bin fanticon-app
+      - name: Install matching wasm-bindgen
+        run: cargo install wasm-bindgen-cli --version 0.2.126 --locked
+      - name: Assemble runtime kit
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          root="fanticon-runtime-kit-${version}/runtimes"
+          mkdir -p "$root"/{web,windows-x86_64,windows-arm64,linux-x86_64,linux-arm64,macos-universal,licenses}
+          unzip -q inputs/windows-x86_64/*.zip -d unpack-win-x64
+          unzip -q inputs/windows-arm64/*.zip -d unpack-win-arm
+          tar -xzf inputs/linux-x86_64/*.tar.gz -C inputs/linux-x86_64
+          tar -xzf inputs/linux-arm64/*.tar.gz -C inputs/linux-arm64
+          unzip -q inputs/macos/*.zip -d unpack-macos
+          cp unpack-win-x64/*/fanticon-app.exe "$root/windows-x86_64/fanticon-player.exe"
+          cp unpack-win-arm/*/fanticon-app.exe "$root/windows-arm64/fanticon-player.exe"
+          cp inputs/linux-x86_64/fanticon-*/fanticon-app "$root/linux-x86_64/fanticon-player"
+          cp inputs/linux-arm64/fanticon-*/fanticon-app "$root/linux-arm64/fanticon-player"
+          cp unpack-macos/*/fanticon-app "$root/macos-universal/fanticon-player"
+          wasm-bindgen --target web --no-typescript --out-name fanticon --out-dir "$root/web" \
+            target/wasm32-unknown-unknown/dist/fanticon-app.wasm
+          cp LICENSE-MIT LICENSE-APACHE "$root/licenses/"
+          printf 'FANTICON_RUNTIME_KIT=1\nVERSION=%s\n' "$version" > "$root/manifest.txt"
+          FANTICON_SKIP_CODE_ASSET_SYNC=1 cargo run --locked --bin fanticon-export -- \
+            verify --runtime-kit "$root"
+          cp documentation/exporting.md "fanticon-runtime-kit-${version}/README.md"
+          zip -r "fanticon-runtime-kit-${version}.zip" "fanticon-runtime-kit-${version}" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-kit
+          path: fanticon-runtime-kit-*.zip
+          if-no-files-found: error
+
+  bundle-windows:
+    needs: [runtime-kit]
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: input
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-kit
+          path: kit
+      - name: Add every runtime to portable archive and installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          Expand-Archive (Get-ChildItem input/*.zip | Select-Object -First 1) unpack
+          Expand-Archive (Get-ChildItem kit/*.zip | Select-Object -First 1) kit-unpacked
+          $stage = Get-ChildItem unpack -Directory | Select-Object -First 1
+          $runtimes = Get-ChildItem kit-unpacked -Directory -Recurse | Where-Object Name -eq "runtimes" | Select-Object -First 1
+          Copy-Item -Recurse $runtimes.FullName "$($stage.FullName)/runtimes"
+          if (-not (Test-Path "$($stage.FullName)/runtimes/web/fanticon_bg.wasm")) { throw "portable runtime kit is incomplete" }
+          New-Item -ItemType Directory -Force output | Out-Null
+          Compress-Archive -Path $stage.FullName -DestinationPath "output/fanticon-$version-windows-${{ matrix.arch }}.zip"
+
+          New-Item -ItemType Directory -Force nsis-payload | Out-Null
+          Copy-Item -Recurse "$($stage.FullName)/*" nsis-payload/
+          choco install nsis -y --no-progress | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed with exit code $LASTEXITCODE" }
+          & "C:\Program Files (x86)\NSIS\makensis.exe" "/DVERSION=$version" "/DARCH=${{ matrix.arch }}" "/DWITH_RUNTIMES=1" packaging\windows\fanticon.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
+          Move-Item "Fanticon-Setup-$version-${{ matrix.arch }}.exe" output/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-contained-windows-${{ matrix.arch }}
+          path: output/*
+          if-no-files-found: error
+
+  bundle-linux:
+    needs: [runtime-kit]
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            deb_arch: amd64
+          - arch: arm64
+            deb_arch: arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: portable
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}-installer
+          path: installer
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-kit
+          path: kit
+      - name: Add every runtime to portable archive and deb
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          mkdir -p unpack kit-unpacked output
+          tar -xzf portable/*.tar.gz -C unpack
+          unzip -q kit/*.zip -d kit-unpacked
+          stage="$(find unpack -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          runtimes="$(find kit-unpacked -type d -name runtimes -print -quit)"
+          cp -R "$runtimes" "$stage/runtimes"
+          tar -czf "output/fanticon-${version}-linux-${{ matrix.arch }}.tar.gz" -C unpack "$(basename "$stage")"
+
+          dpkg-deb -R installer/*.deb deb-root
+          mkdir -p deb-root/usr/lib/fanticon
+          cp -R "$runtimes" deb-root/usr/lib/fanticon/runtimes
+          dpkg-deb --build --root-owner-group deb-root "output/fanticon_${version}_${{ matrix.deb_arch }}.deb"
+          test -f "$stage/runtimes/web/fanticon_bg.wasm"
+          dpkg-deb -c "output/fanticon_${version}_${{ matrix.deb_arch }}.deb" > deb-contents.txt
+          grep -q 'usr/lib/fanticon/runtimes/manifest.txt' deb-contents.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-contained-linux-${{ matrix.arch }}
+          path: output/*
+          if-no-files-found: error
+
+  bundle-macos:
+    needs: [runtime-kit]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-universal
+          path: portable
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-kit
+          path: kit
+      - name: Add every runtime to portable archive and DMG
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          mkdir -p unpack kit-unpacked output
+          unzip -q portable/*.zip -d unpack
+          unzip -q kit/*.zip -d kit-unpacked
+          stage="$(find unpack -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          runtimes="$(find kit-unpacked -type d -name runtimes -print -quit)"
+          cp -R "$runtimes" "$stage/runtimes"
+          (cd unpack && zip -r "../output/fanticon-${version}-macos-universal.zip" "$(basename "$stage")" >/dev/null)
+
+          app="Fanticon.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "$stage/fanticon-app" "$app/Contents/MacOS/fanticon-app"
+          cp "$stage/fanticon-export" "$app/Contents/MacOS/fanticon-export"
+          cp -R "$runtimes" "$app/Contents/MacOS/runtimes"
+          chmod +x "$app/Contents/MacOS/fanticon-app" "$app/Contents/MacOS/fanticon-export"
+          cp assets/branding/Fanticon.icns "$app/Contents/Resources/Fanticon.icns"
+          sed "s/__VERSION__/${version}/" packaging/macos/Info.plist.template > "$app/Contents/Info.plist"
+          mkdir -p dmg-root
+          cp -R "$app" dmg-root/
+          cp -R code-assets/demos dmg-root/Demos
+          ln -s /Applications dmg-root/Applications
+          hdiutil create -volname "Fanticon" -srcfolder dmg-root -ov -format UDZO "output/fanticon-${version}-macos.dmg"
+          test -f "$stage/runtimes/web/fanticon_bg.wasm"
+          test -f "$app/Contents/MacOS/runtimes/manifest.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: self-contained-macos
+          path: output/*
+          if-no-files-found: error
+
   release:
     if: github.ref_type == 'tag'
-    needs: [windows-x86_64, windows-arm64, linux-x86_64, linux-arm64, macos]
+    needs: [bundle-windows, bundle-linux, bundle-macos, runtime-kit]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -283,16 +501,12 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "${{ github.ref_name }}" \
-            dist/windows-x86_64/*.zip \
-            dist/windows-x86_64-installer/*.exe \
-            dist/windows-arm64/*.zip \
-            dist/windows-arm64-installer/*.exe \
-            dist/linux-x86_64/*.tar.gz \
-            dist/linux-x86_64-installer/*.deb \
-            dist/linux-arm64/*.tar.gz \
-            dist/linux-arm64-installer/*.deb \
-            dist/macos-universal/*.zip \
-            dist/macos-installer/*.dmg \
+            dist/self-contained-windows-x86_64/* \
+            dist/self-contained-windows-arm64/* \
+            dist/self-contained-linux-x86_64/* \
+            dist/self-contained-linux-arm64/* \
+            dist/self-contained-macos/* \
+            dist/runtime-kit/*.zip \
             --repo "${{ github.repository }}" \
             --title "Fanticon ${{ github.ref_name }}" \
             --generate-notes

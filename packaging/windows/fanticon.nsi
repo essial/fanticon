@@ -6,9 +6,11 @@
 ; Expects a "nsis-payload" directory at the repository root (created by the
 ; release workflow) containing:
 ;   fanticon-app.exe
+;   fanticon-export.exe
 ;   README.md
 ;   demos\...
 ;   branding\...
+;   runtimes\...
 ;
 ; NSIS resolves File/Icon source paths relative to this .nsi script's own
 ; directory (packaging\windows), not the working directory makensis was
@@ -48,11 +50,16 @@ SetCompressor /SOLID lzma
 Section "Fanticon" SEC_APP
   SetOutPath "$INSTDIR"
   File "..\..\nsis-payload\fanticon-app.exe"
+  File "..\..\nsis-payload\fanticon-export.exe"
   File "..\..\nsis-payload\README.md"
   SetOutPath "$INSTDIR\demos"
   File /r "..\..\nsis-payload\demos\*.*"
   SetOutPath "$INSTDIR\branding"
   File /r "..\..\nsis-payload\branding\*.*"
+  !ifdef WITH_RUNTIMES
+    SetOutPath "$INSTDIR\runtimes"
+    File /r "..\..\nsis-payload\runtimes\*.*"
+  !endif
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr HKLM "Software\Fanticon" "InstallDir" "$INSTDIR"
@@ -71,9 +78,11 @@ SectionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\fanticon-app.exe"
+  Delete "$INSTDIR\fanticon-export.exe"
   Delete "$INSTDIR\README.md"
   RMDir /r "$INSTDIR\demos"
   RMDir /r "$INSTDIR\branding"
+  RMDir /r "$INSTDIR\runtimes"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
 

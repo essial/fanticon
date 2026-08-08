@@ -837,11 +837,19 @@ fn initial_mode() -> AppMode {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = create_event_loop()?;
     let mut app = FanticonApp::new(event_loop.create_proxy(), initial_mode());
-    if let Some(path) = direct_cartridge_argument() {
+    if let Some(bytes) = fanticon::export::read_standalone_cartridge(&std::env::current_exe()?)? {
+        app.start_direct_game(load_embedded_cartridge(&bytes)?);
+    } else if let Some(path) = direct_cartridge_argument() {
         app.start_direct_game(load_direct_cartridge(&path)?);
     }
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_embedded_cartridge(bytes: &[u8]) -> Result<DirectGameLaunch, Box<dyn std::error::Error>> {
+    let executable = std::env::current_exe()?;
+    load_direct_cartridge_bytes(bytes, executable.with_extension("SAV"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -856,11 +864,18 @@ fn direct_cartridge_argument() -> Option<PathBuf> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_direct_cartridge(path: &Path) -> Result<DirectGameLaunch, Box<dyn std::error::Error>> {
-    let cartridge = fanticon::cartridge::Cartridge::from_bytes(&std::fs::read(path)?)?;
+    load_direct_cartridge_bytes(&std::fs::read(path)?, path.with_extension("SAV"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_direct_cartridge_bytes(
+    bytes: &[u8],
+    save_path: PathBuf,
+) -> Result<DirectGameLaunch, Box<dyn std::error::Error>> {
+    let cartridge = fanticon::cartridge::Cartridge::from_bytes(bytes)?;
     if cartridge.save_banks == 0 {
         return Ok(DirectGameLaunch { cartridge, save_path: None, save_ram: Vec::new() });
     }
-    let save_path = path.with_extension("SAV");
     let expected = usize::from(cartridge.save_banks) * fanticon::machine::BANK_SIZE;
     let save_ram = match std::fs::read(&save_path) {
         Ok(bytes) => {
@@ -898,11 +913,58 @@ fn write_native_save(path: &Path, cartridge_id: u64, ram: &[u8]) -> Result<(), S
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    let deferred = web_sys::window().is_some_and(|window| {
+        js_sys::Reflect::get(&window, &"FANTICON_DEFER_START".into())
+            .ok()
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    });
+    if deferred {
+        return;
+    }
+    wasm_bindgen_futures::spawn_local(async move {
+        let web_cartridge = fetch_web_cartridge().await;
+        start_web_app(web_cartridge);
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn start_fanticon(cartridge: js_sys::Uint8Array) {
+    start_web_app(Some(cartridge.to_vec()));
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start_web_app(web_cartridge: Option<Vec<u8>>) {
     use winit::platform::web::EventLoopExtWebSys;
 
     let event_loop = create_event_loop().expect("create Fanticon event loop");
-    let app = FanticonApp::new(event_loop.create_proxy(), initial_mode());
+    let mut app = FanticonApp::new(event_loop.create_proxy(), initial_mode());
+    if let Some(bytes) = web_cartridge {
+        let filesystem = host::shared_filesystem();
+        let launch = host::load_cartridge_bytes(&filesystem, "game.fcn", &bytes).unwrap_or_else(
+            |diagnostics| panic!("exported web cartridge is invalid: {diagnostics:?}"),
+        );
+        app.start_game(launch, false);
+    }
     event_loop.spawn_app(app);
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_web_cartridge() -> Option<Vec<u8>> {
+    use wasm_bindgen::JsCast;
+
+    let window = web_sys::window()?;
+    let response = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("game.fcn"))
+        .await
+        .ok()?
+        .dyn_into::<web_sys::Response>()
+        .ok()?;
+    if !response.ok() {
+        return None;
+    }
+    let buffer = wasm_bindgen_futures::JsFuture::from(response.array_buffer().ok()?).await.ok()?;
+    Some(js_sys::Uint8Array::new(&buffer).to_vec())
 }
 
 #[cfg(target_arch = "wasm32")]

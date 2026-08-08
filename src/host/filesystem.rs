@@ -257,6 +257,23 @@ impl ConsoleFilesystem {
         }
     }
 
+    /// Resolve a console path for a host-side tool while retaining the same
+    /// sandbox and 8.3 validation. The final component may not exist yet.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn host_path(&self, path: &str) -> Result<PathBuf, String> {
+        let requested = self.normalize_non_root(path)?;
+        let Backend::Native { root } = &self.backend else {
+            return Err("Host export paths are unavailable".to_owned());
+        };
+        let parent = canonical_directory(root, &requested[..requested.len() - 1])?;
+        let name = requested.last().expect("non-root path");
+        let resolved = case_insensitive_child(&parent, name)?.unwrap_or_else(|| parent.join(name));
+        if !resolved.starts_with(root) {
+            return Err("Cannot leave root".to_owned());
+        }
+        Ok(resolved)
+    }
+
     pub fn write_text(&mut self, path: &str, text: &str) -> Result<(), String> {
         self.write_binary(path, text.as_bytes())
     }

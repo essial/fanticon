@@ -7,6 +7,7 @@ use super::builder::{
 use super::character_rom::{
     CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH, configure_text_gradient, gradient_color,
 };
+use super::exporter::{ExportTarget, export_project};
 use super::filesystem::{DirectoryEntry, SharedFilesystem, shared_filesystem};
 use super::help::{HelpCategory, format_guide_body, shared_help_index};
 use super::nsf_player::{MusicCommand, import_nsf_to_mus};
@@ -214,7 +215,7 @@ impl Terminal {
             "HELP" if arguments.is_empty() => {
                 self.write("help cls mode editor game edit new exit\n");
                 self.write("echo version color cd mkdir\n");
-                self.write("rmdir rm del dir ls asm build run dump\n");
+                self.write("rmdir rm del dir ls asm build run export dump\n");
                 self.write("playnsf nsfplay nsfpause nsfstop\n");
                 self.write("nsfnext nsfprev nsfloop nsfinfo\n");
                 self.write("nsf2mus input.nsf output.mus [track]\n");
@@ -260,6 +261,10 @@ impl Terminal {
             "ASM" => self.build_raw(arguments),
             "BUILD" => self.build(arguments),
             "RUN" => self.run(arguments),
+            "EXPORT" => {
+                self.export(arguments);
+                TerminalAction::None
+            }
             "PLAYNSF" => self.play_nsf(arguments),
             "NSF2MUS" => {
                 self.import_nsf(arguments);
@@ -470,6 +475,28 @@ impl Terminal {
                 self.write_diagnostics(diagnostics);
                 TerminalAction::None
             }
+        }
+    }
+
+    fn export(&mut self, arguments: &str) {
+        let fields = arguments.split_ascii_whitespace().collect::<Vec<_>>();
+        if fields.is_empty() || fields.len() > 2 {
+            self.write_error("Usage: export target [output]");
+            return;
+        }
+        let target = match ExportTarget::parse(fields[0]) {
+            Ok(target) => target,
+            Err(error) => {
+                self.write_error(&error);
+                return;
+            }
+        };
+        match export_project(&self.filesystem, target, fields.get(1).copied()) {
+            Ok(message) => {
+                self.write(&message);
+                self.newline();
+            }
+            Err(error) => self.write_error(&error),
         }
     }
 

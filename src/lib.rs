@@ -5,6 +5,8 @@ pub mod audio;
 pub mod cartridge;
 mod cpu;
 pub mod debugger;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod export;
 pub mod machine;
 pub mod project;
 pub mod system;

@@ -30,6 +30,13 @@ Launching Fanticon drops you into the native editor's command console.
 4. Press Escape to return to the editor. Battery-backed save RAM is flushed
    first, so `RUN` is safe to use as a normal play-test loop.
 
+When the game is ready to share, the bundled `fanticon-export` tool produces a
+browser player or a standalone Windows, Linux, or macOS binary from the official
+prebuilt runtime kit. Exporting is toolchain-free and cross-platform: creators
+do not need Rust, WebAssembly tools, platform SDKs, or the target operating
+system. Every official installer and portable archive includes all target
+runtimes. See the [export guide](documentation/exporting.md).
+
 An existing cartridge can be opened with `RUN GAME.FCN` from the console, or
 launched directly:
 
@@ -88,6 +95,8 @@ The [memory-map quick reference](documentation/memory-map.md) provides visual CP
 and I/O maps, VRAM layouts, register addresses, bit fields, and address formulas.
 The [cartridge format](documentation/cartridge-format.md) specifies `.FCN`
 cartridges, 4 MiB ROM banking, battery-backed RAM, and `.SAV` persistence. The
+[export guide](documentation/exporting.md) covers toolchain-free HTML and native
+standalone builds for every supported platform. The
 [cartridge-project guide](documentation/cartridge-projects.md) specifies
 manifests, bank-aware assembly, packaging, launching, and debugger requirements.
 The [system-details checklist](documentation/system-details-checklist.md)

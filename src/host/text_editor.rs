@@ -31,6 +31,7 @@ use super::{
         SHADE_LIGHT, SHADE_MEDIUM, SYMBOL_ARROW_DOWN, SYMBOL_ARROW_RIGHT, SYMBOL_ARROW_UP,
         SYMBOL_BUSY, SYMBOL_CHECK, SYMBOL_CROSS,
     },
+    exporter::{ExportTarget, export_project},
     filesystem::{ConsoleFilesystem, SharedFilesystem},
     graphics_editor::{DEFAULT_PALETTE_FILE, GraphicsEditor},
     music_editor::MusicEditor,
@@ -56,6 +57,8 @@ const SEARCH_RESULTS_VISIBLE: usize = SEARCH_RESULTS_HEIGHT - 5;
 const BANK_USAGE_WIDTH: usize = 44;
 const BANK_USAGE_HEIGHT: usize = 20;
 const BANK_USAGE_VISIBLE: usize = BANK_USAGE_HEIGHT - 6;
+const EXPORT_DIALOG_WIDTH: usize = 30;
+const EXPORT_DIALOG_HEIGHT: usize = 13;
 const HELP_X: usize = 2;
 const HELP_Y: usize = 3;
 const HELP_WIDTH: usize = COLUMNS - 4;
@@ -329,6 +332,13 @@ enum Overlay {
     BankUsage {
         entries: Vec<BankUsage>,
         scroll: usize,
+    },
+    /// Lets the user check any combination of `ExportTarget::ALL` before
+    /// running the export, instead of picking exactly one target per menu
+    /// click.
+    ExportDialog {
+        selected: [bool; ExportTarget::ALL.len()],
+        cursor: usize,
     },
 }
 
@@ -1627,6 +1637,21 @@ impl TextEditor {
             Overlay::HelpFinder { .. } => return EditorAction::None,
             Overlay::BankUsage { .. } => {
                 self.overlay = Overlay::None;
+                return EditorAction::None;
+            }
+            Overlay::ExportDialog { .. } => {
+                let dialog_x = (COLUMNS - EXPORT_DIALOG_WIDTH) / 2;
+                let dialog_y = (ROWS - EXPORT_DIALOG_HEIGHT) / 2;
+                let index = cell_y
+                    .checked_sub(dialog_y + 2)
+                    .filter(|index| *index < ExportTarget::ALL.len())
+                    .filter(|_| cell_x > dialog_x && cell_x < dialog_x + EXPORT_DIALOG_WIDTH - 1);
+                if let Some(index) = index
+                    && let Overlay::ExportDialog { selected, cursor } = &mut self.overlay
+                {
+                    selected[index] = !selected[index];
+                    *cursor = index;
+                }
                 return EditorAction::None;
             }
             Overlay::None => {}
@@ -2992,6 +3017,39 @@ impl TextEditor {
             }
             return EditorAction::None;
         }
+        if matches!(self.overlay, Overlay::ExportDialog { .. }) {
+            let mut submit = None;
+            if let Overlay::ExportDialog { selected, cursor } = &mut self.overlay {
+                match key {
+                    Key::Named(NamedKey::Escape) => self.overlay = Overlay::None,
+                    Key::Named(NamedKey::ArrowUp) => *cursor = cursor.saturating_sub(1),
+                    Key::Named(NamedKey::ArrowDown) => {
+                        *cursor = (*cursor + 1).min(selected.len() - 1);
+                    }
+                    Key::Named(NamedKey::Space) => selected[*cursor] = !selected[*cursor],
+                    Key::Named(NamedKey::Enter) => {
+                        let targets: Vec<ExportTarget> = ExportTarget::ALL
+                            .iter()
+                            .zip(selected.iter())
+                            .filter_map(|(target, checked)| checked.then_some(*target))
+                            .collect();
+                        if !targets.is_empty() {
+                            submit = Some(targets);
+                        }
+                    }
+                    Key::Character(text) if text.eq_ignore_ascii_case("a") => {
+                        let all_checked = selected.iter().all(|checked| *checked);
+                        selected.iter_mut().for_each(|checked| *checked = !all_checked);
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(targets) = submit {
+                self.overlay = Overlay::None;
+                self.start_export(&targets);
+            }
+            return EditorAction::None;
+        }
 
         if matches!(self.overlay, Overlay::SearchPrompt { .. }) {
             let mut submit = None;
@@ -3164,7 +3222,8 @@ impl TextEditor {
             | Overlay::DebugPrompt { .. }
             | Overlay::About { .. }
             | Overlay::HelpFinder { .. }
-            | Overlay::BankUsage { .. } => {}
+            | Overlay::BankUsage { .. }
+            | Overlay::ExportDialog { .. } => {}
         }
         EditorAction::None
     }
@@ -3257,6 +3316,7 @@ impl TextEditor {
             (MenuKind::Build, 3) => self.move_diagnostic(true),
             (MenuKind::Build, 4) => self.move_diagnostic(false),
             (MenuKind::Build, 6) => self.start_bank_usage(),
+            (MenuKind::Build, 8) => self.open_export_dialog(),
             (MenuKind::Debug, 0) => {
                 if self.debug_active && self.debug_snapshot.is_some() {
                     self.debug_snapshot = None;
@@ -3607,6 +3667,32 @@ impl TextEditor {
                     );
                 }
                 put_text(cells, x + 2, y + BANK_USAGE_HEIGHT - 2, "Enter/Esc=Close");
+            }
+            Overlay::ExportDialog { selected, cursor } => {
+                let x = (COLUMNS - EXPORT_DIALOG_WIDTH) / 2;
+                let y = (ROWS - EXPORT_DIALOG_HEIGHT) / 2;
+                draw_dialog(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    background_gradients,
+                    inverse,
+                    CellRect { x, y, width: EXPORT_DIALOG_WIDTH, height: EXPORT_DIALOG_HEIGHT },
+                    style,
+                );
+                put_text_width(cells, x + 3, y, "Export", EXPORT_DIALOG_WIDTH - 6);
+                for (index, target) in ExportTarget::ALL.iter().enumerate() {
+                    let row = y + 2 + index;
+                    let mark = if selected[index] { 'X' } else { ' ' };
+                    let line = format!("[{mark}] {}", target.label());
+                    put_text_width(cells, x + 3, row, &line, EXPORT_DIALOG_WIDTH - 6);
+                    if index == *cursor {
+                        inverse[row * COLUMNS + x + 1..row * COLUMNS + x + EXPORT_DIALOG_WIDTH - 1]
+                            .fill(true);
+                    }
+                }
+                put_text(cells, x + 3, y + EXPORT_DIALOG_HEIGHT - 4, "Space=Toggle  A=All");
+                put_text(cells, x + 3, y + EXPORT_DIALOG_HEIGHT - 3, "Enter=Export  Esc=Cancel");
             }
             Overlay::About { .. } => {
                 let x = (COLUMNS - ABOUT_WIDTH) / 2;
@@ -3977,6 +4063,32 @@ impl TextEditor {
         self.pending_bank_usage = true;
         self.build_and_run = false;
         self.overlay = Overlay::Building { frames_remaining: BUILD_PROGRESS_FRAMES };
+    }
+
+    fn open_export_dialog(&mut self) {
+        self.overlay =
+            Overlay::ExportDialog { selected: [false; ExportTarget::ALL.len()], cursor: 0 };
+    }
+
+    fn start_export(&mut self, targets: &[ExportTarget]) {
+        if let Err(error) = self.save_named_tabs() {
+            self.show_build_message("Export Error", &[error]);
+            return;
+        }
+        let mut had_error = false;
+        let mut lines = Vec::new();
+        for &target in targets {
+            match export_project(&self.filesystem, target, None) {
+                Ok(message) => lines.push(message),
+                Err(error) => {
+                    had_error = true;
+                    lines.extend(wrap_dialog_text(&format!("{}: {error}", target.label()), 34));
+                }
+            }
+        }
+        self.refresh_project_browser();
+        let title = if had_error { "Export Error" } else { "Export Complete" };
+        self.show_build_message(title, &lines);
     }
 
     fn perform_build(&mut self) {
@@ -5099,9 +5211,17 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "Back",
             "Forward",
         ],
-        MenuKind::Build => {
-            &["Assemble", "Build & Run", "", "Next Error", "Prev Error", "", "ROM Usage"]
-        }
+        MenuKind::Build => &[
+            "Assemble",
+            "Build & Run",
+            "",
+            "Next Error",
+            "Prev Error",
+            "",
+            "ROM Usage",
+            "",
+            "Export...",
+        ],
         MenuKind::Debug => &[
             "Start/Continue",
             "Stop",
@@ -5189,9 +5309,17 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "Back      K",
             "Forward   L",
         ],
-        MenuKind::Build => {
-            &["Assemble  B", "Build+Run F5", "", "Next Err  N", "Prev Err  P", "", "ROM Usage  U"]
-        }
+        MenuKind::Build => &[
+            "Assemble  B",
+            "Build+Run F5",
+            "",
+            "Next Err  N",
+            "Prev Err  P",
+            "",
+            "ROM Usage U",
+            "",
+            "Export...  E",
+        ],
         MenuKind::Debug => &[
             "Continue             F5",
             "Stop           Shift+F5",
@@ -5250,7 +5378,7 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
             (12, "k"),
             (13, "l"),
         ],
-        MenuKind::Build => &[(0, "b"), (1, "r"), (3, "n"), (4, "p"), (6, "u")],
+        MenuKind::Build => &[(0, "b"), (1, "r"), (3, "n"), (4, "p"), (6, "u"), (8, "e")],
         MenuKind::Debug => {
             &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c"), (15, "d")]
         }
@@ -8518,6 +8646,92 @@ mod tests {
             Overlay::Message { ref title, ref lines }
                 if title == "Build Error" && lines[0].contains("ROM Bank Usage")
         ));
+    }
+
+    #[test]
+    fn export_menu_item_opens_a_checkbox_dialog_for_every_target() {
+        let mut editor =
+            TextEditor::new(shared_filesystem(), shared_ui_colors(), Some("main.asm".to_owned()));
+
+        editor.activate_menu(MenuKind::Build, 8);
+
+        let Overlay::ExportDialog { selected, cursor } = &editor.overlay else {
+            panic!("expected the export dialog to open");
+        };
+        assert_eq!(*cursor, 0);
+        assert_eq!(selected.len(), ExportTarget::ALL.len());
+        assert!(selected.iter().all(|checked| !checked));
+    }
+
+    #[test]
+    fn export_dialog_toggles_track_one_multiple_or_all_targets() {
+        let mut editor =
+            TextEditor::new(shared_filesystem(), shared_ui_colors(), Some("main.asm".to_owned()));
+        editor.open_export_dialog();
+
+        // Checking a single target.
+        editor.handle_overlay_key(&Key::Named(NamedKey::Space), ModifiersState::empty());
+        let Overlay::ExportDialog { selected, .. } = &editor.overlay else { unreachable!() };
+        assert_eq!(selected[0], true);
+        assert!(selected[1..].iter().all(|checked| !checked));
+
+        // Checking a second, unrelated target leaves the first checked.
+        editor.handle_overlay_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty());
+        editor.handle_overlay_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty());
+        editor.handle_overlay_key(&Key::Named(NamedKey::Space), ModifiersState::empty());
+        let Overlay::ExportDialog { selected, cursor } = &editor.overlay else { unreachable!() };
+        assert_eq!(*cursor, 2);
+        assert_eq!(*selected, [true, false, true, false, false, false]);
+
+        // "A" selects every remaining target.
+        editor.handle_overlay_key(&Key::Character("a".into()), ModifiersState::empty());
+        let Overlay::ExportDialog { selected, .. } = &editor.overlay else { unreachable!() };
+        assert!(selected.iter().all(|checked| *checked));
+
+        // "A" again clears every target back out.
+        editor.handle_overlay_key(&Key::Character("A".into()), ModifiersState::empty());
+        let Overlay::ExportDialog { selected, .. } = &editor.overlay else { unreachable!() };
+        assert!(selected.iter().all(|checked| !checked));
+    }
+
+    #[test]
+    fn export_dialog_enter_exports_every_checked_target_and_ignores_an_empty_selection() {
+        let mut editor =
+            TextEditor::new(shared_filesystem(), shared_ui_colors(), Some("main.asm".to_owned()));
+        editor.open_export_dialog();
+
+        // Enter with nothing checked must not close the dialog or run anything.
+        editor.handle_overlay_key(&Key::Named(NamedKey::Enter), ModifiersState::empty());
+        assert!(matches!(editor.overlay, Overlay::ExportDialog { .. }));
+
+        // Check Web and Windows x64, then confirm.
+        editor.handle_overlay_key(&Key::Named(NamedKey::Space), ModifiersState::empty());
+        editor.handle_overlay_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty());
+        editor.handle_overlay_key(&Key::Named(NamedKey::Space), ModifiersState::empty());
+        editor.handle_overlay_key(&Key::Named(NamedKey::Enter), ModifiersState::empty());
+
+        // No runtime kit is bundled in the test environment, so every export
+        // fails, but both selected targets must still have been attempted
+        // (proving the dialog drives all checked targets, not just one).
+        let Overlay::Message { title, lines } = &editor.overlay else {
+            panic!("expected an export result message");
+        };
+        assert_eq!(title, "Export Error");
+        let combined = lines.join(" ");
+        assert!(combined.contains(ExportTarget::Html.label()));
+        assert!(combined.contains(ExportTarget::WindowsX86_64.label()));
+    }
+
+    #[test]
+    fn escape_closes_the_export_dialog_without_exporting() {
+        let mut editor =
+            TextEditor::new(shared_filesystem(), shared_ui_colors(), Some("main.asm".to_owned()));
+        editor.open_export_dialog();
+        editor.handle_overlay_key(&Key::Named(NamedKey::Space), ModifiersState::empty());
+
+        editor.handle_overlay_key(&Key::Named(NamedKey::Escape), ModifiersState::empty());
+
+        assert!(matches!(editor.overlay, Overlay::None));
     }
 
     #[test]

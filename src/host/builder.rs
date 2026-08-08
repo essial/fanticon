@@ -81,7 +81,17 @@ pub fn load_cartridge(
     let diagnostic =
         |message| vec![Diagnostic { source: path.to_owned(), line: 1, column: 1, message }];
     let bytes = filesystem.borrow().read_binary(path).map_err(diagnostic)?;
-    let cartridge = Cartridge::from_bytes(&bytes).map_err(|error| diagnostic(error.0))?;
+    load_cartridge_bytes(filesystem, path, &bytes)
+}
+
+pub fn load_cartridge_bytes(
+    filesystem: &SharedFilesystem,
+    path: &str,
+    bytes: &[u8],
+) -> Result<GameLaunch, Vec<Diagnostic>> {
+    let diagnostic =
+        |message| vec![Diagnostic { source: path.to_owned(), line: 1, column: 1, message }];
+    let cartridge = Cartridge::from_bytes(bytes).map_err(|error| diagnostic(error.0))?;
     let save_path = (cartridge.save_banks != 0).then(|| replace_extension(path, "sav"));
     let expected = usize::from(cartridge.save_banks) * fanticon::machine::BANK_SIZE;
     let save_ram = if let Some(save_path) = &save_path {
@@ -103,7 +113,7 @@ pub fn load_cartridge(
                     ram
                 }
             }
-            Err(message) if message == "File not found" => vec![0; expected],
+            Err(message) if message.eq_ignore_ascii_case("File not found") => vec![0; expected],
             Err(message) => return Err(diagnostic(message)),
         }
     } else {

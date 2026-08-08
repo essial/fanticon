@@ -7,19 +7,50 @@ on:
 jobs:
   native:
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+            rust_target: ""
+            target_flag: ""
+            run_tests: true
+          - name: windows-arm64
+            os: windows-latest
+            rust_target: aarch64-pc-windows-msvc
+            target_flag: "--target aarch64-pc-windows-msvc"
+            # No native arm64 Windows runner exists, so this is a
+            # cross-compile build/bench-compile check only, not a test run.
+            run_tests: false
+          - name: linux-x86_64
+            os: ubuntu-latest
+            rust_target: ""
+            target_flag: ""
+            run_tests: true
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            rust_target: ""
+            target_flag: ""
+            run_tests: true
+          - name: macos
+            os: macos-latest
+            rust_target: ""
+            target_flag: ""
+            run_tests: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
-      - run: cargo test --release --locked
-      - run: cargo build --release --locked
-      - run: cargo bench --no-default-features --bench vm --no-run --locked
+      - if: matrix.run_tests
+        run: cargo test --release --locked ${{ matrix.target_flag }}
+      - run: cargo build --release --locked ${{ matrix.target_flag }}
+      - run: cargo bench --no-default-features --bench vm --no-run --locked ${{ matrix.target_flag }}
 
   web:
     runs-on: ubuntu-latest

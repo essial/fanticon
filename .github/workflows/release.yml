@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  windows:
+  windows-x86_64:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,16 +48,65 @@ jobs:
           Copy-Item README.md nsis-payload/
           Copy-Item -Recurse code-assets/demos/* nsis-payload/demos/
           Copy-Item -Recurse assets/branding/* nsis-payload/branding/
-          & "C:\Program Files (x86)\NSIS\makensis.exe" "/DVERSION=$version" packaging\windows\fanticon.nsi
+          & "C:\Program Files (x86)\NSIS\makensis.exe" "/DVERSION=$version" "/DARCH=x86_64" packaging\windows\fanticon.nsi
           if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
-          if (-not (Test-Path "Fanticon-Setup-$version.exe")) { throw "makensis reported success but Fanticon-Setup-$version.exe is missing" }
+          if (-not (Test-Path "Fanticon-Setup-$version-x86_64.exe")) { throw "makensis reported success but Fanticon-Setup-$version-x86_64.exe is missing" }
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-installer
-          path: Fanticon-Setup-*.exe
+          name: windows-x86_64-installer
+          path: Fanticon-Setup-*-x86_64.exe
           if-no-files-found: error
 
-  linux:
+  windows-arm64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - run: cargo build --profile dist --locked --target aarch64-pc-windows-msvc
+
+      - name: Package portable zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          stage="fanticon-${version}-windows-arm64"
+          mkdir -p "$stage"
+          cp target/aarch64-pc-windows-msvc/dist/fanticon-app.exe "$stage/"
+          cp -r code-assets/demos "$stage/demos"
+          cp -r assets/branding "$stage/branding"
+          cp README.md "$stage/"
+          7z a "${stage}.zip" "$stage" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64
+          path: fanticon-*-windows-arm64.zip
+          if-no-files-found: error
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          choco install nsis -y --no-progress | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed with exit code $LASTEXITCODE" }
+          Remove-Item -Recurse -Force nsis-payload -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path nsis-payload/demos, nsis-payload/branding | Out-Null
+          Copy-Item target/aarch64-pc-windows-msvc/dist/fanticon-app.exe nsis-payload/
+          Copy-Item README.md nsis-payload/
+          Copy-Item -Recurse code-assets/demos/* nsis-payload/demos/
+          Copy-Item -Recurse assets/branding/* nsis-payload/branding/
+          & "C:\Program Files (x86)\NSIS\makensis.exe" "/DVERSION=$version" "/DARCH=arm64" packaging\windows\fanticon.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path "Fanticon-Setup-$version-arm64.exe")) { throw "makensis reported success but Fanticon-Setup-$version-arm64.exe is missing" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64-installer
+          path: Fanticon-Setup-*-arm64.exe
+          if-no-files-found: error
+
+  linux-x86_64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,12 +148,62 @@ jobs:
           cp README.md "$pkgroot/usr/share/doc/fanticon/"
           cp packaging/linux/fanticon.desktop "$pkgroot/usr/share/applications/fanticon.desktop"
           cp assets/branding/icons/fanticon-256.png "$pkgroot/usr/share/icons/hicolor/256x256/apps/fanticon.png"
-          sed "s/__VERSION__/${version}/" packaging/linux/control.template > "$pkgroot/DEBIAN/control"
+          sed -e "s/__VERSION__/${version}/" -e "s/__ARCH__/amd64/" packaging/linux/control.template > "$pkgroot/DEBIAN/control"
           dpkg-deb --build --root-owner-group "$pkgroot" "fanticon_${version}_amd64.deb"
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-installer
+          name: linux-x86_64-installer
           path: fanticon_*_amd64.deb
+          if-no-files-found: error
+
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      - run: cargo build --profile dist --locked
+
+      - name: Package portable tarball
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          stage="fanticon-${version}-linux-arm64"
+          mkdir -p "$stage"
+          cp target/dist/fanticon-app "$stage/"
+          chmod +x "$stage/fanticon-app"
+          cp -r code-assets/demos "$stage/demos"
+          cp -r assets/branding "$stage/branding"
+          cp README.md "$stage/"
+          tar -czf "${stage}.tar.gz" "$stage"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: fanticon-*-linux-arm64.tar.gz
+          if-no-files-found: error
+
+      - name: Build .deb package
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          pkgroot="deb-root"
+          rm -rf "$pkgroot"
+          mkdir -p "$pkgroot/DEBIAN" "$pkgroot/usr/bin" \
+            "$pkgroot/usr/share/fanticon/demos" "$pkgroot/usr/share/fanticon/branding" \
+            "$pkgroot/usr/share/doc/fanticon" "$pkgroot/usr/share/applications" \
+            "$pkgroot/usr/share/icons/hicolor/256x256/apps"
+          install -m 755 target/dist/fanticon-app "$pkgroot/usr/bin/fanticon-app"
+          cp -r code-assets/demos/. "$pkgroot/usr/share/fanticon/demos/"
+          cp -r assets/branding/. "$pkgroot/usr/share/fanticon/branding/"
+          cp README.md "$pkgroot/usr/share/doc/fanticon/"
+          cp packaging/linux/fanticon.desktop "$pkgroot/usr/share/applications/fanticon.desktop"
+          cp assets/branding/icons/fanticon-256.png "$pkgroot/usr/share/icons/hicolor/256x256/apps/fanticon.png"
+          sed -e "s/__VERSION__/${version}/" -e "s/__ARCH__/arm64/" packaging/linux/control.template > "$pkgroot/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$pkgroot" "fanticon_${version}_arm64.deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-installer
+          path: fanticon_*_arm64.deb
           if-no-files-found: error
 
   macos:
@@ -167,7 +266,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [windows, linux, macos]
+    needs: [windows-x86_64, windows-arm64, linux-x86_64, linux-arm64, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -182,9 +281,13 @@ jobs:
           set -euo pipefail
           gh release create "${{ github.ref_name }}" \
             dist/windows-x86_64/*.zip \
-            dist/windows-installer/*.exe \
+            dist/windows-x86_64-installer/*.exe \
+            dist/windows-arm64/*.zip \
+            dist/windows-arm64-installer/*.exe \
             dist/linux-x86_64/*.tar.gz \
-            dist/linux-installer/*.deb \
+            dist/linux-x86_64-installer/*.deb \
+            dist/linux-arm64/*.tar.gz \
+            dist/linux-arm64-installer/*.deb \
             dist/macos-universal/*.zip \
             dist/macos-installer/*.dmg \
             --repo "${{ github.repository }}" \

@@ -18,9 +18,12 @@
 !ifndef VERSION
   !define VERSION "0.0.0"
 !endif
+!ifndef ARCH
+  !define ARCH "x86_64"
+!endif
 
 Name "Fanticon"
-OutFile "..\..\Fanticon-Setup-${VERSION}.exe"
+OutFile "..\..\Fanticon-Setup-${VERSION}-${ARCH}.exe"
 InstallDir "$PROGRAMFILES64\Fanticon"
 InstallDirRegKey HKLM "Software\Fanticon" "InstallDir"
 RequestExecutionLevel admin

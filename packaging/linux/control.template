@@ -2,7 +2,7 @@ Package: fanticon
 Version: __VERSION__
 Section: games
 Priority: optional
-Architecture: amd64
+Architecture: __ARCH__
 Depends: libc6, libasound2t64 | libasound2, libudev1
 Maintainer: Tim Sarbin <tim.sarbin@gmail.com>
 Description: High-performance, cycle-accurate NMOS 6502 fantasy console

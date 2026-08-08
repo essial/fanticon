@@ -337,7 +337,8 @@ jobs:
             target/wasm32-unknown-unknown/dist/fanticon-app.wasm
           cp LICENSE-MIT LICENSE-APACHE "$root/licenses/"
           printf 'FANTICON_RUNTIME_KIT=1\nVERSION=%s\n' "$version" > "$root/manifest.txt"
-          FANTICON_SKIP_CODE_ASSET_SYNC=1 cargo run --locked --bin fanticon-export -- \
+          FANTICON_SKIP_CODE_ASSET_SYNC=1 cargo run --locked --no-default-features \
+            --bin fanticon-export -- \
             verify --runtime-kit "$root"
           cp documentation/exporting.md "fanticon-runtime-kit-${version}/README.md"
           zip -r "fanticon-runtime-kit-${version}.zip" "fanticon-runtime-kit-${version}" >/dev/null

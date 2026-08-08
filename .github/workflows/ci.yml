@@ -42,7 +42,7 @@ jobs:
             run_tests: true
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
@@ -58,12 +58,18 @@ jobs:
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - run: cargo build --release --locked --target wasm32-unknown-unknown --bin fanticon-app
-      - run: cargo install wasm-pack --version 0.13.1 --locked
+      - id: cache-wasm-pack
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: ${{ runner.os }}-${{ runner.arch }}-wasm-pack-0.13.1
+      - if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
+        run: cargo install wasm-pack --version 0.13.1 --locked
       - run: wasm-pack test --headless --chrome --test web_runtime --no-default-features --features app-host

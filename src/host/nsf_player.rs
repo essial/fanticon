@@ -834,13 +834,21 @@ impl NsfBus {
             let start = usize::from(image.load_address);
             memory[start..start + image.payload.len()].copy_from_slice(&image.payload);
         }
+        let mut apu = NsfApu::new(image.cpu_rate);
+        // NSF drivers may assume the player has enabled the four base APU
+        // voices before INIT. Real NSF players conventionally bootstrap
+        // $4015/$4017 this way; leaving $4015 at reset zero causes subsequent
+        // timer-high writes to discard every length-counter reload, producing
+        // silence in otherwise valid drivers.
+        apu.write(0x4015, 0x0f);
+        apu.write(0x4017, 0x40);
         Self {
             ram: [0; 0x800],
             memory,
             bank_rom,
             banks: image.initial_banks,
             banked: image.banked,
-            apu: NsfApu::new(image.cpu_rate),
+            apu,
         }
     }
 
@@ -1376,6 +1384,21 @@ mod tests {
         program[0x20] = 0x60; // PLAY: RTS
         let mut player = NsfPlayer::new(&nsf(&program, 1, 1), 1).unwrap();
         player.render_frame();
+        assert!(player.samples.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    fn nsf_host_enables_base_apu_channels_before_init() {
+        let mut program = vec![0xea; 0x40];
+        // This valid driver intentionally relies on the NSF host's conventional
+        // $4015 bootstrap instead of enabling pulse 1 itself.
+        program[..14].copy_from_slice(&[
+            0xa9, 0x9f, 0x8d, 0x00, 0x40, 0xa9, 0x20, 0x8d, 0x02, 0x40, 0x8d, 0x03, 0x40, 0x60,
+        ]);
+        program[0x20] = 0x60;
+        let mut player = NsfPlayer::new(&nsf(&program, 1, 1), 1).unwrap();
+        player.render_frame();
+        assert_eq!(player.bus.apu.status & 0x0f, 0x0f);
         assert!(player.samples.iter().any(|sample| *sample != 0));
     }
 

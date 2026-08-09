@@ -197,6 +197,10 @@ The editor music radio runs NSF code in an isolated NMOS 6502 environment at the
 declared NTSC or PAL rate. It supports NSF1 load/init/play addresses, the default
 start track, playback speed fields, 4 KiB program banking, internal RAM mirrors,
 and the two pulse, triangle, and noise register groups.
+Before invoking INIT, the host clears the base registers, enables the four
+ordinary voices through `$4015`, and inhibits frame IRQs through `$4017`, matching
+the conventional NSF playback environment used by drivers that do not repeat
+that setup themselves.
 
 The player feeds those four voices through the same waveform tables, LFSR,
 integer nonlinear mixer, host resampler, stereo width, and reverb used by a

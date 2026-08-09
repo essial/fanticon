@@ -91,9 +91,14 @@ triangle, and noise voices, including exact waveforms, timing, and mixing.
 The [presentation settings guide](documentation/settings.md) covers the shared
 graphics styles, audio processing, buffer sizes, persistence, and in-game menu.
 The [editor and command console](documentation/editor.md) describes application
-modes, the embedded character ROM, native commands, and future tool dispatch.
+modes, the embedded character ROM, native commands, integrated help, settings,
+and editor background music.
+The [music editor and playback guide](documentation/music-editor.md) covers the
+tracker, NSF playback and import, background playlists, incremental duration
+scanning, and system media controls.
 The [graphics editor](documentation/graphics-editor.md) documents `.GFX` resident
-sets, shared `.PAL` resources, tile/map/sprite/bitmap tools, and direct VM loading.
+sets, shared `.PAL` resources, tile/map/sprite/bitmap tools, bitmap zooming, PNG
+bitmap and tileset import, and direct VM loading.
 The [macro assembler](documentation/assembler.md) documents building raw `.BIN`
 files, supported syntax and directives, modern macros, and diagnostics.
 The [system architecture](documentation/system-architecture.md) defines the VM's

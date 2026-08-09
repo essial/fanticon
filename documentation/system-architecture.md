@@ -371,10 +371,10 @@ noise periods, phase and divider rules, register timing, reset state, and the
 integer nonlinear mixer are frozen in the dedicated audio reference.
 
 All channels advance from emulated CPU time, never host audio time. The host
-resamples their deterministic mono mix to its output rate, then applies light
-stereo width and short, subdued reverb as a presentation effect. Pausing or
-debugging therefore cannot change generated samples, and the effect never enters
-VM state.
+resamples their deterministic mono mix to its output rate, then applies the
+player's configurable stereo width, high-pass/reconstruction filtering, and
+concert-hall reverb as presentation effects. Pausing or debugging therefore
+cannot change generated samples, and the effects never enter VM state.
 
 ## Controllers
 

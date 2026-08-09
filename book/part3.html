@@ -112,6 +112,18 @@
   <span class="kbd">H</span>/<span class="kbd">V</span> flips and <span class="kbd">R</span>
   rotation in Pattern view.</p>
 
+  <h2>Bitmap zoom and PNG import</h2>
+  <p>Bitmap view offers 1&times;, 2&times;, and 4&times; magnification. Use the on-screen buttons
+  or <span class="kbd">-</span>/<span class="kbd">+</span> to change zoom; at 2&times; and
+  4&times;, arrow keys and the mouse wheel scroll the viewport while drawing continues to edit
+  the corresponding source pixel.</p>
+  <p><strong>File &gt; Import Bitmap</strong> accepts an exact 320&times;200 PNG.
+  <strong>File &gt; Import Tileset</strong> accepts a PNG whose dimensions are multiples of
+  eight, reads its 8&times;8 cells left-to-right and top-to-bottom, and writes them beginning at
+  the selected pattern. Both commands read from Fanticon's project filesystem, quantize each
+  RGB pixel to the nearest of the active bank's 16 colors, reject artwork that does not fit,
+  and are fully undoable.</p>
+
   <div class="box tip">
     <div class="box-title">The Circular Map</div>
     In Map view, arrow keys pan the viewport one tile at a time and <strong>wrap at all four

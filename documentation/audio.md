@@ -160,10 +160,10 @@ The presentation layer applies a source-rate-aware 20 Hz DC blocker followed by
 a two-pole 14 kHz reconstruction filter before it downsamples the cycle-timestamped
 signal to the host rate. This suppresses aliases and softens instantaneous digital
 level edges without changing emulated register timing. It then presents the mono
-hardware mix with stereo width and a short, subdued reverb. Differently delayed
-taps feed the left and right sides, with a small cross-subtraction that decorrelates
-sustained chip tones. The centered dry signal remains dominant; the effect must
-not turn pulse or noise attacks into obviously displaced echoes.
+hardware mix through configurable stereo width and a concert-hall reverb built
+from parallel room filters, diffusion, predelay, and treble-damped feedback. The
+centered dry signal remains at full level while the reverberant return is kept
+quiet, so attacks stay forward instead of becoming displaced echoes.
 
 Stereo and reverb are host presentation, not additional VM channels. They cannot
 feed back into APU state, consume CPU cycles, change VM timing, or appear in a

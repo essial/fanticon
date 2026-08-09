@@ -291,7 +291,21 @@ menu and these shortcuts control it:
 | `Shift+F7` | Stop |
 | `F8` | Next track |
 | `Shift+F8` | Previous track |
-| `Ctrl/Cmd+F8` | Toggle one/two-loop playback |
+| `Ctrl/Cmd+F8` | Toggle playlist repeat, or one/two-loop standalone playback |
+| System Play/Pause, Play, Pause | Control editor music playback |
+| System Previous, Next, Stop | Navigate or stop editor music playback |
+
+On macOS, active editor music is registered with Control Center and the system
+Now Playing service. Hardware media keys therefore continue to control Fanticon
+when another application or browser window has focus.
+
+The Music menu also provides a persistent background playlist sourced from one
+folder under Fanticon's managed filesystem. It supports `.MUS`, every internal
+track in `.NSF` files, per-entry selection, shuffle, and automatic advancement.
+NSF duration checks run incrementally: playback can start from the entries
+already available, reopening the list continues rather than restarts the scan,
+and content-keyed cached results are reused until a source file changes.
+See the [Music Editor and Playback Guide](music-editor.md#editor-background-playlist).
 
 Classic NSF1 has no standardized duration or loop marker. Fanticon detects a
 loop when complete mutable driver state repeats at `PLAY` boundaries. A

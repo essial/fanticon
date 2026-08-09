@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 const SETTINGS_VERSION: u32 = 1;
+const MAX_NSF_SCAN_CACHE_ENTRIES: usize = 4_096;
 #[cfg(target_arch = "wasm32")]
 const WEB_STORAGE_KEY: &str = "fanticon.host-settings.v1";
 
@@ -199,6 +200,40 @@ pub struct AudioSettings {
     pub mute_when_unfocused: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MusicPlayerSettings {
+    pub folder: String,
+    pub excluded: Vec<String>,
+    pub shuffle: bool,
+    pub repeat: bool,
+    pub current: Option<String>,
+    pub nsf_scan_cache: Vec<NsfScanCacheEntry>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NsfScanCacheEntry {
+    pub id: String,
+    pub content_hash: u64,
+    pub probe_version: u16,
+    pub minimum_seconds: u16,
+    pub short: bool,
+}
+
+impl Default for MusicPlayerSettings {
+    fn default() -> Self {
+        Self {
+            folder: "/MUSIC".to_owned(),
+            excluded: Vec::new(),
+            shuffle: false,
+            repeat: true,
+            current: None,
+            nsf_scan_cache: Vec::new(),
+        }
+    }
+}
+
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
@@ -219,6 +254,7 @@ pub struct HostSettings {
     pub version: u32,
     pub graphics: GraphicsSettings,
     pub audio: AudioSettings,
+    pub music_player: MusicPlayerSettings,
     pub diagnostics_overlay: bool,
 }
 
@@ -228,6 +264,7 @@ impl Default for HostSettings {
             version: SETTINGS_VERSION,
             graphics: GraphicsSettings::default(),
             audio: AudioSettings::default(),
+            music_player: MusicPlayerSettings::default(),
             diagnostics_overlay: false,
         }
     }
@@ -255,8 +292,36 @@ impl HostSettings {
         self.audio.master_volume = self.audio.master_volume.clamp(0.0, 1.0);
         self.audio.stereo_width = self.audio.stereo_width.clamp(0.0, 1.0);
         self.audio.reverb = self.audio.reverb.clamp(0.0, 1.0);
+        self.music_player.folder = normalize_music_folder(&self.music_player.folder);
+        self.music_player.excluded.sort_by_key(|entry| entry.to_ascii_uppercase());
+        self.music_player.excluded.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        for entry in &mut self.music_player.nsf_scan_cache {
+            entry.id = entry.id.to_ascii_uppercase();
+        }
+        self.music_player.nsf_scan_cache.sort_by_key(|entry| entry.id.clone());
+        self.music_player
+            .nsf_scan_cache
+            .dedup_by(|left, right| left.id.eq_ignore_ascii_case(&right.id));
+        if self.music_player.nsf_scan_cache.len() > MAX_NSF_SCAN_CACHE_ENTRIES {
+            let excess = self.music_player.nsf_scan_cache.len() - MAX_NSF_SCAN_CACHE_ENTRIES;
+            self.music_player.nsf_scan_cache.drain(..excess);
+        }
         self
     }
+}
+
+fn normalize_music_folder(folder: &str) -> String {
+    let mut folder = folder.trim().replace('\\', "/");
+    if folder.is_empty() {
+        return "/".to_owned();
+    }
+    if !folder.starts_with('/') {
+        folder.insert(0, '/');
+    }
+    while folder.len() > 1 && folder.ends_with('/') {
+        folder.pop();
+    }
+    folder
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -324,5 +389,34 @@ mod tests {
         let settings: HostSettings = serde_json::from_str("{\"version\":1}").unwrap();
         assert_eq!(settings.graphics, GraphicsSettings::default());
         assert_eq!(settings.audio, AudioSettings::default());
+        assert_eq!(settings.music_player, MusicPlayerSettings::default());
+    }
+
+    #[test]
+    fn music_player_paths_and_exclusions_are_normalized() {
+        let mut settings = HostSettings::default();
+        settings.music_player.folder = "music\\nes/".to_owned();
+        settings.music_player.excluded = vec!["B.NSF#1".to_owned(), "b.nsf#1".to_owned()];
+        settings.music_player.nsf_scan_cache = vec![
+            NsfScanCacheEntry {
+                id: "music/song.nsf#1".to_owned(),
+                content_hash: 1,
+                probe_version: 1,
+                minimum_seconds: 10,
+                short: false,
+            },
+            NsfScanCacheEntry {
+                id: "MUSIC/SONG.NSF#1".to_owned(),
+                content_hash: 2,
+                probe_version: 1,
+                minimum_seconds: 10,
+                short: true,
+            },
+        ];
+        let settings = settings.normalized();
+        assert_eq!(settings.music_player.folder, "/music/nes");
+        assert_eq!(settings.music_player.excluded.len(), 1);
+        assert_eq!(settings.music_player.nsf_scan_cache.len(), 1);
+        assert_eq!(settings.music_player.nsf_scan_cache[0].id, "MUSIC/SONG.NSF#1");
     }
 }

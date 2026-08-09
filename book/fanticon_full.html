@@ -334,6 +334,21 @@
     <tr><td><span class="kbd">Shift+F5</span></td><td>Build &amp; Run</td></tr>
   </table>
 
+  <h2>Presentation and system settings</h2>
+  <p><strong>Help &gt; Settings</strong> opens the presentation controls shared by the editor
+  and every running cartridge. During a game, <span class="kbd">F10</span> or the gamepad
+  Guide/Mode button pauses play and opens the same controls as a system menu. Changes apply
+  immediately and are saved as host preferences; cartridge code cannot inspect or replace
+  them.</p>
+  <p>The six display styles are Clean Pixel, VGA, Arcade CRT, Consumer CRT, LCD, and Amber
+  Mono. Each keeps the machine's 320&times;200 or 640&times;400 source intact while changing only its
+  final presentation. Effect strength, brightness, and integer scaling are adjustable. Audio
+  controls cover master volume, reconstruction profile, a disabled/20/60/120&nbsp;Hz high-pass,
+  native buffer size, stereo width, concert-hall reverb, and mute-when-unfocused behavior.
+  Factory settings use 50% master volume, 50% stereo width, 50% reverb, and a 60&nbsp;Hz
+  high-pass. An optional diagnostics overlay reports frame pacing and audio-buffer health
+  without exposing anything to the virtual machine.</p>
+
   <p>Opening or saving a file ending in <code>.ASM</code> or <code>.INC</code> automatically
   switches on <strong>6502 assembly mode</strong>: a Merlin-inspired four-column layout
   (label, opcode, operand, comment, at fixed columns), Catppuccin Mocha syntax coloring, and
@@ -792,6 +807,18 @@
   <span class="kbd">F</span> connected Fill, and <span class="kbd">I</span> Eyedropper, with
   <span class="kbd">H</span>/<span class="kbd">V</span> flips and <span class="kbd">R</span>
   rotation in Pattern view.</p>
+
+  <h2>Bitmap zoom and PNG import</h2>
+  <p>Bitmap view offers 1&times;, 2&times;, and 4&times; magnification. Use the on-screen buttons
+  or <span class="kbd">-</span>/<span class="kbd">+</span> to change zoom; at 2&times; and
+  4&times;, arrow keys and the mouse wheel scroll the viewport while drawing continues to edit
+  the corresponding source pixel.</p>
+  <p><strong>File &gt; Import Bitmap</strong> accepts an exact 320&times;200 PNG.
+  <strong>File &gt; Import Tileset</strong> accepts a PNG whose dimensions are multiples of
+  eight, reads its 8&times;8 cells left-to-right and top-to-bottom, and writes them beginning at
+  the selected pattern. Both commands read from Fanticon's project filesystem, quantize each
+  RGB pixel to the nearest of the active bank's 16 colors, reject artwork that does not fit,
+  and are fully undoable.</p>
 
   <div class="box tip">
     <div class="box-title">The Circular Map</div>
@@ -1329,9 +1356,9 @@ tnd   = 159.79 / (1 / (t/8227 + n/12241) + 100)
 mix   = (pulse + tnd) &times; master_volume / 15</pre>
   <p>Fanticon evaluates the integer-rational equivalent of these equations, so results are
   bit-identical everywhere the machine runs &mdash; the same NES-like nonlinear balance on
-  every system. The host then applies a light, presentation-only stereo width and a short,
-  subdued reverb; neither can feed back into APU state, consume CPU cycles, or change VM
-  timing.</p>
+  every system. The host then applies the player's configurable reconstruction and high-pass
+  filters, stereo width, and concert-hall reverb. These presentation controls cannot feed
+  back into APU state, consume CPU cycles, or change VM timing.</p>
 
   <div class="box warn">
     <div class="box-title">RESET Silences Everything</div>
@@ -1452,6 +1479,27 @@ mix   = (pulse + tnd) &times; master_volume / 15</pre>
     demonstrates automatic migration: it is stored in the legacy flat-row v1 format, and saving
     it upgrades the file to v2 patterns, frames, and instruments in place.
   </div>
+
+  <h2>Background music while you work</h2>
+  <p>The editor's <strong>Music &gt; Choose Folder</strong> command selects one directory under
+  Fanticon's managed filesystem; scanning is deliberately non-recursive. Open
+  <strong>Music &gt; Playlist</strong> to include individual entries or all of them and to
+  choose sequential or shuffled order and whole-playlist repeat. <code>.MUS</code> songs are
+  ready immediately. Every internal song in an <code>.NSF</code> appears as its own entry.</p>
+  <p>Fanticon checks NSF tracks cooperatively in the background and hides only those with a
+  proven complete loop shorter than ten seconds, which removes most sound-effect entries
+  without discarding tracks whose length cannot be established. Playback can start from the
+  entries already available while the rest of the folder is still being checked. Closing and
+  reopening the list continues the same scan, and content-keyed results are cached between
+  sessions until a file changes.</p>
+  <p><span class="kbd">F7</span> plays or pauses, <span class="kbd">Shift+F7</span> stops,
+  <span class="kbd">F8</span>/<span class="kbd">Shift+F8</span> move forward and back, and
+  <span class="kbd">Ctrl/Cmd+F8</span> toggles repeat. System Play, Pause, Previous, Next, and
+  Stop keys work even while an editor dialog is open. On macOS the active title, track, and
+  playback state are also published to Control Center and Now Playing, allowing Fanticon to
+  receive those controls when another application has focus. Tracker preview, instrument
+  audition, and a running game temporarily suspend the playlist and resume the same entry
+  afterward.</p>
 
   <h2>Importing existing NES music</h2>
   <p>Editor mode can run an isolated NSF driver and transcribe its output directly into an

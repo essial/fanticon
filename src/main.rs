@@ -33,6 +33,19 @@ use winit::{
 
 enum UserEvent {
     RendererReady(Result<Renderer, String>),
+    #[cfg(target_os = "macos")]
+    SystemMedia(souvlaki::MediaControlEvent),
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SystemMediaSnapshot {
+    filename: String,
+    title: String,
+    artist: String,
+    track: u8,
+    tracks: u8,
+    paused: bool,
 }
 
 struct FanticonApp {
@@ -63,6 +76,10 @@ struct FanticonApp {
     diagnostics_started: Instant,
     diagnostics_presented: u32,
     diagnostics_fps: f32,
+    #[cfg(target_os = "macos")]
+    system_media_controls: Option<souvlaki::MediaControls>,
+    #[cfg(target_os = "macos")]
+    system_media_snapshot: Option<SystemMediaSnapshot>,
 }
 
 struct GameSession {
@@ -124,6 +141,10 @@ impl FanticonApp {
             diagnostics_started: now,
             diagnostics_presented: 0,
             diagnostics_fps: 0.0,
+            #[cfg(target_os = "macos")]
+            system_media_controls: None,
+            #[cfg(target_os = "macos")]
+            system_media_snapshot: None,
         }
     }
 }
@@ -152,6 +173,8 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
         attach_canvas(&window);
 
         self.window = Some(Arc::clone(&window));
+        #[cfg(target_os = "macos")]
+        self.initialize_system_media_controls();
         let proxy = self.event_proxy.clone();
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -182,6 +205,8 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 eprintln!("Fanticon renderer initialization failed: {error}");
                 event_loop.exit();
             }
+            #[cfg(target_os = "macos")]
+            UserEvent::SystemMedia(event) => self.apply_system_media_control(event),
         }
     }
 
@@ -533,14 +558,14 @@ impl FanticonApp {
         if let Some(editor) = &mut self.text_editor {
             editor.set_music_status(self.music.status());
             let action = editor.update();
-            if let EditorAction::Run(launch) = action {
-                self.start_game(launch, true);
-                return;
-            }
             // The editor owns its blink phase so it can restart on caret movement.
             let cursor_visible = editor.cursor_blink_visible();
             self.editor_surface.resize(dimensions.0, dimensions.1);
             editor.render(&mut self.editor_surface, cursor_visible);
+            self.apply_editor_action(action);
+            if self.game_running() {
+                return;
+            }
         } else {
             self.terminal.render(&mut self.video, cursor_visible);
         }
@@ -567,6 +592,7 @@ impl FanticonApp {
                 let mut editor =
                     TextEditor::new(self.terminal.filesystem(), self.terminal.colors(), filename);
                 editor.set_music_status(self.music.status());
+                editor.set_music_player_settings(self.settings.music_player.clone());
                 self.text_editor = Some(editor);
             }
             TerminalAction::Run(launch) => self.start_game(launch, true),
@@ -585,6 +611,14 @@ impl FanticonApp {
     }
 
     fn apply_editor_action(&mut self, action: EditorAction) {
+        if let Some(settings) =
+            self.text_editor.as_mut().and_then(TextEditor::take_music_player_settings)
+        {
+            self.settings.music_player = settings;
+            if let Err(error) = self.settings.save() {
+                eprintln!("Fanticon music-player settings could not be saved: {error}");
+            }
+        }
         match action {
             EditorAction::Exit => self.text_editor = None,
             EditorAction::Run(launch) => self.start_game(launch, true),
@@ -595,6 +629,8 @@ impl FanticonApp {
             EditorAction::Settings => self.open_settings(false),
             EditorAction::None => {}
         }
+        #[cfg(target_os = "macos")]
+        self.sync_system_media_controls();
     }
 
     fn apply_music_command(&mut self, command: MusicCommand) -> Result<String, String> {
@@ -603,6 +639,8 @@ impl FanticonApp {
             MusicCommand::Load { .. }
                 | MusicCommand::LoadTracker { .. }
                 | MusicCommand::AuditionTracker { .. }
+                | MusicCommand::LoadPlaylistNsf { .. }
+                | MusicCommand::LoadPlaylistTracker { .. }
                 | MusicCommand::Stop
                 | MusicCommand::Next
                 | MusicCommand::Previous
@@ -614,7 +652,99 @@ impl FanticonApp {
         if let Some(editor) = &mut self.text_editor {
             editor.set_music_status(self.music.status());
         }
+        #[cfg(target_os = "macos")]
+        self.sync_system_media_controls();
         result
+    }
+
+    #[cfg(target_os = "macos")]
+    fn initialize_system_media_controls(&mut self) {
+        use souvlaki::{MediaControls, MediaPlayback, PlatformConfig};
+
+        let config = PlatformConfig {
+            dbus_name: "com.fanticon.player",
+            display_name: "Fanticon",
+            hwnd: None,
+        };
+        let mut controls = match MediaControls::new(config) {
+            Ok(controls) => controls,
+            Err(error) => {
+                eprintln!("Fanticon system media controls unavailable: {error}");
+                return;
+            }
+        };
+        let proxy = self.event_proxy.clone();
+        if let Err(error) = controls.attach(move |event| {
+            let _ = proxy.send_event(UserEvent::SystemMedia(event));
+        }) {
+            eprintln!("Fanticon system media controls could not attach: {error}");
+            return;
+        }
+        if let Err(error) = controls.set_playback(MediaPlayback::Stopped) {
+            eprintln!("Fanticon system media state could not initialize: {error}");
+        }
+        self.system_media_controls = Some(controls);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn apply_system_media_control(&mut self, event: souvlaki::MediaControlEvent) {
+        let Some((named, code)) = system_media_key(event) else { return };
+        let action = self.text_editor.as_mut().map_or(EditorAction::None, |editor| {
+            editor.handle_key(&Key::Named(named), PhysicalKey::Code(code), ModifiersState::empty())
+        });
+        self.apply_editor_action(action);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_system_media_controls(&mut self) {
+        use souvlaki::{MediaMetadata, MediaPlayback};
+
+        let snapshot = self.text_editor.as_ref().and_then(|_| self.music.status()).map(|status| {
+            SystemMediaSnapshot {
+                filename: status.filename,
+                title: status.title,
+                artist: status.artist,
+                track: status.track,
+                tracks: status.tracks,
+                paused: status.paused,
+            }
+        });
+        if snapshot == self.system_media_snapshot {
+            return;
+        }
+        let Some(controls) = &mut self.system_media_controls else {
+            self.system_media_snapshot = snapshot;
+            return;
+        };
+        if let Some(status) = &snapshot {
+            let filename = status.filename.rsplit('/').next().unwrap_or(&status.filename);
+            let title = if status.title.is_empty() { filename } else { &status.title };
+            let artist = if status.artist.is_empty() { "Fanticon" } else { &status.artist };
+            let album = if status.tracks > 1 {
+                format!("Fanticon - Track {}/{}", status.track, status.tracks)
+            } else {
+                "Fanticon Editor Music".to_owned()
+            };
+            if let Err(error) = controls.set_metadata(MediaMetadata {
+                title: Some(title),
+                artist: Some(artist),
+                album: Some(&album),
+                ..MediaMetadata::default()
+            }) {
+                eprintln!("Fanticon system media metadata could not update: {error}");
+            }
+            let playback = if status.paused {
+                MediaPlayback::Paused { progress: None }
+            } else {
+                MediaPlayback::Playing { progress: None }
+            };
+            if let Err(error) = controls.set_playback(playback) {
+                eprintln!("Fanticon system media state could not update: {error}");
+            }
+        } else if let Err(error) = controls.set_playback(MediaPlayback::Stopped) {
+            eprintln!("Fanticon system media state could not stop: {error}");
+        }
+        self.system_media_snapshot = snapshot;
     }
 
     fn apply_debug_command(&mut self, command: DebugCommand) {
@@ -1010,6 +1140,23 @@ const fn should_process_keyboard_input(state: ElementState, _repeat: bool) -> bo
     matches!(state, ElementState::Pressed)
 }
 
+#[cfg(target_os = "macos")]
+fn system_media_key(event: souvlaki::MediaControlEvent) -> Option<(NamedKey, KeyCode)> {
+    use souvlaki::MediaControlEvent;
+
+    match event {
+        MediaControlEvent::Toggle => Some((NamedKey::MediaPlayPause, KeyCode::MediaPlayPause)),
+        MediaControlEvent::Play => Some((NamedKey::MediaPlay, KeyCode::MediaPlayPause)),
+        MediaControlEvent::Pause => Some((NamedKey::MediaPause, KeyCode::MediaPlayPause)),
+        MediaControlEvent::Next => Some((NamedKey::MediaTrackNext, KeyCode::MediaTrackNext)),
+        MediaControlEvent::Previous => {
+            Some((NamedKey::MediaTrackPrevious, KeyCode::MediaTrackPrevious))
+        }
+        MediaControlEvent::Stop => Some((NamedKey::MediaStop, KeyCode::MediaStop)),
+        _ => None,
+    }
+}
+
 fn create_event_loop() -> Result<EventLoop<UserEvent>, winit::error::EventLoopError> {
     EventLoop::<UserEvent>::with_user_event().build()
 }
@@ -1233,6 +1380,29 @@ mod tests {
         assert!(should_process_keyboard_input(ElementState::Pressed, true));
         assert!(!should_process_keyboard_input(ElementState::Released, false));
         assert!(!should_process_keyboard_input(ElementState::Released, true));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_remote_commands_map_to_editor_media_keys() {
+        use souvlaki::MediaControlEvent;
+
+        assert_eq!(
+            system_media_key(MediaControlEvent::Toggle),
+            Some((NamedKey::MediaPlayPause, KeyCode::MediaPlayPause))
+        );
+        assert_eq!(
+            system_media_key(MediaControlEvent::Next),
+            Some((NamedKey::MediaTrackNext, KeyCode::MediaTrackNext))
+        );
+        assert_eq!(
+            system_media_key(MediaControlEvent::Previous),
+            Some((NamedKey::MediaTrackPrevious, KeyCode::MediaTrackPrevious))
+        );
+        assert_eq!(
+            system_media_key(MediaControlEvent::Stop),
+            Some((NamedKey::MediaStop, KeyCode::MediaStop))
+        );
     }
 
     #[test]

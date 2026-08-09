@@ -79,6 +79,21 @@
     <tr><td><span class="kbd">Shift+F5</span></td><td>Build &amp; Run</td></tr>
   </table>
 
+  <h2>Presentation and system settings</h2>
+  <p><strong>Help &gt; Settings</strong> opens the presentation controls shared by the editor
+  and every running cartridge. During a game, <span class="kbd">F10</span> or the gamepad
+  Guide/Mode button pauses play and opens the same controls as a system menu. Changes apply
+  immediately and are saved as host preferences; cartridge code cannot inspect or replace
+  them.</p>
+  <p>The six display styles are Clean Pixel, VGA, Arcade CRT, Consumer CRT, LCD, and Amber
+  Mono. Each keeps the machine's 320&times;200 or 640&times;400 source intact while changing only its
+  final presentation. Effect strength, brightness, and integer scaling are adjustable. Audio
+  controls cover master volume, reconstruction profile, a disabled/20/60/120&nbsp;Hz high-pass,
+  native buffer size, stereo width, concert-hall reverb, and mute-when-unfocused behavior.
+  Factory settings use 50% master volume, 50% stereo width, 50% reverb, and a 60&nbsp;Hz
+  high-pass. An optional diagnostics overlay reports frame pacing and audio-buffer health
+  without exposing anything to the virtual machine.</p>
+
   <p>Opening or saving a file ending in <code>.ASM</code> or <code>.INC</code> automatically
   switches on <strong>6502 assembly mode</strong>: a Merlin-inspired four-column layout
   (label, opcode, operand, comment, at fixed columns), Catppuccin Mocha syntax coloring, and

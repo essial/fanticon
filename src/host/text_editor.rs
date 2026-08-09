@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use fanticon::{
     assembler::{
@@ -16,7 +18,8 @@ use fanticon::{
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 
 use super::help::{HelpCategory, HelpEntry, format_guide_body, shared_help_index};
-use super::nsf_player::{MusicCommand, MusicStatus};
+use super::nsf_player::{MusicCommand, MusicStatus, NsfTrackProbe, nsf_track_count};
+use super::settings::{MusicPlayerSettings, NsfScanCacheEntry};
 use super::surface::{Rgba, Surface, scanline_shade};
 use super::{
     EDITOR_DISPLAY_HEIGHT, EDITOR_DISPLAY_WIDTH,
@@ -43,6 +46,11 @@ const ROWS: usize = EDITOR_DISPLAY_HEIGHT / GLYPH_HEIGHT;
 const EDITOR_FIRST_ROW: usize = 2;
 const TEXT_ROWS: usize = ROWS - EDITOR_FIRST_ROW - 1;
 const PROJECT_WIDTH: usize = 20;
+const MUSIC_PLAYLIST_VISIBLE: usize = 16;
+const MUSIC_MINIMUM_SECONDS: usize = 10;
+const NSF_SCAN_CACHE_VERSION: u16 = 1;
+const NSF_SCAN_TIME_BUDGET: Duration = Duration::from_millis(3);
+const NSF_SCAN_MAX_FRAMES_PER_UPDATE: usize = 120;
 const EDITOR_START: usize = PROJECT_WIDTH + 1;
 const EDITOR_CODE_START: usize = EDITOR_START + 2;
 /// The rightmost column belongs to the scrollbar, so text stops one short of it.
@@ -342,6 +350,40 @@ enum Overlay {
         selected: [bool; ExportTarget::CHOICES.len()],
         cursor: usize,
     },
+    MusicFolder {
+        path: String,
+        directories: Vec<String>,
+        selected: usize,
+        scroll: usize,
+        error: Option<String>,
+    },
+    MusicPlaylist {
+        selected: usize,
+        scroll: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaylistKind {
+    Nsf,
+    Tracker,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PlaylistEntry {
+    id: String,
+    path: String,
+    label: String,
+    track: u8,
+    tracks: u8,
+    kind: PlaylistKind,
+}
+
+struct PendingPlaylistProbe {
+    entry: PlaylistEntry,
+    bytes: Rc<Vec<u8>>,
+    content_hash: u64,
+    probe: Option<NsfTrackProbe>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -434,6 +476,21 @@ pub struct TextEditor {
     music_tabs: BTreeMap<u32, MusicEditor>,
     music_source_views: BTreeSet<u32>,
     music_audition_key: Option<PhysicalKey>,
+    music_player_settings: MusicPlayerSettings,
+    music_player_settings_dirty: bool,
+    playlist_entries: Vec<PlaylistEntry>,
+    playlist_warnings: Vec<String>,
+    playlist_short_filtered: usize,
+    playlist_pending_probes: VecDeque<PendingPlaylistProbe>,
+    playlist_order: Vec<usize>,
+    playlist_order_cursor: usize,
+    playlist_active: bool,
+    playlist_paused: bool,
+    playlist_loading: bool,
+    playlist_seen_current: bool,
+    playlist_suspended: bool,
+    playlist_waiting_for_scan: bool,
+    playlist_shuffle_generation: u64,
 }
 
 impl TextEditor {
@@ -501,6 +558,21 @@ impl TextEditor {
             music_tabs: BTreeMap::new(),
             music_source_views: BTreeSet::new(),
             music_audition_key: None,
+            music_player_settings: MusicPlayerSettings::default(),
+            music_player_settings_dirty: false,
+            playlist_entries: Vec::new(),
+            playlist_warnings: Vec::new(),
+            playlist_short_filtered: 0,
+            playlist_pending_probes: VecDeque::new(),
+            playlist_order: Vec::new(),
+            playlist_order_cursor: 0,
+            playlist_active: false,
+            playlist_paused: false,
+            playlist_loading: false,
+            playlist_seen_current: false,
+            playlist_suspended: false,
+            playlist_waiting_for_scan: false,
+            playlist_shuffle_generation: 0,
         };
         if let Some(filename) = filename
             && let Err(error) = editor.load(&filename)
@@ -519,6 +591,9 @@ impl TextEditor {
         physical_key: PhysicalKey,
         modifiers: ModifiersState,
     ) -> EditorAction {
+        if let Some(action) = self.handle_media_control(key) {
+            return action;
+        }
         if !matches!(self.overlay, Overlay::None) {
             return self.handle_overlay_key(key, modifiers);
         }
@@ -760,6 +835,19 @@ impl TextEditor {
             return EditorAction::Music(MusicCommand::LoadTracker { filename, source });
         }
         if matches!(key, Key::Named(NamedKey::F7)) {
+            if self.playlist_active {
+                if modifiers.shift_key() {
+                    self.playlist_active = false;
+                    self.playlist_paused = false;
+                    return EditorAction::Music(MusicCommand::Stop);
+                }
+                self.playlist_paused = !self.playlist_paused;
+                return EditorAction::Music(if self.playlist_paused {
+                    MusicCommand::Pause
+                } else {
+                    MusicCommand::Play
+                });
+            }
             let Some(status) = &self.music_status else { return EditorAction::None };
             if modifiers.shift_key() {
                 return EditorAction::Music(MusicCommand::Stop);
@@ -771,6 +859,13 @@ impl TextEditor {
             });
         }
         if matches!(key, Key::Named(NamedKey::F8)) && self.music_status.is_some() {
+            if self.playlist_active {
+                if modifiers.control_key() || modifiers.super_key() {
+                    self.toggle_playlist_repeat();
+                    return EditorAction::None;
+                }
+                return self.step_playlist(!modifiers.shift_key(), false);
+            }
             return EditorAction::Music(if modifiers.control_key() || modifiers.super_key() {
                 MusicCommand::ToggleLoop
             } else if modifiers.shift_key() {
@@ -931,6 +1026,113 @@ impl TextEditor {
         EditorAction::None
     }
 
+    fn handle_media_control(&mut self, key: &Key) -> Option<EditorAction> {
+        match key {
+            Key::Named(NamedKey::MediaPlayPause) => Some(self.media_toggle_playback()),
+            Key::Named(NamedKey::MediaPlay) => Some(self.media_play()),
+            Key::Named(NamedKey::MediaPause) => Some(self.media_pause()),
+            Key::Named(NamedKey::MediaTrackNext) => Some(self.media_step(true)),
+            Key::Named(NamedKey::MediaTrackPrevious) => Some(self.media_step(false)),
+            Key::Named(NamedKey::MediaStop) => Some(self.media_stop()),
+            _ => None,
+        }
+    }
+
+    fn media_toggle_playback(&mut self) -> EditorAction {
+        if self.playlist_active {
+            self.playlist_paused = !self.playlist_paused;
+            return if self.music_status.is_some() {
+                EditorAction::Music(if self.playlist_paused {
+                    MusicCommand::Pause
+                } else {
+                    MusicCommand::Play
+                })
+            } else {
+                EditorAction::None
+            };
+        }
+        if let Some(paused) = self.music_status.as_ref().map(|status| status.paused) {
+            return EditorAction::Music(if paused {
+                MusicCommand::Play
+            } else {
+                MusicCommand::Pause
+            });
+        }
+        self.start_playlist(self.preferred_playlist_entry())
+    }
+
+    fn media_play(&mut self) -> EditorAction {
+        if self.playlist_active {
+            if !self.playlist_paused {
+                return EditorAction::None;
+            }
+            self.playlist_paused = false;
+            return if self.music_status.is_some() {
+                EditorAction::Music(MusicCommand::Play)
+            } else {
+                EditorAction::None
+            };
+        }
+        if let Some(status) = &self.music_status {
+            return if status.paused {
+                EditorAction::Music(MusicCommand::Play)
+            } else {
+                EditorAction::None
+            };
+        }
+        self.start_playlist(self.preferred_playlist_entry())
+    }
+
+    fn media_pause(&mut self) -> EditorAction {
+        if self.playlist_active {
+            if self.playlist_paused {
+                return EditorAction::None;
+            }
+            self.playlist_paused = true;
+            return if self.music_status.is_some() {
+                EditorAction::Music(MusicCommand::Pause)
+            } else {
+                EditorAction::None
+            };
+        }
+        if self.music_status.as_ref().is_some_and(|status| !status.paused) {
+            EditorAction::Music(MusicCommand::Pause)
+        } else {
+            EditorAction::None
+        }
+    }
+
+    fn media_step(&mut self, forward: bool) -> EditorAction {
+        if self.playlist_active {
+            return self.step_playlist(forward, false);
+        }
+        if self.music_status.is_some() {
+            return EditorAction::Music(if forward {
+                MusicCommand::Next
+            } else {
+                MusicCommand::Previous
+            });
+        }
+        self.start_playlist(self.preferred_playlist_entry())
+    }
+
+    fn media_stop(&mut self) -> EditorAction {
+        let playing = self.music_status.is_some();
+        self.playlist_active = false;
+        self.playlist_paused = false;
+        self.playlist_loading = false;
+        self.playlist_seen_current = false;
+        self.playlist_suspended = false;
+        self.playlist_waiting_for_scan = false;
+        if playing { EditorAction::Music(MusicCommand::Stop) } else { EditorAction::None }
+    }
+
+    fn preferred_playlist_entry(&self) -> Option<usize> {
+        self.music_player_settings.current.as_ref().and_then(|current| {
+            self.playlist_entries.iter().position(|entry| entry.id.eq_ignore_ascii_case(current))
+        })
+    }
+
     pub fn handle_key_release(&mut self, physical_key: PhysicalKey) -> EditorAction {
         if self.music_audition_key == Some(physical_key) {
             self.music_audition_key = None;
@@ -984,7 +1186,24 @@ impl TextEditor {
             self.overlay = Overlay::None;
             self.perform_build();
         }
-        self.pending_launch.take().map_or(EditorAction::None, EditorAction::Run)
+        self.advance_playlist_scan();
+        if let Some(launch) = self.pending_launch.take() {
+            return EditorAction::Run(launch);
+        }
+        if self.playlist_active
+            && !self.playlist_paused
+            && !self.playlist_loading
+            && self.music_status.is_none()
+        {
+            if self.playlist_suspended {
+                self.playlist_suspended = false;
+                return self.load_playlist_current();
+            }
+            if self.playlist_seen_current {
+                return self.step_playlist(true, true);
+            }
+        }
+        EditorAction::None
     }
 
     pub fn set_debug_snapshot(&mut self, snapshot: DebugSnapshot) {
@@ -1056,7 +1275,350 @@ impl TextEditor {
                 playback.map_or([0; 4], |(_, levels)| levels),
             );
         }
+        if self.playlist_active {
+            if let (Some(status), Some(entry)) = (
+                status.as_ref(),
+                self.playlist_order
+                    .get(self.playlist_order_cursor)
+                    .and_then(|index| self.playlist_entries.get(*index)),
+            ) {
+                if status.filename.eq_ignore_ascii_case(&entry.path) && status.track == entry.track
+                {
+                    self.playlist_loading = false;
+                    self.playlist_seen_current = true;
+                    self.playlist_suspended = false;
+                } else if !self.playlist_loading {
+                    self.playlist_suspended = true;
+                }
+            }
+        }
         self.music_status = status;
+    }
+
+    pub fn set_music_player_settings(&mut self, settings: MusicPlayerSettings) {
+        self.music_player_settings = settings;
+        self.music_player_settings_dirty = false;
+        self.refresh_music_playlist();
+    }
+
+    pub fn take_music_player_settings(&mut self) -> Option<MusicPlayerSettings> {
+        if !self.music_player_settings_dirty {
+            return None;
+        }
+        self.music_player_settings_dirty = false;
+        Some(self.music_player_settings.clone())
+    }
+
+    fn refresh_music_playlist(&mut self) {
+        self.playlist_entries.clear();
+        self.playlist_warnings.clear();
+        self.playlist_short_filtered = 0;
+        self.playlist_pending_probes.clear();
+        self.playlist_waiting_for_scan = false;
+        let folder = self.music_player_settings.folder.clone();
+        let entries = match self.filesystem.borrow().list(Some(&folder)) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.playlist_warnings.push(error);
+                return;
+            }
+        };
+        for file in entries.into_iter().filter(|entry| !entry.is_directory) {
+            let path = join_console_path(&folder, &file.name);
+            let lower = file.name.to_ascii_lowercase();
+            if lower.ends_with(".nsf") {
+                let bytes = self.filesystem.borrow().read_binary(&path);
+                let result = bytes.and_then(|bytes| {
+                    nsf_track_count(&bytes)
+                        .map(|tracks| (nsf_content_hash(&bytes), Rc::new(bytes), tracks))
+                });
+                match result {
+                    Ok((content_hash, bytes, tracks)) => {
+                        for track in 1..=tracks {
+                            let id = format!("{}#{track}", path.to_ascii_uppercase());
+                            let label = if tracks == 1 {
+                                file.name.clone()
+                            } else {
+                                format!("{} [{track}/{tracks}]", file.name)
+                            };
+                            let entry = PlaylistEntry {
+                                id,
+                                path: path.clone(),
+                                label,
+                                track,
+                                tracks,
+                                kind: PlaylistKind::Nsf,
+                            };
+                            let cached = self
+                                .music_player_settings
+                                .nsf_scan_cache
+                                .iter()
+                                .find(|cached| {
+                                    cached.id.eq_ignore_ascii_case(&entry.id)
+                                        && cached.content_hash == content_hash
+                                        && cached.probe_version == NSF_SCAN_CACHE_VERSION
+                                        && cached.minimum_seconds == MUSIC_MINIMUM_SECONDS as u16
+                                })
+                                .map(|cached| cached.short);
+                            match cached {
+                                Some(true) => self.playlist_short_filtered += 1,
+                                Some(false) => self.playlist_entries.push(entry),
+                                None => {
+                                    self.playlist_pending_probes.push_back(PendingPlaylistProbe {
+                                        entry,
+                                        bytes: bytes.clone(),
+                                        content_hash,
+                                        probe: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => self.playlist_warnings.push(format!("{}: {error}", file.name)),
+                }
+            } else if lower.ends_with(".mus") {
+                let result = self
+                    .filesystem
+                    .borrow()
+                    .read_text(&path)
+                    .and_then(|source| MusicEditor::compile(&source).map(|_| source));
+                match result {
+                    Ok(_) => self.playlist_entries.push(PlaylistEntry {
+                        id: path.to_ascii_uppercase(),
+                        path,
+                        label: file.name,
+                        track: 1,
+                        tracks: 1,
+                        kind: PlaylistKind::Tracker,
+                    }),
+                    Err(error) => self.playlist_warnings.push(format!("{}: {error}", file.name)),
+                }
+            }
+        }
+        self.playlist_entries.sort_by_key(|entry| entry.id.clone());
+        let current = self.music_player_settings.current.clone();
+        let excluded = self.music_player_settings.excluded.clone();
+        self.playlist_pending_probes.make_contiguous().sort_by_key(|pending| {
+            let priority =
+                if current.as_ref().is_some_and(|id| id.eq_ignore_ascii_case(&pending.entry.id)) {
+                    0
+                } else if excluded.iter().any(|id| id.eq_ignore_ascii_case(&pending.entry.id)) {
+                    2
+                } else {
+                    1
+                };
+            (priority, pending.entry.id.clone())
+        });
+    }
+
+    fn advance_playlist_scan(&mut self) {
+        let started = Instant::now();
+        let mut frames = 0;
+        while !self.playlist_pending_probes.is_empty()
+            && frames < NSF_SCAN_MAX_FRAMES_PER_UPDATE
+            && (frames == 0 || started.elapsed() < NSF_SCAN_TIME_BUDGET)
+        {
+            let initialization_error = {
+                let pending = self.playlist_pending_probes.front_mut().expect("front probe exists");
+                if pending.probe.is_none() {
+                    match NsfTrackProbe::new(
+                        &pending.bytes,
+                        pending.entry.track,
+                        MUSIC_MINIMUM_SECONDS,
+                    ) {
+                        Ok(probe) => {
+                            pending.probe = Some(probe);
+                            None
+                        }
+                        Err(error) => Some(error),
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(error) = initialization_error {
+                let pending = self.playlist_pending_probes.pop_front().expect("front probe exists");
+                self.playlist_warnings.push(format!("{}: {error}", pending.entry.label));
+                continue;
+            }
+            frames += 1;
+            let result = self
+                .playlist_pending_probes
+                .front_mut()
+                .and_then(|pending| pending.probe.as_mut())
+                .and_then(|probe| probe.step(1));
+            if let Some(short) = result {
+                let pending = self.playlist_pending_probes.pop_front().expect("front probe exists");
+                self.complete_playlist_probe(pending, short);
+            }
+        }
+    }
+
+    fn complete_playlist_probe(&mut self, pending: PendingPlaylistProbe, short: bool) {
+        self.music_player_settings
+            .nsf_scan_cache
+            .retain(|cached| !cached.id.eq_ignore_ascii_case(&pending.entry.id));
+        if self.music_player_settings.nsf_scan_cache.len() >= 4_096 {
+            self.music_player_settings.nsf_scan_cache.remove(0);
+        }
+        self.music_player_settings.nsf_scan_cache.push(NsfScanCacheEntry {
+            id: pending.entry.id.clone(),
+            content_hash: pending.content_hash,
+            probe_version: NSF_SCAN_CACHE_VERSION,
+            minimum_seconds: MUSIC_MINIMUM_SECONDS as u16,
+            short,
+        });
+        self.music_player_settings_dirty = true;
+        if short {
+            self.playlist_short_filtered += 1;
+        } else {
+            let selected = self.playlist_entry_selected(&pending.entry);
+            self.playlist_entries.push(pending.entry);
+            if self.playlist_active && selected {
+                self.playlist_order.push(self.playlist_entries.len() - 1);
+                if self.playlist_waiting_for_scan {
+                    self.playlist_waiting_for_scan = false;
+                    self.playlist_seen_current = true;
+                }
+            }
+        }
+        if self.playlist_pending_probes.is_empty() && self.playlist_waiting_for_scan {
+            self.playlist_waiting_for_scan = false;
+            self.playlist_active = false;
+            self.playlist_seen_current = false;
+        }
+    }
+
+    fn playlist_entry_selected(&self, entry: &PlaylistEntry) -> bool {
+        !self
+            .music_player_settings
+            .excluded
+            .iter()
+            .any(|excluded| excluded.eq_ignore_ascii_case(&entry.id))
+    }
+
+    fn rebuild_playlist_order(&mut self, preferred: Option<usize>) {
+        self.playlist_order = self
+            .playlist_entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| self.playlist_entry_selected(entry).then_some(index))
+            .collect();
+        if self.music_player_settings.shuffle && self.playlist_order.len() > 1 {
+            self.playlist_shuffle_generation = self.playlist_shuffle_generation.wrapping_add(1);
+            let mut seed = self.playlist_shuffle_generation ^ 0x9e37_79b9_7f4a_7c15;
+            for index in (1..self.playlist_order.len()).rev() {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                self.playlist_order.swap(index, seed as usize % (index + 1));
+            }
+        }
+        if let Some(preferred) = preferred
+            && let Some(position) = self.playlist_order.iter().position(|index| *index == preferred)
+        {
+            self.playlist_order.rotate_left(position);
+        }
+        self.playlist_order_cursor = 0;
+    }
+
+    fn start_playlist(&mut self, preferred: Option<usize>) -> EditorAction {
+        self.rebuild_playlist_order(preferred);
+        if self.playlist_order.is_empty() {
+            let message = if self.playlist_pending_probes.is_empty() {
+                "Select at least one song".to_owned()
+            } else {
+                format!(
+                    "No playable songs yet; scanning {} NSF track(s)",
+                    self.playlist_pending_probes.len()
+                )
+            };
+            self.show_build_message("Music Playlist", &[message]);
+            return EditorAction::None;
+        }
+        self.playlist_active = true;
+        self.playlist_paused = false;
+        self.playlist_suspended = false;
+        self.playlist_waiting_for_scan = false;
+        self.load_playlist_current()
+    }
+
+    fn load_playlist_current(&mut self) -> EditorAction {
+        let Some(entry) = self
+            .playlist_order
+            .get(self.playlist_order_cursor)
+            .and_then(|index| self.playlist_entries.get(*index))
+            .cloned()
+        else {
+            self.playlist_active = false;
+            return EditorAction::None;
+        };
+        self.music_player_settings.current = Some(entry.id.clone());
+        self.music_player_settings_dirty = true;
+        self.playlist_loading = true;
+        self.playlist_seen_current = false;
+        let command = match entry.kind {
+            PlaylistKind::Nsf => {
+                let read = self.filesystem.borrow().read_binary(&entry.path);
+                match read {
+                    Ok(bytes) => MusicCommand::LoadPlaylistNsf {
+                        filename: entry.path,
+                        bytes,
+                        track: entry.track,
+                    },
+                    Err(error) => {
+                        self.playlist_loading = false;
+                        self.show_build_message("Music Error", &[error]);
+                        return EditorAction::None;
+                    }
+                }
+            }
+            PlaylistKind::Tracker => {
+                let read = self.filesystem.borrow().read_text(&entry.path);
+                match read {
+                    Ok(source) => {
+                        MusicCommand::LoadPlaylistTracker { filename: entry.path, source }
+                    }
+                    Err(error) => {
+                        self.playlist_loading = false;
+                        self.show_build_message("Music Error", &[error]);
+                        return EditorAction::None;
+                    }
+                }
+            }
+        };
+        EditorAction::Music(command)
+    }
+
+    fn step_playlist(&mut self, forward: bool, automatic: bool) -> EditorAction {
+        if self.playlist_order.is_empty() {
+            return self.start_playlist(None);
+        }
+        let at_end = if forward {
+            self.playlist_order_cursor + 1 >= self.playlist_order.len()
+        } else {
+            self.playlist_order_cursor == 0
+        };
+        if at_end && automatic && !self.music_player_settings.repeat {
+            if !self.playlist_pending_probes.is_empty() {
+                self.playlist_waiting_for_scan = true;
+                self.playlist_seen_current = false;
+                return EditorAction::None;
+            }
+            self.playlist_active = false;
+            self.playlist_seen_current = false;
+            return EditorAction::None;
+        }
+        if at_end && self.music_player_settings.repeat && self.music_player_settings.shuffle {
+            self.rebuild_playlist_order(None);
+        } else if forward {
+            self.playlist_order_cursor =
+                (self.playlist_order_cursor + 1) % self.playlist_order.len();
+        } else {
+            self.playlist_order_cursor = (self.playlist_order_cursor + self.playlist_order.len()
+                - 1)
+                % self.playlist_order.len();
+        }
+        self.playlist_paused = false;
+        self.load_playlist_current()
     }
 
     pub fn stop_debug_session(&mut self) {
@@ -1579,6 +2141,69 @@ impl TextEditor {
             return EditorAction::None;
         }
 
+        let playlist_click = if let Overlay::MusicPlaylist { scroll, .. } = &self.overlay {
+            let width = 64;
+            let height = 23;
+            let dialog_x = (COLUMNS - width) / 2;
+            let dialog_y = (ROWS - height) / 2;
+            (cell_x > dialog_x && cell_x < dialog_x + width - 1)
+                .then(|| cell_y.checked_sub(dialog_y + 4))
+                .flatten()
+                .filter(|row| *row < MUSIC_PLAYLIST_VISIBLE)
+                .map(|row| *scroll + row)
+                .filter(|index| *index < self.playlist_entries.len())
+        } else {
+            None
+        };
+        if let Some(index) = playlist_click {
+            if let Overlay::MusicPlaylist { selected, .. } = &mut self.overlay {
+                *selected = index;
+            }
+            self.toggle_playlist_entry(index);
+            return EditorAction::None;
+        }
+        if matches!(self.overlay, Overlay::MusicPlaylist { .. }) {
+            return EditorAction::None;
+        }
+
+        let folder_click =
+            if let Overlay::MusicFolder { path, directories, scroll, .. } = &self.overlay {
+                let width = 58;
+                let height = 22;
+                let dialog_x = (COLUMNS - width) / 2;
+                let dialog_y = (ROWS - height) / 2;
+                let has_parent = path != "/";
+                (cell_x > dialog_x && cell_x < dialog_x + width - 1)
+                    .then(|| cell_y.checked_sub(dialog_y + 4))
+                    .flatten()
+                    .filter(|row| *row < 15)
+                    .map(|row| *scroll + row)
+                    .filter(|row| *row < 1 + usize::from(has_parent) + directories.len())
+                    .map(|row| {
+                        if row == 0 {
+                            (true, path.clone())
+                        } else if has_parent && row == 1 {
+                            (false, parent_console_path(path))
+                        } else {
+                            let directory = &directories[row - 1 - usize::from(has_parent)];
+                            (false, join_console_path(path, directory))
+                        }
+                    })
+            } else {
+                None
+            };
+        if let Some((choose, path)) = folder_click {
+            if choose {
+                self.choose_music_folder(path);
+            } else {
+                self.open_music_folder_browser(&path);
+            }
+            return EditorAction::None;
+        }
+        if matches!(self.overlay, Overlay::MusicFolder { .. }) {
+            return EditorAction::None;
+        }
+
         match &self.overlay {
             Overlay::Menu { menu, .. } => {
                 let menu = *menu;
@@ -1655,6 +2280,9 @@ impl TextEditor {
                     selected[index] = !selected[index];
                     *cursor = index;
                 }
+                return EditorAction::None;
+            }
+            Overlay::MusicFolder { .. } | Overlay::MusicPlaylist { .. } => {
                 return EditorAction::None;
             }
             Overlay::None => {}
@@ -2657,7 +3285,16 @@ impl TextEditor {
 
         put_text(&mut cells, 0, 0, " File  Edit  Build  Debug  Music  Help");
         if let Some(status) = &self.music_status {
-            let text = status.display_marquee(self.music_marquee_offset);
+            let text = if self.playlist_active && !self.playlist_order.is_empty() {
+                format!(
+                    "PL {}/{} {}",
+                    self.playlist_order_cursor + 1,
+                    self.playlist_order.len(),
+                    status.display_marquee(self.music_marquee_offset)
+                )
+            } else {
+                status.display_marquee(self.music_marquee_offset)
+            };
             let start = COLUMNS.saturating_sub(text.len());
             put_text_width(&mut cells, start, 0, &text, COLUMNS - start);
             backgrounds[start..COLUMNS].fill(UI_SUCCESS_BACKGROUND);
@@ -2885,6 +3522,121 @@ impl TextEditor {
     }
 
     fn handle_overlay_key(&mut self, key: &Key, modifiers: ModifiersState) -> EditorAction {
+        if matches!(self.overlay, Overlay::MusicFolder { .. }) {
+            enum FolderAction {
+                None,
+                Open(String),
+                Choose(String),
+                Close,
+            }
+            let mut action = FolderAction::None;
+            if let Overlay::MusicFolder { path, directories, selected, scroll, .. } =
+                &mut self.overlay
+            {
+                let has_parent = path != "/";
+                let count = 1 + usize::from(has_parent) + directories.len();
+                match key {
+                    Key::Named(NamedKey::Escape) => action = FolderAction::Close,
+                    Key::Named(NamedKey::ArrowUp) => {
+                        *selected = selected.saturating_sub(1);
+                        *scroll = (*scroll).min(*selected);
+                    }
+                    Key::Named(NamedKey::ArrowDown) => {
+                        *selected = (*selected + 1).min(count.saturating_sub(1));
+                        if *selected >= *scroll + 15 {
+                            *scroll = *selected + 1 - 15;
+                        }
+                    }
+                    Key::Named(NamedKey::Enter) => {
+                        if *selected == 0 {
+                            action = FolderAction::Choose(path.clone());
+                        } else if has_parent && *selected == 1 {
+                            action = FolderAction::Open(parent_console_path(path));
+                        } else {
+                            let directory_index = *selected - 1 - usize::from(has_parent);
+                            if let Some(directory) = directories.get(directory_index) {
+                                action = FolderAction::Open(join_console_path(path, directory));
+                            }
+                        }
+                    }
+                    Key::Character(text) if text.eq_ignore_ascii_case("s") => {
+                        action = FolderAction::Choose(path.clone());
+                    }
+                    _ => {}
+                }
+            }
+            match action {
+                FolderAction::None => {}
+                FolderAction::Open(path) => self.open_music_folder_browser(&path),
+                FolderAction::Choose(path) => self.choose_music_folder(path),
+                FolderAction::Close => self.overlay = Overlay::None,
+            }
+            return EditorAction::None;
+        }
+
+        if matches!(self.overlay, Overlay::MusicPlaylist { .. }) {
+            let mut play = None;
+            let mut toggle = None;
+            let mut select_all = None;
+            let mut toggle_shuffle = false;
+            let mut toggle_repeat = false;
+            if let Overlay::MusicPlaylist { selected, scroll } = &mut self.overlay {
+                match key {
+                    Key::Named(NamedKey::Escape) => self.overlay = Overlay::None,
+                    Key::Named(NamedKey::ArrowUp) => {
+                        *selected = selected.saturating_sub(1);
+                        *scroll = (*scroll).min(*selected);
+                    }
+                    Key::Named(NamedKey::ArrowDown) if !self.playlist_entries.is_empty() => {
+                        *selected = (*selected + 1).min(self.playlist_entries.len() - 1);
+                        if *selected >= *scroll + MUSIC_PLAYLIST_VISIBLE {
+                            *scroll = *selected + 1 - MUSIC_PLAYLIST_VISIBLE;
+                        }
+                    }
+                    Key::Named(NamedKey::PageUp) => {
+                        *selected = selected.saturating_sub(MUSIC_PLAYLIST_VISIBLE);
+                        *scroll = (*scroll).min(*selected);
+                    }
+                    Key::Named(NamedKey::PageDown) if !self.playlist_entries.is_empty() => {
+                        *selected = (*selected + MUSIC_PLAYLIST_VISIBLE)
+                            .min(self.playlist_entries.len() - 1);
+                        *scroll = selected.saturating_sub(MUSIC_PLAYLIST_VISIBLE - 1);
+                    }
+                    Key::Named(NamedKey::Space) => toggle = Some(*selected),
+                    Key::Named(NamedKey::Enter) => play = Some(*selected),
+                    Key::Character(text) if text.eq_ignore_ascii_case("p") => {
+                        play = Some(*selected)
+                    }
+                    Key::Character(text) if text.eq_ignore_ascii_case("a") => {
+                        select_all = Some(true)
+                    }
+                    Key::Character(text) if text.eq_ignore_ascii_case("n") => {
+                        select_all = Some(false)
+                    }
+                    Key::Character(text) if text.eq_ignore_ascii_case("s") => toggle_shuffle = true,
+                    Key::Character(text) if text.eq_ignore_ascii_case("r") => toggle_repeat = true,
+                    _ => {}
+                }
+            }
+            if let Some(index) = toggle {
+                self.toggle_playlist_entry(index);
+            }
+            if let Some(selected) = select_all {
+                self.set_all_playlist_entries(selected);
+            }
+            if toggle_shuffle {
+                self.toggle_playlist_shuffle();
+            }
+            if toggle_repeat {
+                self.toggle_playlist_repeat();
+            }
+            if let Some(index) = play {
+                self.overlay = Overlay::None;
+                return self.start_playlist(Some(index));
+            }
+            return EditorAction::None;
+        }
+
         if matches!(self.overlay, Overlay::DebugPrompt { .. }) {
             let mut submit = None;
             if let Overlay::DebugPrompt { kind, input, error } = &mut self.overlay {
@@ -3233,14 +3985,16 @@ impl TextEditor {
             | Overlay::About { .. }
             | Overlay::HelpFinder { .. }
             | Overlay::BankUsage { .. }
-            | Overlay::ExportDialog { .. } => {}
+            | Overlay::ExportDialog { .. }
+            | Overlay::MusicFolder { .. }
+            | Overlay::MusicPlaylist { .. } => {}
         }
         EditorAction::None
     }
 
     fn activate_menu(&mut self, menu: MenuKind, selected: usize) -> EditorAction {
         if menu == MenuKind::Music
-            && selected == 0
+            && selected == 3
             && self.music_active()
             && !self.music_source_active()
         {
@@ -3362,23 +4116,40 @@ impl TextEditor {
             (MenuKind::Debug, 15) if self.debug_active && self.debug_snapshot.is_some() => {
                 self.debug_panel_visible = !self.debug_panel_visible;
             }
-            (MenuKind::Music, 0) if self.music_status.is_some() => {
-                return EditorAction::Music(if self.music_status.as_ref().unwrap().paused {
-                    MusicCommand::Play
-                } else {
-                    MusicCommand::Pause
+            (MenuKind::Music, 0) => {
+                let folder = self.music_player_settings.folder.clone();
+                self.open_music_folder_browser(&folder);
+            }
+            (MenuKind::Music, 1) => {
+                self.overlay = Overlay::MusicPlaylist { selected: 0, scroll: 0 };
+            }
+            (MenuKind::Music, 3) => {
+                if self.playlist_active {
+                    self.playlist_paused = !self.playlist_paused;
+                    return EditorAction::Music(if self.playlist_paused {
+                        MusicCommand::Pause
+                    } else {
+                        MusicCommand::Play
+                    });
+                }
+                let preferred = self.music_player_settings.current.as_ref().and_then(|current| {
+                    self.playlist_entries
+                        .iter()
+                        .position(|entry| entry.id.eq_ignore_ascii_case(current))
                 });
+                return self.start_playlist(preferred);
             }
-            (MenuKind::Music, 1) if self.music_status.is_some() => {
-                return EditorAction::Music(MusicCommand::Previous);
+            (MenuKind::Music, 4) if self.playlist_active => {
+                return self.step_playlist(false, false);
             }
-            (MenuKind::Music, 2) if self.music_status.is_some() => {
-                return EditorAction::Music(MusicCommand::Next);
+            (MenuKind::Music, 5) if self.playlist_active => {
+                return self.step_playlist(true, false);
             }
-            (MenuKind::Music, 3) if self.music_status.is_some() => {
-                return EditorAction::Music(MusicCommand::ToggleLoop);
-            }
-            (MenuKind::Music, 5) if self.music_status.is_some() => {
+            (MenuKind::Music, 6) => self.toggle_playlist_shuffle(),
+            (MenuKind::Music, 7) => self.toggle_playlist_repeat(),
+            (MenuKind::Music, 9) if self.music_status.is_some() => {
+                self.playlist_active = false;
+                self.playlist_paused = false;
                 return EditorAction::Music(MusicCommand::Stop);
             }
             (MenuKind::Help, 0) => self.open_help_finder(),
@@ -3712,6 +4483,139 @@ impl TextEditor {
                 put_text(cells, x + 3, y + EXPORT_DIALOG_HEIGHT - 4, "Space=Toggle  A=All");
                 put_text(cells, x + 3, y + EXPORT_DIALOG_HEIGHT - 3, "Enter=Export  Esc=Cancel");
             }
+            Overlay::MusicFolder { path, directories, selected, scroll, error } => {
+                let width = 58;
+                let height = 22;
+                let x = (COLUMNS - width) / 2;
+                let y = (ROWS - height) / 2;
+                draw_dialog(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    background_gradients,
+                    inverse,
+                    CellRect { x, y, width, height },
+                    style,
+                );
+                put_text_width(cells, x + 3, y, "Choose Music Folder", width - 6);
+                put_text_width(cells, x + 2, y + 2, path, width - 4);
+                let mut labels = vec!["[ Use this folder ]".to_owned()];
+                if path != "/" {
+                    labels.push("[..]".to_owned());
+                }
+                labels.extend(directories.iter().map(|directory| format!("[{directory}]")));
+                for (screen_row, label) in labels.iter().skip(*scroll).take(15).enumerate() {
+                    let index = *scroll + screen_row;
+                    let row = y + 4 + screen_row;
+                    put_text_width(cells, x + 3, row, label, width - 6);
+                    if index == *selected {
+                        inverse[row * COLUMNS + x + 1..row * COLUMNS + x + width - 1].fill(true);
+                    }
+                }
+                if let Some(error) = error {
+                    put_text_width(cells, x + 2, y + height - 3, error, width - 4);
+                }
+                put_text(cells, x + 2, y + height - 2, "Enter=Open/Choose  S=Choose  Esc=Cancel");
+            }
+            Overlay::MusicPlaylist { selected, scroll } => {
+                let width = 64;
+                let height = 23;
+                let x = (COLUMNS - width) / 2;
+                let y = (ROWS - height) / 2;
+                draw_dialog(
+                    cells,
+                    foregrounds,
+                    backgrounds,
+                    background_gradients,
+                    inverse,
+                    CellRect { x, y, width, height },
+                    style,
+                );
+                put_text_width(cells, x + 3, y, "Editor Music Playlist", width - 6);
+                put_text_width(
+                    cells,
+                    x + 2,
+                    y + 2,
+                    &format!(
+                        "{}  Shuffle:{} Repeat:{} Min:{}s",
+                        self.music_player_settings.folder,
+                        if self.music_player_settings.shuffle { "On" } else { "Off" },
+                        if self.music_player_settings.repeat { "On" } else { "Off" },
+                        MUSIC_MINIMUM_SECONDS,
+                    ),
+                    width - 4,
+                );
+                for (screen_row, entry) in self
+                    .playlist_entries
+                    .iter()
+                    .skip(*scroll)
+                    .take(MUSIC_PLAYLIST_VISIBLE)
+                    .enumerate()
+                {
+                    let index = *scroll + screen_row;
+                    let row = y + 4 + screen_row;
+                    let checked = if self.playlist_entry_selected(entry) { 'X' } else { ' ' };
+                    let current = self
+                        .playlist_order
+                        .get(self.playlist_order_cursor)
+                        .is_some_and(|current| *current == index)
+                        .then_some('>')
+                        .unwrap_or(' ');
+                    put_text_width(
+                        cells,
+                        x + 2,
+                        row,
+                        &format!("{current}[{checked}] {}", entry.label),
+                        width - 4,
+                    );
+                    if index == *selected {
+                        inverse[row * COLUMNS + x + 1..row * COLUMNS + x + width - 1].fill(true);
+                    }
+                }
+                if self.playlist_entries.is_empty() {
+                    let message = if !self.playlist_pending_probes.is_empty() {
+                        format!(
+                            "Scanning {} NSF track(s) in the background...",
+                            self.playlist_pending_probes.len()
+                        )
+                    } else if self.playlist_short_filtered != 0 {
+                        format!(
+                            "Filtered {} NSF track(s) shorter than {} seconds",
+                            self.playlist_short_filtered, MUSIC_MINIMUM_SECONDS
+                        )
+                    } else {
+                        "No valid .NSF or .MUS files in this folder".to_owned()
+                    };
+                    put_text_width(cells, x + 3, y + 5, &message, width - 6);
+                } else if !self.playlist_pending_probes.is_empty() {
+                    put_text_width(
+                        cells,
+                        x + 2,
+                        y + height - 3,
+                        &format!(
+                            "Scanning {} NSF track(s) in the background...",
+                            self.playlist_pending_probes.len()
+                        ),
+                        width - 4,
+                    );
+                } else if self.playlist_short_filtered != 0 || !self.playlist_warnings.is_empty() {
+                    let short = self.playlist_short_filtered;
+                    let invalid = self.playlist_warnings.len();
+                    put_text_width(
+                        cells,
+                        x + 2,
+                        y + height - 3,
+                        &format!("Filtered {short} short NSF track(s); skipped {invalid} invalid"),
+                        width - 4,
+                    );
+                }
+                put_text(
+                    cells,
+                    x + 2,
+                    y + height - 2,
+                    "Space=Toggle A/N=All/None P=Play S=Shuffle R=Repeat",
+                );
+            }
             Overlay::About { .. } => {
                 let x = (COLUMNS - ABOUT_WIDTH) / 2;
                 let y = (ROWS - ABOUT_HEIGHT) / 2;
@@ -3892,6 +4796,92 @@ impl TextEditor {
             return;
         }
         self.overlay = Overlay::Dialog { kind, input: String::new(), error: None };
+    }
+
+    fn open_music_folder_browser(&mut self, path: &str) {
+        let path = if path.is_empty() { "/" } else { path };
+        match self.filesystem.borrow().list(Some(path)) {
+            Ok(entries) => {
+                let directories = entries
+                    .into_iter()
+                    .filter(|entry| entry.is_directory)
+                    .map(|entry| entry.name)
+                    .collect();
+                self.overlay = Overlay::MusicFolder {
+                    path: path.to_owned(),
+                    directories,
+                    selected: 0,
+                    scroll: 0,
+                    error: None,
+                };
+            }
+            Err(error) => {
+                let directories = self
+                    .filesystem
+                    .borrow()
+                    .list(Some("/"))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|entry| entry.is_directory)
+                    .map(|entry| entry.name)
+                    .collect();
+                self.overlay = Overlay::MusicFolder {
+                    path: "/".to_owned(),
+                    directories,
+                    selected: 0,
+                    scroll: 0,
+                    error: Some(error),
+                };
+            }
+        }
+    }
+
+    fn choose_music_folder(&mut self, path: String) {
+        self.music_player_settings.folder = path;
+        self.music_player_settings.current = None;
+        self.music_player_settings_dirty = true;
+        self.playlist_active = false;
+        self.playlist_waiting_for_scan = false;
+        self.refresh_music_playlist();
+        self.overlay = Overlay::MusicPlaylist { selected: 0, scroll: 0 };
+    }
+
+    fn toggle_playlist_entry(&mut self, index: usize) {
+        let Some(entry) = self.playlist_entries.get(index) else { return };
+        if let Some(position) = self
+            .music_player_settings
+            .excluded
+            .iter()
+            .position(|excluded| excluded.eq_ignore_ascii_case(&entry.id))
+        {
+            self.music_player_settings.excluded.remove(position);
+        } else {
+            self.music_player_settings.excluded.push(entry.id.clone());
+        }
+        self.music_player_settings_dirty = true;
+    }
+
+    fn set_all_playlist_entries(&mut self, selected: bool) {
+        self.music_player_settings.excluded = if selected {
+            Vec::new()
+        } else {
+            self.playlist_entries
+                .iter()
+                .map(|entry| entry.id.clone())
+                .chain(self.playlist_pending_probes.iter().map(|pending| pending.entry.id.clone()))
+                .collect()
+        };
+        self.music_player_settings_dirty = true;
+    }
+
+    fn toggle_playlist_shuffle(&mut self) {
+        self.music_player_settings.shuffle = !self.music_player_settings.shuffle;
+        self.music_player_settings_dirty = true;
+    }
+
+    fn toggle_playlist_repeat(&mut self) {
+        self.music_player_settings.repeat = !self.music_player_settings.repeat;
+        self.music_player_settings_dirty = true;
     }
 
     fn import_graphics_png(&mut self, kind: DialogKind, filename: &str) -> Result<(), String> {
@@ -5219,6 +6209,31 @@ fn collect_project_files(
     }
 }
 
+fn join_console_path(directory: &str, name: &str) -> String {
+    if directory == "/" {
+        format!("/{name}")
+    } else {
+        format!("{}/{name}", directory.trim_end_matches('/'))
+    }
+}
+
+fn nsf_content_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn parent_console_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    trimmed.rsplit_once('/').map_or_else(
+        || "/".to_owned(),
+        |(parent, _)| if parent.is_empty() { "/".to_owned() } else { parent.to_owned() },
+    )
+}
+
 fn bank_usage_label(section: SymbolSection) -> String {
     match section {
         SymbolSection::Fixed => "Fixed".to_owned(),
@@ -5291,7 +6306,18 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "",
             "Debug Panel",
         ],
-        MenuKind::Music => &["Play/Pause", "Previous", "Next", "Loop", "", "Stop"],
+        MenuKind::Music => &[
+            "Choose Folder...",
+            "Playlist...",
+            "",
+            "Play/Pause",
+            "Previous",
+            "Next",
+            "Shuffle",
+            "Repeat",
+            "",
+            "Stop",
+        ],
         MenuKind::Help => &["Find Help", "Settings...", "About"],
     }
 }
@@ -5394,10 +6420,14 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "Debug Panel  Ctrl/Cmd+D",
         ],
         MenuKind::Music => &[
+            "Choose Folder...     F",
+            "Playlist...          P",
+            "",
             "Play/Pause          F7",
             "Previous      Shift+F8",
             "Next                F8",
-            "Loop       Ctrl/Cmd+F8",
+            "Shuffle              S",
+            "Repeat     Ctrl/Cmd+F8",
             "",
             "Stop          Shift+F7",
         ],
@@ -5439,7 +6469,9 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
         MenuKind::Debug => {
             &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c"), (15, "d")]
         }
-        MenuKind::Music => &[(0, "p"), (1, "r"), (2, "n"), (3, "l"), (5, "s")],
+        MenuKind::Music => {
+            &[(0, "f"), (1, "p"), (3, "a"), (4, "v"), (5, "n"), (6, "s"), (7, "r"), (9, "t")]
+        }
         MenuKind::Help => &[(0, "f"), (1, "s"), (2, "a")],
     };
     hotkeys.iter().find_map(|(index, hotkey)| (*hotkey == key).then_some(*index))
@@ -6552,6 +7584,34 @@ mod tests {
         }
     }
 
+    fn test_nsf(program: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0; 0x80];
+        bytes[..5].copy_from_slice(b"NESM\x1A");
+        bytes[5] = 1;
+        bytes[6] = 1;
+        bytes[7] = 1;
+        bytes[8..14].copy_from_slice(&[0x00, 0x80, 0x00, 0x80, 0x20, 0x80]);
+        bytes[0x6e..0x70].copy_from_slice(&16_639_u16.to_le_bytes());
+        bytes.extend_from_slice(program);
+        bytes
+    }
+
+    fn delayed_short_test_nsf() -> Vec<u8> {
+        let mut program = [0x60; 0x40];
+        // Repeat after the 8-bit play counter wraps. This proves that scanning
+        // remains incremental without depending on debug/release execution speed.
+        program[0x20..0x23].copy_from_slice(&[0xe6, 0x00, 0x60]);
+        test_nsf(&program)
+    }
+
+    fn long_test_nsf() -> Vec<u8> {
+        let mut program = [0x60; 0x40];
+        // Keep a 16-bit play counter in NSF RAM so no state repeats inside the
+        // ten-second filter window.
+        program[0x20..0x27].copy_from_slice(&[0xe6, 0x00, 0xd0, 0x02, 0xe6, 0x01, 0x60]);
+        test_nsf(&program)
+    }
+
     #[test]
     fn typing_selection_copy_paste_and_undo_work() {
         let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
@@ -6735,6 +7795,292 @@ mod tests {
         // Shading darkens both down the cell, so match the unshaded top row.
         assert!(first_cell.contains(&editor_color(UI_SUCCESS_BACKGROUND)));
         assert!(first_cell.contains(&editor_color(UI_WHITE_COLOR)));
+    }
+
+    fn playlist_status(filename: &str) -> MusicStatus {
+        MusicStatus {
+            filename: filename.to_owned(),
+            title: filename.to_owned(),
+            artist: "FANTICON TRACKER".to_owned(),
+            track: 1,
+            tracks: 1,
+            paused: false,
+            looping: false,
+            position: Some((0, 1)),
+            channel_levels: [0; 4],
+        }
+    }
+
+    #[test]
+    fn system_media_keys_control_the_playlist_even_with_an_overlay_open() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("music").unwrap();
+        let song = MusicEditor::default();
+        filesystem.borrow_mut().write_text("music/one.mus", &song.serialize("one.mus")).unwrap();
+        filesystem.borrow_mut().write_text("music/two.mus", &song.serialize("two.mus")).unwrap();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.set_music_player_settings(MusicPlayerSettings {
+            folder: "/music".to_owned(),
+            ..MusicPlayerSettings::default()
+        });
+        editor.overlay = Overlay::MusicPlaylist { selected: 0, scroll: 0 };
+        let physical = PhysicalKey::Code(KeyCode::MediaPlayPause);
+
+        assert!(matches!(
+            editor.handle_key(
+                &Key::Named(NamedKey::MediaPlayPause),
+                physical,
+                ModifiersState::empty(),
+            ),
+            EditorAction::Music(MusicCommand::LoadPlaylistTracker { filename, .. })
+                if filename == "/music/one.mus"
+        ));
+        assert!(matches!(editor.overlay, Overlay::MusicPlaylist { .. }));
+        editor.set_music_status(Some(playlist_status("/music/one.mus")));
+
+        assert_eq!(
+            editor
+                .handle_key(&Key::Named(NamedKey::MediaPause), physical, ModifiersState::empty(),),
+            EditorAction::Music(MusicCommand::Pause)
+        );
+        assert_eq!(
+            editor.handle_key(&Key::Named(NamedKey::MediaPlay), physical, ModifiersState::empty(),),
+            EditorAction::Music(MusicCommand::Play)
+        );
+        assert!(matches!(
+            editor.handle_key(
+                &Key::Named(NamedKey::MediaTrackNext),
+                physical,
+                ModifiersState::empty(),
+            ),
+            EditorAction::Music(MusicCommand::LoadPlaylistTracker { filename, .. })
+                if filename == "/music/two.mus"
+        ));
+        assert!(matches!(
+            editor.handle_key(
+                &Key::Named(NamedKey::MediaTrackPrevious),
+                physical,
+                ModifiersState::empty(),
+            ),
+            EditorAction::Music(MusicCommand::LoadPlaylistTracker { filename, .. })
+                if filename == "/music/one.mus"
+        ));
+        assert_eq!(
+            editor.handle_key(&Key::Named(NamedKey::MediaStop), physical, ModifiersState::empty(),),
+            EditorAction::Music(MusicCommand::Stop)
+        );
+        assert!(!editor.playlist_active);
+    }
+
+    #[test]
+    fn editor_playlist_discovers_only_valid_music_in_the_selected_folder() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("music").unwrap();
+        filesystem.borrow_mut().create_directory("music/sub").unwrap();
+        let song = MusicEditor::default().serialize("theme.mus");
+        filesystem.borrow_mut().write_text("music/theme.mus", &song).unwrap();
+        filesystem.borrow_mut().write_text("music/bad.mus", "not music").unwrap();
+        filesystem.borrow_mut().write_text("music/readme.txt", "ignore me").unwrap();
+        filesystem.borrow_mut().write_text("music/sub/hidden.mus", &song).unwrap();
+
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.set_music_player_settings(MusicPlayerSettings {
+            folder: "/music".to_owned(),
+            ..MusicPlayerSettings::default()
+        });
+
+        assert_eq!(editor.playlist_entries.len(), 1);
+        assert_eq!(editor.playlist_entries[0].path, "/music/theme.mus");
+        assert_eq!(editor.playlist_warnings.len(), 1);
+        editor.toggle_playlist_entry(0);
+        assert!(!editor.playlist_entry_selected(&editor.playlist_entries[0]));
+        let saved = editor.take_music_player_settings().unwrap();
+        assert_eq!(saved.excluded, ["/MUSIC/THEME.MUS"]);
+    }
+
+    #[test]
+    fn editor_playlist_filters_short_nsf_tracks_incrementally() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("music").unwrap();
+        filesystem.borrow_mut().write_binary("music/short.nsf", &delayed_short_test_nsf()).unwrap();
+
+        let mut editor = TextEditor::new(filesystem.clone(), shared_ui_colors(), None);
+        editor.set_music_player_settings(MusicPlayerSettings {
+            folder: "/music".to_owned(),
+            ..MusicPlayerSettings::default()
+        });
+
+        assert!(editor.playlist_entries.is_empty());
+        assert_eq!(editor.playlist_pending_probes.len(), 1);
+        assert_eq!(editor.playlist_short_filtered, 0);
+
+        editor.update();
+        assert_eq!(editor.playlist_pending_probes.len(), 1);
+        assert!(editor.playlist_pending_probes.front().unwrap().probe.is_some());
+        editor.activate_menu(MenuKind::Music, 1);
+        assert_eq!(editor.playlist_pending_probes.len(), 1);
+        assert!(editor.playlist_pending_probes.front().unwrap().probe.is_some());
+        for _ in 0..20 {
+            editor.update();
+            if editor.playlist_pending_probes.is_empty() {
+                break;
+            }
+        }
+        assert!(editor.playlist_pending_probes.is_empty());
+        assert!(editor.playlist_entries.is_empty());
+        assert_eq!(editor.playlist_short_filtered, 1);
+
+        let cached_settings = editor.take_music_player_settings().unwrap();
+        assert_eq!(cached_settings.nsf_scan_cache.len(), 1);
+        let mut cached = TextEditor::new(filesystem.clone(), shared_ui_colors(), None);
+        cached.set_music_player_settings(cached_settings.clone());
+        assert!(cached.playlist_pending_probes.is_empty());
+        assert_eq!(cached.playlist_short_filtered, 1);
+
+        filesystem.borrow_mut().write_binary("music/short.nsf", &long_test_nsf()).unwrap();
+        let mut changed = TextEditor::new(filesystem, shared_ui_colors(), None);
+        changed.set_music_player_settings(cached_settings);
+        assert_eq!(changed.playlist_pending_probes.len(), 1);
+        assert_eq!(changed.playlist_short_filtered, 0);
+    }
+
+    #[test]
+    fn editor_playlist_prioritizes_current_then_selected_nsf_tracks() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("music").unwrap();
+        for filename in ["a.nsf", "b.nsf", "c.nsf"] {
+            filesystem
+                .borrow_mut()
+                .write_binary(&format!("music/{filename}"), &long_test_nsf())
+                .unwrap();
+        }
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.set_music_player_settings(MusicPlayerSettings {
+            folder: "/music".to_owned(),
+            excluded: vec!["/MUSIC/A.NSF#1".to_owned()],
+            current: Some("/MUSIC/C.NSF#1".to_owned()),
+            ..MusicPlayerSettings::default()
+        });
+
+        let pending = editor
+            .playlist_pending_probes
+            .iter()
+            .map(|pending| pending.entry.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(pending, ["/MUSIC/C.NSF#1", "/MUSIC/B.NSF#1", "/MUSIC/A.NSF#1"]);
+    }
+
+    #[test]
+    fn editor_playlist_can_play_while_scanning_and_appends_new_entries() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("music").unwrap();
+        let song = MusicEditor::default().serialize("ready.mus");
+        filesystem.borrow_mut().write_text("music/ready.mus", &song).unwrap();
+        filesystem.borrow_mut().write_binary("music/later.nsf", &long_test_nsf()).unwrap();
+
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.set_music_player_settings(MusicPlayerSettings {
+            folder: "/music".to_owned(),
+            ..MusicPlayerSettings::default()
+        });
+
+        assert_eq!(editor.playlist_entries.len(), 1);
+        assert_eq!(editor.playlist_pending_probes.len(), 1);
+        assert!(matches!(
+            editor.start_playlist(Some(0)),
+            EditorAction::Music(MusicCommand::LoadPlaylistTracker { filename, .. })
+                if filename == "/music/ready.mus"
+        ));
+        assert_eq!(editor.playlist_order, [0]);
+
+        for _ in 0..200 {
+            editor.update();
+            if editor.playlist_pending_probes.is_empty() {
+                break;
+            }
+        }
+        assert!(editor.playlist_pending_probes.is_empty());
+        assert_eq!(editor.playlist_entries.len(), 2);
+        assert_eq!(editor.playlist_order, [0, 1]);
+        assert_eq!(editor.playlist_order_cursor, 0);
+    }
+
+    #[test]
+    fn editor_playlist_advances_across_files_and_stops_when_repeat_is_off() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("music").unwrap();
+        let song = MusicEditor::default();
+        filesystem.borrow_mut().write_text("music/one.mus", &song.serialize("one.mus")).unwrap();
+        filesystem.borrow_mut().write_text("music/two.mus", &song.serialize("two.mus")).unwrap();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.set_music_player_settings(MusicPlayerSettings {
+            folder: "/music".to_owned(),
+            repeat: false,
+            ..MusicPlayerSettings::default()
+        });
+
+        assert!(matches!(
+            editor.start_playlist(Some(0)),
+            EditorAction::Music(MusicCommand::LoadPlaylistTracker { filename, .. })
+                if filename == "/music/one.mus"
+        ));
+        editor.set_music_status(Some(playlist_status("/music/one.mus")));
+        editor.set_music_status(None);
+        assert!(matches!(
+            editor.update(),
+            EditorAction::Music(MusicCommand::LoadPlaylistTracker { filename, .. })
+                if filename == "/music/two.mus"
+        ));
+        editor.set_music_status(Some(playlist_status("/music/two.mus")));
+        editor.set_music_status(None);
+        assert_eq!(editor.update(), EditorAction::None);
+        assert!(!editor.playlist_active);
+    }
+
+    #[test]
+    fn tracker_audition_suspends_and_then_resumes_the_playlist_entry() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("music").unwrap();
+        let source = MusicEditor::default().serialize("one.mus");
+        filesystem.borrow_mut().write_text("music/one.mus", &source).unwrap();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+        editor.set_music_player_settings(MusicPlayerSettings {
+            folder: "/music".to_owned(),
+            ..MusicPlayerSettings::default()
+        });
+        let _ = editor.start_playlist(None);
+        editor.set_music_status(Some(playlist_status("/music/one.mus")));
+        editor.set_music_status(Some(playlist_status("AUDITION.MUS")));
+        editor.set_music_status(None);
+
+        assert!(matches!(
+            editor.update(),
+            EditorAction::Music(MusicCommand::LoadPlaylistTracker { filename, .. })
+                if filename == "/music/one.mus"
+        ));
+    }
+
+    #[test]
+    fn music_folder_and_playlist_overlays_support_keyboard_and_mouse() {
+        let filesystem = shared_filesystem();
+        filesystem.borrow_mut().create_directory("music").unwrap();
+        let source = MusicEditor::default().serialize("one.mus");
+        filesystem.borrow_mut().write_text("music/one.mus", &source).unwrap();
+        let mut editor = TextEditor::new(filesystem, shared_ui_colors(), None);
+
+        editor.open_music_folder_browser("/");
+        editor.handle_overlay_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty());
+        editor.handle_overlay_key(&Key::Named(NamedKey::Enter), ModifiersState::empty());
+        editor.handle_overlay_key(&key("s"), ModifiersState::empty());
+        assert_eq!(editor.music_player_settings.folder, "/music");
+        assert_eq!(editor.playlist_entries.len(), 1);
+        assert!(matches!(editor.overlay, Overlay::MusicPlaylist { .. }));
+
+        let mut surface = Surface::new(EDITOR_DISPLAY_WIDTH, EDITOR_DISPLAY_HEIGHT);
+        editor.render(&mut surface, false);
+        let playlist_y = (ROWS - 23) / 2 + 4;
+        editor.handle_mouse_press(COLUMNS / 2 * GLYPH_WIDTH, playlist_y * GLYPH_HEIGHT, false);
+        assert!(!editor.playlist_entry_selected(&editor.playlist_entries[0]));
     }
 
     #[test]

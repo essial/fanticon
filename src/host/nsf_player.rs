@@ -26,6 +26,8 @@ pub enum MusicCommand {
     Load { filename: String, bytes: Vec<u8>, track: u8 },
     LoadTracker { filename: String, source: String },
     AuditionTracker { source: String },
+    LoadPlaylistNsf { filename: String, bytes: Vec<u8>, track: u8 },
+    LoadPlaylistTracker { filename: String, source: String },
     Play,
     Pause,
     Stop,
@@ -119,6 +121,7 @@ pub struct MusicRadio {
     paused: bool,
     looping: bool,
     advance_pending: bool,
+    playlist_item: bool,
 }
 
 impl MusicRadio {
@@ -131,6 +134,7 @@ impl MusicRadio {
             paused: false,
             looping: true,
             advance_pending: false,
+            playlist_item: false,
         }
     }
 
@@ -143,6 +147,7 @@ impl MusicRadio {
                 self.bytes = bytes;
                 self.paused = false;
                 self.advance_pending = false;
+                self.playlist_item = false;
                 self.player = Some(player);
                 self.tracker = None;
                 Ok(self.description("PLAYING"))
@@ -153,6 +158,7 @@ impl MusicRadio {
                 self.bytes.clear();
                 self.paused = false;
                 self.advance_pending = false;
+                self.playlist_item = false;
                 self.player = None;
                 self.tracker = Some(TrackerPlayer::new(song, self.looping));
                 Ok(self.description("PLAYING"))
@@ -163,9 +169,33 @@ impl MusicRadio {
                 self.bytes.clear();
                 self.paused = false;
                 self.advance_pending = false;
+                self.playlist_item = false;
                 self.player = None;
                 self.tracker = Some(TrackerPlayer::new(song, false));
                 Ok("INSTRUMENT AUDITION".to_owned())
+            }
+            MusicCommand::LoadPlaylistNsf { filename, bytes, track } => {
+                let mut player = NsfPlayer::new(&bytes, track)?;
+                player.set_loop_limit(1);
+                self.filename = filename;
+                self.bytes = bytes;
+                self.paused = false;
+                self.advance_pending = false;
+                self.playlist_item = true;
+                self.player = Some(player);
+                self.tracker = None;
+                Ok(self.description("PLAYLIST"))
+            }
+            MusicCommand::LoadPlaylistTracker { filename, source } => {
+                let song = MusicEditor::compile(&source)?;
+                self.filename = filename;
+                self.bytes.clear();
+                self.paused = false;
+                self.advance_pending = false;
+                self.playlist_item = true;
+                self.player = None;
+                self.tracker = Some(TrackerPlayer::new(song, false));
+                Ok(self.description("PLAYLIST"))
             }
             MusicCommand::Play => {
                 self.require_music()?;
@@ -186,6 +216,7 @@ impl MusicRadio {
                 self.bytes.clear();
                 self.filename.clear();
                 self.paused = false;
+                self.playlist_item = false;
                 Ok(format!("{} STOPPED", if tracker { "MUSIC" } else { "NSF" }))
             }
             MusicCommand::Next => self.change_track(true),
@@ -217,7 +248,7 @@ impl MusicRadio {
                 track: 1,
                 tracks: 1,
                 paused: self.paused,
-                looping: self.looping,
+                looping: self.looping && !self.playlist_item,
                 position: self
                     .tracker
                     .as_ref()
@@ -237,7 +268,7 @@ impl MusicRadio {
             track: player.track,
             tracks: player.image.songs,
             paused: self.paused,
-            looping: self.looping,
+            looping: self.looping && !self.playlist_item,
             position: None,
             channel_levels: [0; 4],
         })
@@ -272,6 +303,7 @@ impl MusicRadio {
         if finished {
             self.tracker = None;
             self.filename.clear();
+            self.playlist_item = false;
             return None;
         }
         self.tracker
@@ -315,6 +347,13 @@ impl MusicRadio {
 
     fn advance_automatically(&mut self) {
         self.advance_pending = false;
+        if self.playlist_item {
+            self.player = None;
+            self.bytes.clear();
+            self.filename.clear();
+            self.playlist_item = false;
+            return;
+        }
         let Some(player) = &self.player else { return };
         let next = if player.track < player.image.songs {
             Some(player.track + 1)
@@ -363,6 +402,44 @@ impl MusicRadio {
                 )
             },
         )
+    }
+}
+
+pub fn nsf_track_count(bytes: &[u8]) -> Result<u8, String> {
+    Ok(NsfImage::parse(bytes)?.songs)
+}
+
+pub(crate) struct NsfTrackProbe {
+    player: NsfPlayer,
+    elapsed_frames: usize,
+    minimum_frames: usize,
+}
+
+impl NsfTrackProbe {
+    pub fn new(bytes: &[u8], track: u8, minimum_seconds: usize) -> Result<Self, String> {
+        let mut player = NsfPlayer::new(bytes, track)?;
+        player.set_loop_limit(1);
+        Ok(Self { player, elapsed_frames: 0, minimum_frames: minimum_seconds.saturating_mul(60) })
+    }
+
+    /// Advances a bounded amount of emulated playback. `Some(true)` means the
+    /// track proved shorter than the threshold, `Some(false)` means it should be
+    /// retained, and `None` means more background work remains.
+    pub fn step(&mut self, frame_budget: usize) -> Option<bool> {
+        if self.minimum_frames == 0 {
+            return Some(false);
+        }
+        for _ in 0..frame_budget {
+            self.player.render_capture_frame();
+            self.elapsed_frames += 1;
+            if self.player.finished {
+                return Some(self.elapsed_frames < self.minimum_frames);
+            }
+            if self.elapsed_frames >= self.minimum_frames {
+                return Some(false);
+            }
+        }
+        None
     }
 }
 
@@ -1508,6 +1585,42 @@ mod tests {
         assert!(radio.render_frame().is_none());
         radio.apply(MusicCommand::Stop).unwrap();
         assert!(radio.status().is_none());
+    }
+
+    #[test]
+    fn playlist_nsf_stops_after_one_detected_loop_instead_of_changing_tracks() {
+        let bytes = nsf(&[0x60; 0x40], 3, 1);
+        assert_eq!(nsf_track_count(&bytes).unwrap(), 3);
+        let mut radio = MusicRadio::new();
+        radio
+            .apply(MusicCommand::LoadPlaylistNsf {
+                filename: "/music/album.nsf".to_owned(),
+                bytes,
+                track: 2,
+            })
+            .unwrap();
+        let player = radio.player.as_mut().unwrap();
+        player.init_complete = true;
+        let fingerprint = player.bus.fingerprint(player.cpu.a, player.cpu.x, player.cpu.y);
+        player.seen_play_states.insert(fingerprint, (0, 0));
+        player.play_calls = 30;
+        assert!(player.detect_completed_loop());
+        player.finished = true;
+        radio.advance_pending = true;
+        assert!(radio.render_frame().is_none());
+        assert!(radio.status().is_none());
+    }
+
+    #[test]
+    fn short_nsf_filter_only_rejects_tracks_with_a_proven_early_loop() {
+        let bytes = nsf(&[0x60; 0x40], 1, 1);
+        let mut probe = NsfTrackProbe::new(&bytes, 1, 10).unwrap();
+        assert_eq!(probe.step(1), None);
+        let result = (0..20).find_map(|_| probe.step(30));
+        assert_eq!(result, Some(true));
+
+        let mut disabled = NsfTrackProbe::new(&bytes, 1, 0).unwrap();
+        assert_eq!(disabled.step(1), Some(false));
     }
 
     #[test]

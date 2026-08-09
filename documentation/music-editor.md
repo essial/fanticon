@@ -96,6 +96,42 @@ Editor preview consumes the same compiled audio-register stream as the supplied
 arpeggio, pitch, duty/noise mode, retrigger timing, oscillator sequences,
 nonlinear mixing, stereo treatment, and reverb.
 
+## Editor background playlist
+
+The Music menu can play `.MUS` and `.NSF` files while any editor tab is open.
+Choose **Music > Choose Folder** to browse directories under Fanticon's managed
+filesystem root, then choose **Music > Playlist** to select individual entries
+or all of them. Scanning is intentionally non-recursive; select the exact folder
+whose music you want to hear.
+
+Multi-song NSF files appear as one selectable entry per internal track. Invalid
+or unsupported files are skipped without stopping the rest of the playlist.
+NSF tracks with a complete detected loop shorter than ten seconds are filtered
+as likely sound effects. Tracks whose duration cannot be proven within that
+window remain available, and explicit `.MUS` resources are never duration-filtered.
+NSF duration checks run incrementally in the background, so opening the editor or
+playlist remains responsive while the playlist reports its scan progress. Closing
+and reopening the playlist preserves that progress, and playback can begin with
+the entries already available while more NSF tracks continue to be checked. Scan
+work uses a small per-frame time budget and prioritizes the current and included
+tracks. Results are cached by file content and track, making later editor sessions
+instant unless an NSF changes.
+
+Tracker songs advance at their end, and NSF entries advance after one detected
+loop. Sequential and shuffled ordering are available, along with whole-playlist
+repeat. The selected folder, exclusions, shuffle/repeat options, and current
+entry are retained in Fanticon's host settings.
+
+`F7`, `Shift+F7`, `F8`, `Shift+F8`, and `Ctrl/Cmd+F8` control the active
+playlist. System media Play, Pause, Play/Pause, Previous, Next, and Stop keys
+work throughout the editor, including while a dialog is open. On macOS, Fanticon
+publishes the active song and playback state to Control Center/Now Playing, so
+these controls remain routed to Fanticon when another application is focused.
+Opening a tracker preview or holding an instrument-audition key temporarily
+suspends background music; it resumes the same playlist entry when the preview
+ends. Running a game likewise leaves the playlist paused in place and resumes it
+when control returns to the editor.
+
 ## File and cartridge format
 
 A current resource begins with version 2 metadata. `PATTERN-ROWS` is the number

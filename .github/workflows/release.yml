@@ -338,6 +338,7 @@ jobs:
           cp LICENSE-MIT LICENSE-APACHE "$root/licenses/"
           printf 'FANTICON_RUNTIME_KIT=1\nVERSION=%s\n' "$version" > "$root/manifest.txt"
           FANTICON_SKIP_CODE_ASSET_SYNC=1 cargo run --locked --no-default-features \
+            --features native-export \
             --bin fanticon-export -- \
             verify --runtime-kit "$root"
           FANTICON_SKIP_CODE_ASSET_SYNC=1 FANTICON_TEST_RUNTIME_KIT="$root" \

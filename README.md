@@ -33,10 +33,12 @@ Launching Fanticon drops you into the native editor's command console.
 When the game is ready to share, the bundled `fanticon-export` tool produces an
 installable offline web app, Windows packages, Linux AppDir archives, and macOS
 app bundles from the official prebuilt runtime kit. `fanticon-export all`
-creates the complete release set in one pass. Exporting is toolchain-free and
-cross-platform: creators do not need Rust, WebAssembly tools, platform SDKs, or
-the target operating system. Every official installer and portable archive
-includes all target runtimes. See the [export guide](documentation/exporting.md).
+creates the complete release set and its SHA-256 inventory in one pass, while
+`fanticon-export verify-release` checks it after publication. Exporting is
+toolchain-free and cross-platform: creators do not need Rust, WebAssembly tools,
+platform SDKs, or the target operating system. Every official installer and
+portable archive includes all target runtimes. See the
+[export guide](documentation/exporting.md).
 
 An existing cartridge can be opened with `RUN GAME.FCN` from the console, or
 launched directly:

@@ -4,7 +4,7 @@ use fanticon::{
     cartridge::Cartridge,
     export::{
         ExportMetadata, ExportPlatform, RuntimeKit, export_all, export_binary, export_html,
-        export_package,
+        export_package, verify_release,
     },
     project::{MANIFEST_NAME, ProjectManifest},
 };
@@ -14,6 +14,7 @@ Fanticon toolchain-free exporter
 
 Usage:
   fanticon-export verify [--runtime-kit <directory>]
+  fanticon-export verify-release <release-directory>
   fanticon-export html <game.fcn> [output-directory] [--runtime-kit <directory>]
   fanticon-export binary <platform> <game.fcn> [output-file] [--runtime-kit <directory>]
   fanticon-export package <platform> <game.fcn> [output-archive] [--runtime-kit <directory>]
@@ -43,8 +44,22 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let kit_path = take_option(&mut arguments, "--runtime-kit")?;
-    let kit = RuntimeKit::locate(kit_path.as_deref())?;
     let format = take_string(&mut arguments)?;
+    if format.eq_ignore_ascii_case("verify-release") {
+        let output = take_path(&mut arguments)?;
+        if !arguments.is_empty() || kit_path.is_some() {
+            return Err(USAGE.to_owned());
+        }
+        let manifest = verify_release(&output)?;
+        println!(
+            "Verified {} files for {} ({})",
+            manifest.files.len(),
+            manifest.title,
+            output.display()
+        );
+        return Ok(());
+    }
+    let kit = RuntimeKit::locate(kit_path.as_deref())?;
     if format.eq_ignore_ascii_case("verify") {
         if !arguments.is_empty() {
             return Err(USAGE.to_owned());

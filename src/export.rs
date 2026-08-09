@@ -17,6 +17,8 @@ use editpe::{
 };
 use flate2::{Compression, write::GzEncoder};
 use image::{ImageFormat, imageops::FilterType};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 const FOOTER_MAGIC: [u8; 16] = *b"FANTICON-EXPORT\x01";
@@ -83,6 +85,22 @@ pub struct ExportMetadata {
     pub icon: Option<PathBuf>,
     pub web_background: String,
     pub web_foreground: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseFile {
+    pub path: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseManifest {
+    pub format: u32,
+    pub fanticon_version: String,
+    pub title: String,
+    pub cartridge_id: Option<String>,
+    pub files: Vec<ReleaseFile>,
 }
 
 impl ExportMetadata {
@@ -321,7 +339,31 @@ pub fn export_all(
         format!("{}\n\nArtifacts:\n{manifest}\n", release_notes(metadata)),
     )
     .map_err(|error| error.to_string())?;
+    write_release_manifest(output, metadata)?;
     Ok(artifacts)
+}
+
+/// Verify every file recorded by an `export_all` release manifest.
+pub fn verify_release(output: &Path) -> Result<ReleaseManifest, String> {
+    let manifest_path = output.join("release.json");
+    let manifest: ReleaseManifest = serde_json::from_slice(
+        &fs::read(&manifest_path)
+            .map_err(|error| format!("could not read {}: {error}", manifest_path.display()))?,
+    )
+    .map_err(|error| format!("release manifest is invalid: {error}"))?;
+    if manifest.format != 1 {
+        return Err(format!("release manifest format {} is not supported", manifest.format));
+    }
+    let actual = release_files(output)?;
+    if manifest.files != actual {
+        let expected_paths = manifest.files.iter().map(|file| &file.path).collect::<Vec<_>>();
+        let actual_paths = actual.iter().map(|file| &file.path).collect::<Vec<_>>();
+        if expected_paths != actual_paths {
+            return Err("release file inventory does not match release.json".to_owned());
+        }
+        return Err("release file size or SHA-256 does not match release.json".to_owned());
+    }
+    Ok(manifest)
 }
 
 pub fn write_standalone_player(
@@ -649,6 +691,73 @@ fn release_notes(metadata: &ExportMetadata) -> String {
     notes
 }
 
+fn write_release_manifest(output: &Path, metadata: &ExportMetadata) -> Result<(), String> {
+    let manifest = ReleaseManifest {
+        format: 1,
+        fanticon_version: env!("CARGO_PKG_VERSION").to_owned(),
+        title: metadata.title.clone(),
+        cartridge_id: metadata.cartridge_id.map(|id| format!("{id:016X}")),
+        files: release_files(output)?,
+    };
+    let mut json = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| format!("could not encode release manifest: {error}"))?;
+    json.push(b'\n');
+    fs::write(output.join("release.json"), json)
+        .map_err(|error| format!("could not write release.json: {error}"))
+}
+
+fn release_files(root: &Path) -> Result<Vec<ReleaseFile>, String> {
+    let mut files = Vec::new();
+    collect_release_files(root, root, &mut files)?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn collect_release_files(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<ReleaseFile>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("could not inspect {}: {error}", directory.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!("release contains unsupported symbolic link {}", path.display()));
+        }
+        if metadata.is_dir() {
+            collect_release_files(root, &path, files)?;
+            continue;
+        }
+        if !metadata.is_file() || path == root.join("release.json") {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| format!("{} is outside the release directory", path.display()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let mut source = File::open(&path).map_err(|error| error.to_string())?;
+        let mut digest = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let count = source.read(&mut buffer).map_err(|error| error.to_string())?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
+        files.push(ReleaseFile {
+            path: relative,
+            bytes: metadata.len(),
+            sha256: format!("{:x}", digest.finalize()),
+        });
+    }
+    Ok(())
+}
+
 fn linux_desktop(metadata: &ExportMetadata, slug: &str) -> String {
     let comment = metadata.description.as_deref().unwrap_or("Fanticon game");
     let icon = format!("Icon={slug}\n");
@@ -902,7 +1011,13 @@ mod tests {
         assert_eq!(artifacts.len(), 6);
         assert!(artifacts.iter().all(|path| path.exists()));
         assert!(output.join("RELEASE.txt").is_file());
+        assert!(output.join("release.json").is_file());
         assert!(output.join("release-test-web/manifest.webmanifest").is_file());
+        let manifest = verify_release(&output).unwrap();
+        assert_eq!(manifest.format, 1);
+        assert!(manifest.files.iter().any(|file| file.path == "RELEASE.txt"));
+        fs::write(output.join("RELEASE.txt"), b"tampered").unwrap();
+        assert!(verify_release(&output).unwrap_err().contains("SHA-256"));
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(output);
     }

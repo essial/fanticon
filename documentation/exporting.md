@@ -100,8 +100,17 @@ fanticon-export all GAME.FCN GAME-RELEASE
 `EXPORT ALL` at the Fanticon prompt and selecting every target in the editor do
 the same job. Fanticon builds the cartridge once, then writes a publishable PWA,
 two Windows ZIPs, two Linux `.tar.gz` archives, one universal macOS app ZIP, and
-`RELEASE.txt` into one directory. Every output is self-contained; players need
-neither Fanticon nor a Rust, WebAssembly, SDK, or target-platform toolchain.
+`RELEASE.txt` into one directory. It also writes `release.json`, a deterministic
+inventory containing the byte size and SHA-256 digest of every release file.
+Verify a copied or uploaded release without a runtime kit using:
+
+```text
+fanticon-export verify-release GAME-RELEASE
+```
+
+Verification rejects missing, additional, truncated, or modified files. Every
+output is self-contained; players need neither Fanticon nor a Rust, WebAssembly,
+SDK, or target-platform toolchain.
 
 macOS public distribution may additionally require signing and notarization for
 the publisher's identity. These are Gatekeeper trust operations, not compilation

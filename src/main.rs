@@ -18,8 +18,8 @@ use fanticon::{
 };
 use host::{
     AppMode, AudioOutput, BootSplash, DebugCommand, EditorAction, FramePacer, FrameStatus,
-    GamepadInput, MusicCommand, MusicRadio, Renderer, Surface, Terminal, TerminalAction,
-    TextEditor, draw_boot_logo,
+    GamepadInput, HostSettings, MusicCommand, MusicRadio, Renderer, SettingsMenu,
+    SettingsMenuAction, Surface, Terminal, TerminalAction, TextEditor, draw_boot_logo,
 };
 use web_time::Instant;
 use winit::{
@@ -56,6 +56,10 @@ struct FanticonApp {
     gamepads: GamepadInput,
     keyboard_controller: u8,
     input_focused: bool,
+    settings: HostSettings,
+    settings_menu: Option<SettingsMenu>,
+    settings_surface: Surface,
+    menu_controller: u8,
 }
 
 struct GameSession {
@@ -87,6 +91,10 @@ impl FanticonApp {
         let mut video = Video::new();
         draw_boot_logo(&mut video);
         let now = Instant::now();
+        let settings = HostSettings::load();
+        let audio_output = AudioOutput::new(&settings.audio)
+            .map_err(|error| eprintln!("Fanticon audio disabled: {error}"))
+            .ok();
         Self {
             event_proxy,
             window: None,
@@ -100,14 +108,16 @@ impl FanticonApp {
             text_editor: None,
             modifiers: ModifiersState::empty(),
             game: None,
-            audio_output: AudioOutput::new()
-                .map_err(|error| eprintln!("Fanticon audio disabled: {error}"))
-                .ok(),
+            audio_output,
             music: MusicRadio::new(),
             mouse_position: None,
             gamepads: GamepadInput::new(),
             keyboard_controller: 0,
             input_focused: true,
+            settings,
+            settings_menu: None,
+            settings_surface: Surface::new(host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT),
+            menu_controller: 0,
         }
     }
 }
@@ -140,15 +150,18 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let result = pollster::block_on(Renderer::new(window));
+            let result = pollster::block_on(Renderer::new(window, self.settings.graphics.clone()));
             let _ = proxy.send_event(UserEvent::RendererReady(result));
         }
 
         #[cfg(target_arch = "wasm32")]
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = Renderer::new(window).await;
-            let _ = proxy.send_event(UserEvent::RendererReady(result));
-        });
+        {
+            let graphics = self.settings.graphics.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = Renderer::new(window, graphics).await;
+                let _ = proxy.send_event(UserEvent::RendererReady(result));
+            });
+        }
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -205,6 +218,16 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                     }
                     return;
                 }
+                if self.settings_menu.is_some() {
+                    if should_process_keyboard_input(event.state, event.repeat) && !event.repeat {
+                        let action =
+                            self.settings_menu.as_mut().map_or(SettingsMenuAction::None, |menu| {
+                                menu.handle_key(&event.logical_key)
+                            });
+                        self.apply_settings_menu_action(action);
+                    }
+                    return;
+                }
                 let now = Instant::now();
                 if self.boot_splash.is_active(now) {
                     if event.state == ElementState::Pressed {
@@ -234,6 +257,11 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 self.input_focused = focused;
                 if !focused {
                     self.clear_game_inputs();
+                    if self.settings.audio.mute_when_unfocused
+                        && let Some(audio) = &self.audio_output
+                    {
+                        audio.clear();
+                    }
                     let action = self
                         .text_editor
                         .as_mut()
@@ -242,6 +270,9 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                if self.settings_menu.is_some() {
+                    return;
+                }
                 self.mouse_position = Some(position);
                 if !self.boot_splash.is_active(Instant::now())
                     && !self.game_running()
@@ -256,6 +287,9 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                if self.settings_menu.is_some() {
+                    return;
+                }
                 let now = Instant::now();
                 if state == ElementState::Pressed && self.boot_splash.is_active(now) {
                     self.boot_splash.try_dismiss(now);
@@ -284,7 +318,10 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                if self.boot_splash.is_active(Instant::now()) || self.game_running() {
+                if self.settings_menu.is_some()
+                    || self.boot_splash.is_active(Instant::now())
+                    || self.game_running()
+                {
                     return;
                 }
                 let (mut horizontal, mut vertical) = match delta {
@@ -308,13 +345,16 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 // drawing, so the surface is the live target. Both are settled
                 // before the renderer is borrowed.
                 let splash = self.boot_splash.is_active(Instant::now());
+                let settings_surface = self.settings_menu.is_some() && !splash;
                 let editor_surface = self.text_editor.is_some() && !splash && !self.game_running();
                 let editor_presentation = !splash
                     && (editor_surface
                         || self.video.dimensions()
                             == (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT));
                 if let Some(renderer) = &mut self.renderer {
-                    let status = if editor_surface {
+                    let status = if settings_surface {
+                        renderer.render_surface(&self.settings_surface, true)
+                    } else if editor_surface {
                         renderer.render_surface(&self.editor_surface, editor_presentation)
                     } else {
                         renderer.render(&mut self.video, editor_presentation)
@@ -360,8 +400,31 @@ impl FanticonApp {
             return;
         }
 
+        if self.settings_menu.is_some() {
+            let gamepads = self.gamepads.poll();
+            let pressed = gamepads[0] & !self.menu_controller;
+            self.menu_controller = gamepads[0];
+            let action = if self.gamepads.take_menu_request() {
+                SettingsMenuAction::Close
+            } else {
+                self.settings_menu
+                    .as_mut()
+                    .map_or(SettingsMenuAction::None, |menu| menu.handle_controller(pressed))
+            };
+            self.apply_settings_menu_action(action);
+            if let Some(menu) = &self.settings_menu {
+                menu.render(&mut self.settings_surface);
+            }
+            self.frame_number = self.frame_number.wrapping_add(1);
+            return;
+        }
+
         if self.game_running() {
             self.poll_gamepads();
+            if self.gamepads.take_menu_request() {
+                self.open_settings(true);
+                return;
+            }
             let game = self.game.as_mut().expect("running game session");
             if self.video.dimensions()
                 != (fanticon::video::DISPLAY_WIDTH, fanticon::video::DISPLAY_HEIGHT)
@@ -379,6 +442,7 @@ impl FanticonApp {
                 self.gamepads.suppress_held_inputs();
             }
             if !game.debugger.paused()
+                && (self.input_focused || !self.settings.audio.mute_when_unfocused)
                 && let Some(audio) = &self.audio_output
             {
                 audio.submit(game.debugger.machine.bus.audio_frame());
@@ -419,6 +483,7 @@ impl FanticonApp {
         }
 
         if let Some(frame) = self.music.render_frame()
+            && (self.input_focused || !self.settings.audio.mute_when_unfocused)
             && let Some(audio) = &self.audio_output
         {
             audio.submit_at_rate(frame.samples, frame.source_rate);
@@ -487,6 +552,7 @@ impl FanticonApp {
             EditorAction::Music(command) => {
                 let _ = self.apply_music_command(command);
             }
+            EditorAction::Settings => self.open_settings(false),
             EditorAction::None => {}
         }
     }
@@ -561,6 +627,48 @@ impl FanticonApp {
         }
     }
 
+    fn open_settings(&mut self, in_game: bool) {
+        self.clear_game_inputs();
+        self.menu_controller = 0;
+        self.gamepads.suppress_held_inputs();
+        if let Some(audio) = &self.audio_output {
+            audio.clear();
+        }
+        self.settings_menu = Some(SettingsMenu::new(self.settings.clone(), in_game));
+        if let Some(menu) = &self.settings_menu {
+            menu.render(&mut self.settings_surface);
+        }
+    }
+
+    fn apply_settings_menu_action(&mut self, action: SettingsMenuAction) {
+        match action {
+            SettingsMenuAction::None => {}
+            SettingsMenuAction::Close => {
+                self.settings_menu = None;
+                self.menu_controller = 0;
+                self.gamepads.suppress_held_inputs();
+            }
+            SettingsMenuAction::Changed(settings) => {
+                let buffer_changed = !cfg!(target_arch = "wasm32")
+                    && settings.audio.buffer_size != self.settings.audio.buffer_size;
+                self.settings = settings.normalized();
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.apply_graphics(self.settings.graphics.clone());
+                }
+                if buffer_changed {
+                    self.audio_output = AudioOutput::new(&self.settings.audio)
+                        .map_err(|error| eprintln!("Fanticon audio disabled: {error}"))
+                        .ok();
+                } else if let Some(audio) = &self.audio_output {
+                    audio.apply_processing(&self.settings.audio);
+                }
+                if let Err(error) = self.settings.save() {
+                    eprintln!("Fanticon settings could not be saved: {error}");
+                }
+            }
+        }
+    }
+
     fn start_game(&mut self, launch: host::GameLaunch, launched_from_editor: bool) {
         self.keyboard_controller = 0;
         self.gamepads.suppress_held_inputs();
@@ -607,6 +715,10 @@ impl FanticonApp {
         logical_key: &Key,
         physical_key: PhysicalKey,
     ) {
+        if state == ElementState::Pressed && matches!(logical_key, Key::Named(NamedKey::F10)) {
+            self.open_settings(true);
+            return;
+        }
         if state == ElementState::Pressed
             && matches!(logical_key, Key::Named(NamedKey::F6))
             && self.text_editor.is_some()

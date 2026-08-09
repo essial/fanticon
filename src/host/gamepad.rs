@@ -1,5 +1,5 @@
 use fanticon::system::ControllerState;
-use gilrs::{Axis, Button, GamepadId, Gilrs};
+use gilrs::{Axis, Button, EventType, GamepadId, Gilrs};
 
 const STICK_THRESHOLD: f32 = 0.5;
 
@@ -7,6 +7,7 @@ pub struct GamepadInput {
     gilrs: Option<Gilrs>,
     slots: [Option<GamepadId>; 2],
     suppressed: [u8; 2],
+    menu_requested: bool,
 }
 
 impl GamepadInput {
@@ -17,12 +18,17 @@ impl GamepadInput {
                 .ok(),
             slots: [None; 2],
             suppressed: [0; 2],
+            menu_requested: false,
         }
     }
 
     pub fn poll(&mut self) -> [u8; 2] {
         let Some(gilrs) = &mut self.gilrs else { return [0; 2] };
-        while gilrs.next_event().is_some() {}
+        while let Some(event) = gilrs.next_event() {
+            if matches!(event.event, EventType::ButtonPressed(Button::Mode, _)) {
+                self.menu_requested = true;
+            }
+        }
 
         let connected = gilrs.gamepads().map(|(id, _)| id).collect::<Vec<_>>();
         for slot in &mut self.slots {
@@ -52,6 +58,10 @@ impl GamepadInput {
 
     pub fn suppress_held_inputs(&mut self) {
         self.suppressed = [u8::MAX; 2];
+    }
+
+    pub fn take_menu_request(&mut self) -> bool {
+        std::mem::take(&mut self.menu_requested)
     }
 }
 

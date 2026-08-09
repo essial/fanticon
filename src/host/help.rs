@@ -538,6 +538,7 @@ const GUIDE_DOCS: &[(&str, &str)] = &[
     ("AUDIO.MD", include_str!("../../documentation/audio.md")),
     ("VIDEO.MD", include_str!("../../documentation/video.md")),
     ("EDITOR.MD", include_str!("../../documentation/editor.md")),
+    ("SETTINGS.MD", include_str!("../../documentation/settings.md")),
     ("GRAPHICS-EDITOR.MD", include_str!("../../documentation/graphics-editor.md")),
     ("MUSIC-EDITOR.MD", include_str!("../../documentation/music-editor.md")),
     ("ASSEMBLER.MD", include_str!("../../documentation/assembler.md")),

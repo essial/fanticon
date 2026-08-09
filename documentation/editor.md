@@ -144,7 +144,8 @@ for Debug, Alt+M for Music, or Alt+H for Help. Use the arrow keys to navigate,
 Enter to choose an item, and Escape to close a menu. While a menu is open, its displayed single-letter
 hotkeys activate items immediately. File uses N/O/S/A/X for New, Open, Save,
 Save As, and Exit. Edit uses U/T/C/P/A for Undo, Cut, Copy, Paste, and Select
-All. Build uses B/N/P for Assemble, Next Error, and Previous Error. **Help > Find
+All. Build uses B/N/P for Assemble, Next Error, and Previous Error. **Help >
+Settings** opens the shared graphics and audio settings screen. **Help > Find
 Help** (or F1, from anywhere outside the bare console prompt) opens a live,
 fzf-style finder: results filter as you type across every opcode, directive,
 console command, editor shortcut, and indexed guide section, with a preview

@@ -349,6 +349,7 @@ pub enum EditorAction {
     Run(GameLaunch),
     Debug(DebugCommand),
     Music(MusicCommand),
+    Settings,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3370,7 +3371,8 @@ impl TextEditor {
                 return EditorAction::Music(MusicCommand::Stop);
             }
             (MenuKind::Help, 0) => self.open_help_finder(),
-            (MenuKind::Help, 1) => self.overlay = Overlay::About { frame: 0 },
+            (MenuKind::Help, 1) => return EditorAction::Settings,
+            (MenuKind::Help, 2) => self.overlay = Overlay::About { frame: 0 },
             _ => {}
         }
         EditorAction::None
@@ -5239,7 +5241,7 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "Debug Panel",
         ],
         MenuKind::Music => &["Play/Pause", "Previous", "Next", "Loop", "", "Stop"],
-        MenuKind::Help => &["Find Help", "About"],
+        MenuKind::Help => &["Find Help", "Settings...", "About"],
     }
 }
 
@@ -5344,7 +5346,7 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "",
             "Stop          Shift+F7",
         ],
-        MenuKind::Help => &["Find Help F1", "About      A"],
+        MenuKind::Help => &["Find Help F1", "Settings  S", "About      A"],
     }
 }
 
@@ -5381,7 +5383,7 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
             &[(0, "g"), (1, "s"), (2, "b"), (9, "r"), (10, "w"), (11, "a"), (13, "c"), (15, "d")]
         }
         MenuKind::Music => &[(0, "p"), (1, "r"), (2, "n"), (3, "l"), (5, "s")],
-        MenuKind::Help => &[(0, "f"), (1, "a")],
+        MenuKind::Help => &[(0, "f"), (1, "s"), (2, "a")],
     };
     hotkeys.iter().find_map(|(index, hotkey)| (*hotkey == key).then_some(*index))
 }
@@ -6683,7 +6685,8 @@ mod tests {
         let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
         assert_eq!(menu_origin(MenuKind::Help), 34);
         assert_eq!(menu_bar_hit(34), Some(MenuKind::Help));
-        assert_eq!(menu_hotkey(MenuKind::Help, "a"), Some(1));
+        assert_eq!(menu_hotkey(MenuKind::Help, "a"), Some(2));
+        assert_eq!(menu_hotkey(MenuKind::Help, "s"), Some(1));
         assert_eq!(menu_hotkey(MenuKind::Help, "f"), Some(0));
         assert_eq!(about_wave_phase(119), None);
         assert_eq!(about_wave_phase(120), Some(0));
@@ -6704,7 +6707,7 @@ mod tests {
             (0..ABOUT_LOGO_WIDTH).map(|x| about_wave_offsets(x, 0, 136).1.abs()).max().unwrap();
         assert_eq!(horizontal_amplitude, 8);
         assert_eq!(vertical_amplitude, 3);
-        editor.activate_menu(MenuKind::Help, 1);
+        editor.activate_menu(MenuKind::Help, 2);
         assert!(matches!(editor.overlay, Overlay::About { frame: 0 }));
 
         let mut cells = [b' '; COLUMNS * ROWS];

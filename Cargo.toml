@@ -40,6 +40,8 @@ app-host = [
 
 [dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 bytemuck = { version = "1.24", features = ["derive"], optional = true }
 cpal = { version = "0.16", optional = true }
 gilrs = { version = "0.11.2", optional = true }
@@ -60,15 +62,11 @@ editpe = "0.2.3"
 flate2 = "1.1"
 fs2 = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 sha2 = "0.10"
 tar = { version = "0.4", default-features = false }
 zip = { version = "6.0", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 wasm-bindgen-test = "0.3"
 
 [build-dependencies]

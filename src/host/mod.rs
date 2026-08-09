@@ -11,6 +11,8 @@ mod help;
 mod music_editor;
 mod nsf_player;
 mod renderer;
+mod settings;
+mod settings_menu;
 mod surface;
 mod terminal;
 mod text_editor;
@@ -30,6 +32,11 @@ pub use frame_pacer::FramePacer;
 pub use gamepad::GamepadInput;
 pub use nsf_player::{MusicCommand, MusicRadio};
 pub use renderer::{FrameStatus, Renderer};
+pub use settings::{
+    AudioBufferSize, AudioFilter, AudioHighPass, AudioSettings, GraphicsSettings, HostSettings,
+    RenderingStyle,
+};
+pub use settings_menu::{SettingsMenu, SettingsMenuAction};
 pub use surface::Surface;
 pub use terminal::{AppMode, Terminal, TerminalAction};
 pub use text_editor::{DebugCommand, EditorAction, TextEditor};

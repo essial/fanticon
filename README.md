@@ -52,8 +52,9 @@ return to. To land straight in Game mode instead of the editor on startup, add
 `--game`.
 
 Game mode is hardware-accurate at 320×200; the native editor runs at 640×400
-with an 80×50 character grid. Both are presented with aspect-correct
-letterboxing, scanlines, phosphor beam shaping, and composite color bleed.
+with an 80×50 character grid. Shared presentation settings offer clean pixel,
+VGA, arcade CRT, consumer CRT, LCD, and amber-monitor rendering. In a running
+game, press F10 or the gamepad Guide button for the system menu.
 
 ## What you get
 
@@ -85,6 +86,8 @@ The [video architecture](documentation/video.md) describes the 320×200 indexed
 display, dot-timestamped raster events, GPU scaling, and CRT presentation pass.
 The [audio programmer's reference](documentation/audio.md) defines the two pulse,
 triangle, and noise voices, including exact waveforms, timing, and mixing.
+The [presentation settings guide](documentation/settings.md) covers the shared
+graphics styles, audio processing, buffer sizes, persistence, and in-game menu.
 The [editor and command console](documentation/editor.md) describes application
 modes, the embedded character ROM, native commands, and future tool dispatch.
 The [graphics editor](documentation/graphics-editor.md) documents `.GFX` resident

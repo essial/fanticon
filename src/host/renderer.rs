@@ -3,6 +3,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use fanticon::video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, RGBA_FRAME_LEN, Video};
 
+use super::GraphicsSettings;
 use super::surface::Surface;
 use web_time::Instant;
 use wgpu::util::DeviceExt;
@@ -13,10 +14,13 @@ use winit::{dpi::PhysicalSize, window::Window};
 struct DisplayUniform {
     surface_size: [f32; 2],
     source_size: [f32; 2],
-    crt_strength: f32,
+    style: f32,
+    effect_strength: f32,
+    brightness: f32,
+    integer_scaling: f32,
     time_seconds: f32,
     text_mode: f32,
-    _padding: f32,
+    _padding: [f32; 2],
 }
 
 pub struct Renderer {
@@ -34,6 +38,7 @@ pub struct Renderer {
     start_time: Instant,
     text_mode: bool,
     source_size: (u32, u32),
+    graphics: GraphicsSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +49,7 @@ pub enum FrameStatus {
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>) -> Result<Self, String> {
+    pub async fn new(window: Arc<Window>, graphics: GraphicsSettings) -> Result<Self, String> {
         let size = nonzero_size(window.inner_size());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance
@@ -130,10 +135,13 @@ impl Renderer {
         let uniform = DisplayUniform {
             surface_size: [size.width as f32, size.height as f32],
             source_size: [DISPLAY_WIDTH as f32, DISPLAY_HEIGHT as f32],
-            crt_strength: 0.82,
+            style: graphics.style.shader_id() as f32,
+            effect_strength: graphics.effect_strength,
+            brightness: graphics.brightness,
+            integer_scaling: u8::from(graphics.integer_scaling) as f32,
             time_seconds: 0.0,
             text_mode: 0.0,
-            _padding: 0.0,
+            _padding: [0.0; 2],
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fanticon display uniform"),
@@ -236,6 +244,7 @@ impl Renderer {
             start_time: Instant::now(),
             text_mode: false,
             source_size: (DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32),
+            graphics,
         })
     }
 
@@ -246,6 +255,11 @@ impl Renderer {
         self.configuration.width = size.width;
         self.configuration.height = size.height;
         self.surface.configure(&self.device, &self.configuration);
+        self.write_uniform();
+    }
+
+    pub fn apply_graphics(&mut self, graphics: GraphicsSettings) {
+        self.graphics = graphics;
         self.write_uniform();
     }
 
@@ -341,10 +355,13 @@ impl Renderer {
         let uniform = DisplayUniform {
             surface_size: [self.configuration.width as f32, self.configuration.height as f32],
             source_size: [self.source_size.0 as f32, self.source_size.1 as f32],
-            crt_strength: 0.82,
+            style: self.graphics.style.shader_id() as f32,
+            effect_strength: self.graphics.effect_strength,
+            brightness: self.graphics.brightness,
+            integer_scaling: u8::from(self.graphics.integer_scaling) as f32,
             time_seconds: self.start_time.elapsed().as_secs_f32(),
             text_mode: u8::from(self.text_mode) as f32,
-            _padding: 0.0,
+            _padding: [0.0; 2],
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniform));
     }
@@ -401,4 +418,27 @@ fn create_display_bind_group(
 
 fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
     PhysicalSize::new(size.width.max(1), size.height.max(1))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presentation_shader_parses_and_validates() {
+        let module = wgpu::naga::front::wgsl::parse_str(include_str!("crt.wgsl"))
+            .expect("presentation shader must parse");
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("presentation shader must validate");
+    }
+
+    #[test]
+    fn display_uniform_matches_wgsl_alignment() {
+        assert_eq!(std::mem::size_of::<DisplayUniform>(), 48);
+        assert_eq!(std::mem::align_of::<DisplayUniform>(), 4);
+    }
 }

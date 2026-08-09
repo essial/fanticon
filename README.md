@@ -1,13 +1,53 @@
 # Fanticon
 
-Fanticon is a late-1980s-style fantasy console: a cycle-accurate NMOS 6502 CPU,
-tile/sprite/bitmap video, four-voice audio, native development tools, and a
-versioned, bank-switched cartridge format you can build real games on.
+<p align="center">
+  <img src="assets/branding/fanticon-logo.png" alt="Fanticon" width="560">
+</p>
+
+<p align="center">
+  A free, open-source 6502 fantasy console with built-in tools for creating,
+  playing, and exporting real retro games.
+</p>
+
+<p align="center">
+  <a href="https://github.com/essial/fanticon/releases/latest"><strong>Download Fanticon</strong></a>
+  ·
+  <a href="#get-started"><strong>Get started</strong></a>
+  ·
+  <a href="#documentation"><strong>Documentation</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/essial/fanticon/actions/workflows/ci.yml"><img src="https://github.com/essial/fanticon/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/essial/fanticon/releases/latest"><img src="https://img.shields.io/github/v/release/essial/fanticon" alt="Latest release"></a>
+  <a href="LICENSE-MIT"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue" alt="MIT or Apache-2.0 license"></a>
+</p>
+
+Fanticon recreates the experience of developing for a late-1980s game console
+without requiring vintage hardware or a separate toolchain. Write 6502
+assembly, draw graphics, compose music, debug your game, and export it for
+desktop or the web—all from one application.
+
+It is designed for retro game developers, 6502 programmers, emulator
+enthusiasts, and anyone who wants a constrained game-development environment
+grounded in authentic hardware behavior.
+
+## Highlights
+
+- **Everything built in** — code, graphics, music, assembler, and debugging tools.
+- **Authentic 6502 programming** — a cycle-accurate NMOS 6502 with all 256
+  opcodes, including undocumented instructions and hardware quirks.
+- **Purpose-built game hardware** — 320×200 tile, sprite, and bitmap graphics
+  with four-voice audio and dot-timestamped raster effects.
+- **Shareable cartridges** — package games as versioned `.FCN` files with 4 MiB
+  ROM banking and battery-backed save RAM.
+- **Cross-platform exports** — produce web, Windows, Linux, and macOS releases
+  without installing target SDKs.
 
 ## Download
 
-Prebuilt binaries for every tagged release are published on the
-[Releases page](https://github.com/essial/fanticon/releases):
+Prebuilt binaries for the current version are published on the
+[latest release page](https://github.com/essial/fanticon/releases/latest):
 
 | Platform | Architecture   | Installer               | Portable                       |
 | -------- | -------------- | ------------------------ | ------------------------------- |
@@ -31,14 +71,9 @@ Launching Fanticon drops you into the native editor's command console.
    first, so `RUN` is safe to use as a normal play-test loop.
 
 When the game is ready to share, the bundled `fanticon-export` tool produces an
-installable offline web app, Windows packages, Linux AppDir archives, and macOS
-app bundles from the official prebuilt runtime kit. `fanticon-export all`
-creates the complete release set and its SHA-256 inventory in one pass, while
-`fanticon-export verify-release` checks it after publication. Exporting is
-toolchain-free and cross-platform: creators do not need Rust, WebAssembly tools,
-platform SDKs, or the target operating system. Every official installer and
-portable archive includes all target runtimes. See the
-[export guide](documentation/exporting.md).
+offline web app and native packages without requiring Rust, WebAssembly tools,
+platform SDKs, or the target operating system. See the
+[export guide](documentation/exporting.md) for the complete workflow.
 
 An existing cartridge can be opened with `RUN GAME.FCN` from the console, or
 launched directly:
@@ -50,13 +85,6 @@ fanticon-app /path/to/GAME.FCN
 Cartridges launched this way ignore Escape, since there's no editor session to
 return to. To land straight in Game mode instead of the editor on startup, add
 `--game`.
-
-Game mode is hardware-accurate at 320×200; the native editor runs at 640×400
-with an 80×50 character grid. Shared presentation settings offer clean pixel,
-VGA, arcade CRT, consumer CRT, LCD, and amber-monitor rendering. In a running
-game, press F10 or the gamepad Guide button for the system menu. An optional
-runtime overlay reports frame pacing, audio buffering, underruns, and the active
-renderer without exposing anything to cartridge code.
 
 ## What you get
 
@@ -76,44 +104,46 @@ renderer without exposing anything to cartridge code.
   RAM, and CRC-checked headers.
 - **Cross-platform** — native Windows, Linux, and macOS builds (x86_64 and
   arm64), plus WebAssembly from the same source.
+- **Flexible presentation** — clean pixel, VGA, arcade CRT, consumer CRT, LCD,
+  and amber-monitor styles shared by the editor and game runtime.
+- **Runtime diagnostics** — an optional overlay reports frame pacing, audio
+  buffering, underruns, and the active renderer without exposing anything to
+  cartridge code.
+
+Game mode is hardware-accurate at 320×200; the native editor runs at 640×400
+with an 80×50 character grid. In a running game, press F10 or the gamepad Guide
+button for the system menu.
 
 ## Documentation
 
-Developers writing 6502 programs for the Fanticon VM should start with the
-[6502 Programmer's Reference](documentation/6502.md). It covers registers,
-addressing, every official instruction, opcode and cycle tables, interrupts,
-decimal arithmetic, undocumented opcodes, and optimization patterns.
+Start with the [6502 Programmer's Reference](documentation/6502.md) when writing
+programs for the Fanticon VM.
 
-The [video architecture](documentation/video.md) describes the 320×200 indexed
-display, dot-timestamped raster events, GPU scaling, and CRT presentation pass.
-The [audio programmer's reference](documentation/audio.md) defines the two pulse,
-triangle, and noise voices, including exact waveforms, timing, and mixing.
-The [presentation settings guide](documentation/settings.md) covers the shared
-graphics styles, audio processing, buffer sizes, persistence, and in-game menu.
-The [editor and command console](documentation/editor.md) describes application
-modes, the embedded character ROM, native commands, integrated help, settings,
-and editor background music.
-The [music editor and playback guide](documentation/music-editor.md) covers the
-tracker, NSF playback and import, background playlists, incremental duration
-scanning, and system media controls.
-The [graphics editor](documentation/graphics-editor.md) documents `.GFX` resident
-sets, shared `.PAL` resources, tile/map/sprite/bitmap tools, bitmap zooming, PNG
-bitmap and tileset import, and direct VM loading.
-The [macro assembler](documentation/assembler.md) documents building raw `.BIN`
-files, supported syntax and directives, modern macros, and diagnostics.
-The [system architecture](documentation/system-architecture.md) defines the VM's
-clock tree, memory and I/O maps, tile/bitmap video, sprites, NES-like audio,
-controllers, interrupts, timers, and cartridge-visible reset model.
-The [memory-map quick reference](documentation/memory-map.md) provides visual CPU
-and I/O maps, VRAM layouts, register addresses, bit fields, and address formulas.
-The [cartridge format](documentation/cartridge-format.md) specifies `.FCN`
-cartridges, 4 MiB ROM banking, battery-backed RAM, and `.SAV` persistence. The
-[export guide](documentation/exporting.md) covers toolchain-free PWA, raw binary,
-packaged app, and all-platform release exports. The
-[cartridge-project guide](documentation/cartridge-projects.md) specifies
-manifests, bank-aware assembly, packaging, launching, and debugger requirements.
-The [system-details checklist](documentation/system-details-checklist.md)
-separates frozen v0.1 contracts from remaining implementation work.
+| Topic | Guide |
+| --- | --- |
+| CPU instructions, addressing, cycles, and optimization | [6502 Programmer's Reference](documentation/6502.md) |
+| Display modes, sprites, raster effects, and scaling | [Video architecture](documentation/video.md) |
+| Voices, waveforms, timing, and mixing | [Audio programmer's reference](documentation/audio.md) |
+| Graphics styles, audio processing, and the system menu | [Presentation settings](documentation/settings.md) |
+| Commands, shortcuts, help, and the code editor | [Editor and command console](documentation/editor.md) |
+| Tracker editing, NSF import, playlists, and playback | [Music editor and playback](documentation/music-editor.md) |
+| Tile, map, sprite, bitmap, palette, and PNG tools | [Graphics editor](documentation/graphics-editor.md) |
+| Syntax, directives, macros, and diagnostics | [Macro assembler](documentation/assembler.md) |
+| Clock, memory, I/O, controllers, interrupts, and timers | [System architecture](documentation/system-architecture.md) |
+| CPU, I/O, and VRAM lookup tables | [Memory-map quick reference](documentation/memory-map.md) |
+| `.FCN` headers, ROM banking, save RAM, and persistence | [Cartridge format](documentation/cartridge-format.md) |
+| Manifests, bank-aware builds, packaging, and debugging | [Cartridge projects](documentation/cartridge-projects.md) |
+| Web and native release packaging | [Exporting games](documentation/exporting.md) |
+| Frozen contracts and remaining implementation work | [System-details checklist](documentation/system-details-checklist.md) |
+
+## Project status
+
+Fanticon is under active pre-1.0 development. The v0.1 hardware and cartridge
+contracts identified in the
+[system-details checklist](documentation/system-details-checklist.md) are frozen,
+while the editor, host, and creation workflow continue to evolve. Bug reports,
+compatibility testing, documentation improvements, and games made with Fanticon
+are welcome through [GitHub Issues](https://github.com/essial/fanticon/issues).
 
 ## Building from source
 

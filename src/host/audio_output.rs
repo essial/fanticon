@@ -17,6 +17,21 @@ const INV_U16_MAX: f32 = 1.0 / u16::MAX as f32;
 pub struct AudioOutput {
     _stream: Stream,
     presenter: Arc<Mutex<AudioPresenter>>,
+    sample_rate: u32,
+    channels: u16,
+    sample_format: &'static str,
+    buffer_frames: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AudioDiagnostics {
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sample_format: &'static str,
+    pub buffer_frames: Option<u32>,
+    pub queued_frames: usize,
+    pub queue_limit: usize,
+    pub underruns: u64,
 }
 
 impl AudioOutput {
@@ -26,6 +41,12 @@ impl AudioOutput {
             host.default_output_device().ok_or_else(|| "no audio output device".to_owned())?;
         let supported = device.default_output_config().map_err(|error| error.to_string())?;
         let sample_format = supported.sample_format();
+        let sample_format_label = match sample_format {
+            SampleFormat::F32 => "F32",
+            SampleFormat::I16 => "I16",
+            SampleFormat::U16 => "U16",
+            _ => "OTHER",
+        };
         #[cfg(not(target_arch = "wasm32"))]
         let buffer_frames = settings.buffer_size.frames().map(|requested| {
             use cpal::SupportedBufferSize;
@@ -48,16 +69,25 @@ impl AudioOutput {
             config.channels,
             settings,
         )));
+        let mut active_buffer_frames = buffer_frames;
         let stream = match build_stream(&device, &config, sample_format, &presenter) {
             Ok(stream) => stream,
             Err(_) if buffer_frames.is_some() => {
                 config.buffer_size = cpal::BufferSize::Default;
+                active_buffer_frames = None;
                 build_stream(&device, &config, sample_format, &presenter)?
             }
             Err(error) => return Err(error),
         };
         stream.play().map_err(|error| error.to_string())?;
-        Ok(Self { _stream: stream, presenter })
+        Ok(Self {
+            _stream: stream,
+            presenter,
+            sample_rate: config.sample_rate.0,
+            channels: config.channels,
+            sample_format: sample_format_label,
+            buffer_frames: active_buffer_frames,
+        })
     }
 
     pub fn submit(&self, cycle_samples: &[u16]) {
@@ -79,6 +109,46 @@ impl AudioOutput {
     pub fn apply_processing(&self, settings: &AudioSettings) {
         if let Ok(mut presenter) = self.presenter.lock() {
             presenter.apply_settings(settings);
+        }
+    }
+
+    pub fn preview(&self) {
+        const PREVIEW_RATE: u32 = 48_000;
+        const PREVIEW_FRAMES: usize = 12_000;
+        let mut samples = vec![u16::MAX / 2; PREVIEW_FRAMES];
+        for (index, sample) in samples.iter_mut().take(4_800).enumerate() {
+            let time = index as f32 / PREVIEW_RATE as f32;
+            let envelope = (1.0 - index as f32 / 4_800.0).powf(1.6);
+            let chord = (2.0 * PI * 220.0 * time).sin()
+                + (2.0 * PI * 277.18 * time).sin() * 0.7
+                + (2.0 * PI * 329.63 * time).sin() * 0.55;
+            let value = 0.5 + chord * envelope * 0.105;
+            *sample = (value.clamp(0.0, 1.0) * f32::from(u16::MAX)) as u16;
+        }
+        if let Ok(mut presenter) = self.presenter.lock() {
+            presenter.clear();
+            presenter.submit(&samples, PREVIEW_RATE);
+        }
+    }
+
+    pub fn diagnostics(&self) -> AudioDiagnostics {
+        let Ok(presenter) = self.presenter.lock() else {
+            return AudioDiagnostics {
+                sample_rate: self.sample_rate,
+                channels: self.channels,
+                sample_format: self.sample_format,
+                buffer_frames: self.buffer_frames,
+                ..AudioDiagnostics::default()
+            };
+        };
+        AudioDiagnostics {
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+            sample_format: self.sample_format,
+            buffer_frames: self.buffer_frames,
+            queued_frames: presenter.queue.len(),
+            queue_limit: presenter.queue_limit,
+            underruns: presenter.underruns,
         }
     }
 }
@@ -257,6 +327,7 @@ struct AudioPresenter {
     attack_step: f32,
     release_coefficient: f32,
     last_output: (f32, f32),
+    underruns: u64,
     filter: AudioFilter,
     high_pass_filter: AudioHighPass,
     master_volume: f32,
@@ -288,6 +359,7 @@ impl AudioPresenter {
             attack_step: 1.0 / (output_rate as f32 * 0.003).max(1.0),
             release_coefficient: (-1.0 / (output_rate as f32 * 0.004).max(1.0)).exp(),
             last_output: (0.0, 0.0),
+            underruns: 0,
             filter: settings.filter,
             high_pass_filter: settings.high_pass,
             master_volume: settings.master_volume,
@@ -386,6 +458,7 @@ impl AudioPresenter {
             self.attack_gain = 0.0;
         }
         let Some((left, right)) = self.queue.pop_front() else {
+            self.underruns = self.underruns.saturating_add(1);
             self.buffering = true;
             self.attack_gain = 0.0;
             return self.release_frame();
@@ -552,6 +625,11 @@ mod tests {
         }
         assert!(presenter.last_output.0.abs() < 1.0e-5);
         assert!(presenter.last_output.1.abs() < 1.0e-5);
+
+        presenter.buffering = false;
+        assert_eq!(presenter.underruns, 0);
+        presenter.next_frame();
+        assert_eq!(presenter.underruns, 1);
     }
 
     #[test]

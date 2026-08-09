@@ -12,16 +12,25 @@ const MAXIMUM_LAG: Duration = Duration::from_millis(250);
 pub struct FramePacer {
     next_deadline: Instant,
     remainder: u32,
+    skipped_frames: u64,
+    last_lateness: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FramePacerDiagnostics {
+    pub skipped_frames: u64,
+    pub last_lateness: Duration,
 }
 
 impl FramePacer {
     pub fn new(now: Instant) -> Self {
-        Self { next_deadline: now, remainder: 0 }
+        Self { next_deadline: now, remainder: 0, skipped_frames: 0, last_lateness: Duration::ZERO }
     }
 
     pub fn reset(&mut self, now: Instant) {
         self.next_deadline = now;
         self.remainder = 0;
+        self.last_lateness = Duration::ZERO;
     }
 
     pub fn is_due(&self, now: Instant) -> bool {
@@ -35,6 +44,7 @@ impl FramePacer {
     /// Advance after running one emulation frame. Missed deadlines are skipped
     /// rather than executed in a burst, and a long suspension rebases the clock.
     pub fn advance_after_frame(&mut self, now: Instant) {
+        self.last_lateness = now.saturating_duration_since(self.next_deadline);
         if now.saturating_duration_since(self.next_deadline) > MAXIMUM_LAG {
             self.next_deadline = now;
             self.remainder = 0;
@@ -42,7 +52,15 @@ impl FramePacer {
 
         self.advance_one_deadline();
         while self.next_deadline <= now {
+            self.skipped_frames = self.skipped_frames.saturating_add(1);
             self.advance_one_deadline();
+        }
+    }
+
+    pub const fn diagnostics(&self) -> FramePacerDiagnostics {
+        FramePacerDiagnostics {
+            skipped_frames: self.skipped_frames,
+            last_lateness: self.last_lateness,
         }
     }
 
@@ -80,6 +98,8 @@ mod tests {
         pacer.advance_after_frame(late);
         assert!(pacer.next_deadline() > late);
         assert!(pacer.next_deadline() <= start + Duration::from_millis(51));
+        assert!(pacer.diagnostics().skipped_frames >= 1);
+        assert_eq!(pacer.diagnostics().last_lateness, Duration::from_millis(40));
     }
 
     #[test]

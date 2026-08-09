@@ -4,7 +4,17 @@ use winit::keyboard::{Key, NamedKey};
 
 use super::{AudioBufferSize, AudioFilter, AudioHighPass, HostSettings, RenderingStyle, Surface};
 
-const ROWS: usize = 13;
+const ROWS: usize = 14;
+const PANEL_X: usize = 88;
+const PANEL_Y: usize = 28;
+const PANEL_WIDTH: usize = 464;
+const PANEL_HEIGHT: usize = 330;
+const ROW_START: usize = 38;
+const ROW_STEP: usize = 23;
+const PREVIEW_X: usize = 146;
+const PREVIEW_Y: usize = 362;
+const PREVIEW_WIDTH: usize = 54;
+const PREVIEW_GAP: usize = 4;
 const WHITE: [u8; 4] = [238, 238, 238, 255];
 const BLACK: [u8; 4] = [8, 8, 12, 255];
 const BLUE: [u8; 4] = [40, 85, 180, 255];
@@ -22,11 +32,12 @@ pub struct SettingsMenu {
     settings: HostSettings,
     cursor: usize,
     in_game: bool,
+    save_status: Option<bool>,
 }
 
 impl SettingsMenu {
     pub fn new(settings: HostSettings, in_game: bool) -> Self {
-        Self { settings, cursor: 0, in_game }
+        Self { settings, cursor: 0, in_game, save_status: None }
     }
 
     pub fn handle_key(&mut self, key: &Key) -> SettingsMenuAction {
@@ -78,7 +89,12 @@ impl SettingsMenu {
             2 => adjust(&mut self.settings.graphics.brightness, direction, 0.05),
             3 => self.settings.graphics.integer_scaling = !self.settings.graphics.integer_scaling,
             4 => adjust(&mut self.settings.audio.master_volume, direction, 0.05),
-            5 => cycle(&mut self.settings.audio.buffer_size, &AudioBufferSize::ALL, direction),
+            5 => {
+                #[cfg(not(target_arch = "wasm32"))]
+                cycle(&mut self.settings.audio.buffer_size, &AudioBufferSize::ALL, direction);
+                #[cfg(target_arch = "wasm32")]
+                return SettingsMenuAction::None;
+            }
             6 => cycle(&mut self.settings.audio.filter, &AudioFilter::ALL, direction),
             7 => cycle(&mut self.settings.audio.high_pass, &AudioHighPass::ALL, direction),
             8 => adjust(&mut self.settings.audio.stereo_width, direction, 0.1),
@@ -86,10 +102,34 @@ impl SettingsMenu {
             10 => {
                 self.settings.audio.mute_when_unfocused = !self.settings.audio.mute_when_unfocused;
             }
+            11 => self.settings.diagnostics_overlay = !self.settings.diagnostics_overlay,
             _ => return SettingsMenuAction::None,
         }
         self.settings = self.settings.clone().normalized();
         SettingsMenuAction::Changed(self.settings.clone())
+    }
+
+    pub fn handle_mouse_move(&mut self, x: usize, y: usize) {
+        if let Some(row) = row_at(x, y) {
+            self.cursor = row;
+        } else if preview_at(x, y).is_some() {
+            self.cursor = 0;
+        }
+    }
+
+    pub fn handle_mouse_press(&mut self, x: usize, y: usize) -> SettingsMenuAction {
+        if let Some(style) = preview_at(x, y) {
+            self.cursor = 0;
+            self.settings.graphics.style = RenderingStyle::ALL[style];
+            return SettingsMenuAction::Changed(self.settings.clone());
+        }
+        let Some(row) = row_at(x, y) else { return SettingsMenuAction::None };
+        self.cursor = row;
+        if row >= ROWS - 2 { self.handle_key(&Key::Named(NamedKey::Enter)) } else { self.change(1) }
+    }
+
+    pub fn set_save_status(&mut self, saved: bool) {
+        self.save_status = Some(saved);
     }
 
     pub fn render(&self, surface: &mut Surface) {
@@ -103,14 +143,6 @@ impl SettingsMenu {
             WHITE,
             Some(BLUE),
         );
-        surface.draw_text(
-            16,
-            376,
-            "ARROWS CHANGE   ENTER SELECT   F10/ESC CLOSE",
-            WHITE,
-            Some(GRAY),
-        );
-
         let rows = [
             ("Rendering style", self.settings.graphics.style.label().to_owned()),
             ("Effect strength", percent(self.settings.graphics.effect_strength)),
@@ -120,7 +152,7 @@ impl SettingsMenu {
                 if self.settings.graphics.integer_scaling { "On" } else { "Off" }.to_owned(),
             ),
             ("Master volume", percent(self.settings.audio.master_volume)),
-            ("Audio buffer", self.settings.audio.buffer_size.label().to_owned()),
+            ("Audio buffer", audio_buffer_label(self.settings.audio.buffer_size)),
             ("Audio filtering", self.settings.audio.filter.label().to_owned()),
             ("High-pass filter", self.settings.audio.high_pass.label().to_owned()),
             ("Stereo width", percent(self.settings.audio.stereo_width)),
@@ -129,21 +161,22 @@ impl SettingsMenu {
                 "Mute when unfocused",
                 if self.settings.audio.mute_when_unfocused { "On" } else { "Off" }.to_owned(),
             ),
+            (
+                "Diagnostics overlay",
+                if self.settings.diagnostics_overlay { "On" } else { "Off" }.to_owned(),
+            ),
             ("Restore defaults", "Enter".to_owned()),
             (if self.in_game { "Resume game" } else { "Close settings" }, "Enter".to_owned()),
         ];
-        let x = 88;
-        let y = 40;
-        let width = 464;
-        surface.fill_rect(x, y, width, 320, [18, 20, 30, 255]);
-        surface.stroke_rect(x, y, width, 320, CYAN);
+        surface.fill_rect(PANEL_X, PANEL_Y, PANEL_WIDTH, PANEL_HEIGHT, [18, 20, 30, 255]);
+        surface.stroke_rect(PANEL_X, PANEL_Y, PANEL_WIDTH, PANEL_HEIGHT, CYAN);
         for (index, (label, value)) in rows.iter().enumerate() {
-            let row_y = y + 14 + index * 22;
+            let row_y = ROW_START + index * ROW_STEP;
             let selected = index == self.cursor;
             let background = if selected { BLUE } else { [18, 20, 30, 255] };
-            surface.fill_rect(x + 8, row_y - 4, width - 16, 16, background);
-            surface.draw_text(x + 16, row_y, label, WHITE, Some(background));
-            let value_x = x + width - 24 - value.len() * 8;
+            surface.fill_rect(PANEL_X + 8, row_y - 4, PANEL_WIDTH - 16, 16, background);
+            surface.draw_text(PANEL_X + 16, row_y, label, WHITE, Some(background));
+            let value_x = PANEL_X + PANEL_WIDTH - 24 - value.len() * 8;
             surface.draw_text(
                 value_x,
                 row_y,
@@ -152,6 +185,70 @@ impl SettingsMenu {
                 Some(background),
             );
         }
+        render_style_previews(surface, self.settings.graphics.style);
+        let footer = match self.save_status {
+            Some(true) => "SAVED   CLICK/ARROWS CHANGE   ENTER SELECT   F10/ESC CLOSE",
+            Some(false) => "SAVE FAILED   CLICK/ARROWS CHANGE   F10/ESC CLOSE",
+            None => "CLICK/ARROWS CHANGE   ENTER SELECT   F10/ESC CLOSE",
+        };
+        surface.draw_text(16, 388, footer, WHITE, Some(GRAY));
+    }
+}
+
+fn row_at(x: usize, y: usize) -> Option<usize> {
+    if !(PANEL_X + 8..PANEL_X + PANEL_WIDTH - 8).contains(&x) || y + 4 < ROW_START {
+        return None;
+    }
+    let row = (y + 4 - ROW_START) / ROW_STEP;
+    (row < ROWS && y < ROW_START + row * ROW_STEP + 12).then_some(row)
+}
+
+fn preview_at(x: usize, y: usize) -> Option<usize> {
+    if !(PREVIEW_Y..PREVIEW_Y + 14).contains(&y) || x < PREVIEW_X {
+        return None;
+    }
+    let slot = (x - PREVIEW_X) / (PREVIEW_WIDTH + PREVIEW_GAP);
+    let within = (x - PREVIEW_X) % (PREVIEW_WIDTH + PREVIEW_GAP);
+    (slot < RenderingStyle::ALL.len() && within < PREVIEW_WIDTH).then_some(slot)
+}
+
+fn render_style_previews(surface: &mut Surface, selected: RenderingStyle) {
+    let colors = [
+        [90, 160, 235, 255],
+        [80, 115, 210, 255],
+        [235, 70, 150, 255],
+        [180, 95, 70, 255],
+        [95, 190, 175, 255],
+        [205, 125, 35, 255],
+    ];
+    for (index, style) in RenderingStyle::ALL.iter().enumerate() {
+        let x = PREVIEW_X + index * (PREVIEW_WIDTH + PREVIEW_GAP);
+        surface.fill_rect(x, PREVIEW_Y, PREVIEW_WIDTH, 14, [12, 14, 20, 255]);
+        surface.fill_rect(x + 2, PREVIEW_Y + 2, PREVIEW_WIDTH - 4, 10, colors[index]);
+        if index != 0 {
+            for line in (PREVIEW_Y + 3..PREVIEW_Y + 12).step_by(if index == 4 { 3 } else { 2 }) {
+                surface.fill_rect(x + 2, line, PREVIEW_WIDTH - 4, 1, [20, 24, 32, 255]);
+            }
+        }
+        surface.stroke_rect(
+            x,
+            PREVIEW_Y,
+            PREVIEW_WIDTH,
+            14,
+            if *style == selected { CYAN } else { GRAY },
+        );
+    }
+}
+
+fn audio_buffer_label(buffer: AudioBufferSize) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = buffer;
+        "Browser managed".to_owned()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        buffer.label().to_owned()
     }
 }
 
@@ -224,5 +321,32 @@ mod tests {
         menu.cursor = 10;
         menu.change(1);
         assert!(!menu.settings.audio.mute_when_unfocused);
+    }
+
+    #[test]
+    fn mouse_selects_rows_styles_and_diagnostics() {
+        let mut menu = SettingsMenu::new(HostSettings::default(), false);
+        let diagnostics_y = ROW_START + 11 * ROW_STEP;
+        menu.handle_mouse_move(PANEL_X + 20, diagnostics_y);
+        assert_eq!(menu.cursor, 11);
+        assert!(matches!(
+            menu.handle_mouse_press(PANEL_X + 20, diagnostics_y),
+            SettingsMenuAction::Changed(_)
+        ));
+        assert!(menu.settings.diagnostics_overlay);
+
+        let arcade_x = PREVIEW_X + 2 * (PREVIEW_WIDTH + PREVIEW_GAP) + 4;
+        menu.handle_mouse_press(arcade_x, PREVIEW_Y + 4);
+        assert_eq!(menu.settings.graphics.style, RenderingStyle::ArcadeCrt);
+    }
+
+    #[test]
+    fn save_status_is_rendered_without_changing_menu_state() {
+        let mut menu = SettingsMenu::new(HostSettings::default(), true);
+        menu.set_save_status(true);
+        let mut surface = Surface::new(640, 400);
+        menu.render(&mut surface);
+        assert!(surface.pixels().iter().any(|byte| *byte != 0));
+        assert_eq!(menu.cursor, 0);
     }
 }

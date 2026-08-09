@@ -54,7 +54,9 @@ return to. To land straight in Game mode instead of the editor on startup, add
 Game mode is hardware-accurate at 320×200; the native editor runs at 640×400
 with an 80×50 character grid. Shared presentation settings offer clean pixel,
 VGA, arcade CRT, consumer CRT, LCD, and amber-monitor rendering. In a running
-game, press F10 or the gamepad Guide button for the system menu.
+game, press F10 or the gamepad Guide button for the system menu. An optional
+runtime overlay reports frame pacing, audio buffering, underruns, and the active
+renderer without exposing anything to cartridge code.
 
 ## What you get
 

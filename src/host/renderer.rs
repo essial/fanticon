@@ -4,6 +4,7 @@ use bytemuck::{Pod, Zeroable};
 use fanticon::video::{DISPLAY_HEIGHT, DISPLAY_WIDTH, RGBA_FRAME_LEN, Video};
 
 use super::GraphicsSettings;
+use super::character_rom::{CHARACTER_ROM, GLYPH_HEIGHT, GLYPH_WIDTH};
 use super::surface::Surface;
 use web_time::Instant;
 use wgpu::util::DeviceExt;
@@ -39,6 +40,7 @@ pub struct Renderer {
     text_mode: bool,
     source_size: (u32, u32),
     graphics: GraphicsSettings,
+    diagnostics_lines: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -245,6 +247,7 @@ impl Renderer {
             text_mode: false,
             source_size: (DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32),
             graphics,
+            diagnostics_lines: Vec::new(),
         })
     }
 
@@ -263,6 +266,10 @@ impl Renderer {
         self.write_uniform();
     }
 
+    pub fn set_diagnostics_lines(&mut self, lines: Vec<String>) {
+        self.diagnostics_lines = lines;
+    }
+
     /// Present the console's own output, resolving its indexed pixels through
     /// the cartridge palette.
     pub fn render(&mut self, video: &mut Video, text_mode: bool) -> FrameStatus {
@@ -272,6 +279,7 @@ impl Renderer {
         }
         self.rgba_frame.resize(video.rgba_len(), 0);
         video.resolve_rgba(&mut self.rgba_frame).expect("fixed-size display buffer");
+        draw_diagnostics_overlay(&mut self.rgba_frame, source_size, &self.diagnostics_lines);
         self.present(text_mode)
     }
 
@@ -285,6 +293,7 @@ impl Renderer {
         }
         self.rgba_frame.clear();
         self.rgba_frame.extend_from_slice(frame.pixels());
+        draw_diagnostics_overlay(&mut self.rgba_frame, source_size, &self.diagnostics_lines);
         self.present(text_mode)
     }
 
@@ -420,6 +429,45 @@ fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
     PhysicalSize::new(size.width.max(1), size.height.max(1))
 }
 
+fn draw_diagnostics_overlay(frame: &mut [u8], size: (u32, u32), lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    let width = size.0 as usize;
+    let height = size.1 as usize;
+    let columns = lines.iter().map(String::len).max().unwrap_or(0).min(width / GLYPH_WIDTH);
+    let box_width = (columns * GLYPH_WIDTH + 8).min(width);
+    let box_height = (lines.len() * GLYPH_HEIGHT + 8).min(height);
+    for y in 0..box_height {
+        for x in 0..box_width {
+            let offset = (y * width + x) * 4;
+            for (channel, tint) in [8_u8, 10, 16].into_iter().enumerate() {
+                frame[offset + channel] = frame[offset + channel] / 4 + tint * 3 / 4;
+            }
+            frame[offset + 3] = 255;
+        }
+    }
+    for (line_index, line) in lines.iter().enumerate() {
+        let y = 4 + line_index * GLYPH_HEIGHT;
+        for (character_index, byte) in line.bytes().take(columns).enumerate() {
+            let glyph = CHARACTER_ROM[usize::from(byte.min(127))];
+            let x = 4 + character_index * GLYPH_WIDTH;
+            for (glyph_y, bits) in glyph.into_iter().enumerate() {
+                for glyph_x in 0..GLYPH_WIDTH {
+                    if bits & (0x80 >> glyph_x) == 0
+                        || x + glyph_x >= width
+                        || y + glyph_y >= height
+                    {
+                        continue;
+                    }
+                    let offset = ((y + glyph_y) * width + x + glyph_x) * 4;
+                    frame[offset..offset + 4].copy_from_slice(&[110, 235, 205, 255]);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
@@ -440,5 +488,13 @@ mod tests {
     fn display_uniform_matches_wgsl_alignment() {
         assert_eq!(std::mem::size_of::<DisplayUniform>(), 48);
         assert_eq!(std::mem::align_of::<DisplayUniform>(), 4);
+    }
+
+    #[test]
+    fn diagnostics_overlay_composites_into_rgba_frame() {
+        let mut frame = vec![255; 320 * 200 * 4];
+        draw_diagnostics_overlay(&mut frame, (320, 200), &["FPS 60.0".to_owned()]);
+        assert_eq!(&frame[..4], &[69, 70, 75, 255]);
+        assert!(frame.chunks_exact(4).any(|pixel| pixel == [110, 235, 205, 255]));
     }
 }

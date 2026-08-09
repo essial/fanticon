@@ -60,6 +60,9 @@ struct FanticonApp {
     settings_menu: Option<SettingsMenu>,
     settings_surface: Surface,
     menu_controller: u8,
+    diagnostics_started: Instant,
+    diagnostics_presented: u32,
+    diagnostics_fps: f32,
 }
 
 struct GameSession {
@@ -118,6 +121,9 @@ impl FanticonApp {
             settings_menu: None,
             settings_surface: Surface::new(host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT),
             menu_controller: 0,
+            diagnostics_started: now,
+            diagnostics_presented: 0,
+            diagnostics_fps: 0.0,
         }
     }
 }
@@ -270,10 +276,19 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                self.mouse_position = Some(position);
                 if self.settings_menu.is_some() {
+                    if let Some((x, y)) = window_to_source_position(
+                        position,
+                        window.inner_size(),
+                        (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT),
+                    ) && let Some(menu) = &mut self.settings_menu
+                    {
+                        menu.handle_mouse_move(x, y);
+                        menu.render(&mut self.settings_surface);
+                    }
                     return;
                 }
-                self.mouse_position = Some(position);
                 if !self.boot_splash.is_active(Instant::now())
                     && !self.game_running()
                     && let Some((x, y)) = window_to_source_position(
@@ -288,6 +303,24 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 if self.settings_menu.is_some() {
+                    if state == ElementState::Pressed
+                        && button == MouseButton::Left
+                        && let Some(position) = self.mouse_position
+                        && let Some((x, y)) = window_to_source_position(
+                            position,
+                            window.inner_size(),
+                            (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT),
+                        )
+                    {
+                        let action = self
+                            .settings_menu
+                            .as_mut()
+                            .map_or(SettingsMenuAction::None, |menu| menu.handle_mouse_press(x, y));
+                        self.apply_settings_menu_action(action);
+                        if let Some(menu) = &self.settings_menu {
+                            menu.render(&mut self.settings_surface);
+                        }
+                    }
                     return;
                 }
                 let now = Instant::now();
@@ -351,7 +384,10 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                     && (editor_surface
                         || self.video.dimensions()
                             == (host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT));
+                let diagnostics = self.diagnostics_lines(splash || settings_surface);
+                let mut frame_status = None;
                 if let Some(renderer) = &mut self.renderer {
+                    renderer.set_diagnostics_lines(diagnostics);
                     let status = if settings_surface {
                         renderer.render_surface(&self.settings_surface, true)
                     } else if editor_surface {
@@ -363,6 +399,10 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                         FrameStatus::Presented | FrameStatus::Skip => {}
                         FrameStatus::Reconfigure => renderer.resize(window.inner_size()),
                     }
+                    frame_status = Some(status);
+                }
+                if matches!(frame_status, Some(FrameStatus::Presented)) {
+                    self.record_presented_frame(Instant::now());
                 }
             }
             _ => {}
@@ -649,6 +689,7 @@ impl FanticonApp {
                 self.gamepads.suppress_held_inputs();
             }
             SettingsMenuAction::Changed(settings) => {
+                let audio_changed = settings.audio != self.settings.audio;
                 let buffer_changed = !cfg!(target_arch = "wasm32")
                     && settings.audio.buffer_size != self.settings.audio.buffer_size;
                 self.settings = settings.normalized();
@@ -662,10 +703,62 @@ impl FanticonApp {
                 } else if let Some(audio) = &self.audio_output {
                     audio.apply_processing(&self.settings.audio);
                 }
-                if let Err(error) = self.settings.save() {
+                if audio_changed && let Some(audio) = &self.audio_output {
+                    audio.preview();
+                }
+                let saved = self.settings.save();
+                if let Err(error) = &saved {
                     eprintln!("Fanticon settings could not be saved: {error}");
                 }
+                if let Some(menu) = &mut self.settings_menu {
+                    menu.set_save_status(saved.is_ok());
+                }
             }
+        }
+    }
+
+    fn diagnostics_lines(&self, hidden: bool) -> Vec<String> {
+        if hidden || !self.settings.diagnostics_overlay {
+            return Vec::new();
+        }
+        let pacing = self.frame_pacer.diagnostics();
+        let mut lines = vec![format!(
+            "FPS {:.1} LATE {:.1}MS SKIP {}",
+            self.diagnostics_fps,
+            pacing.last_lateness.as_secs_f64() * 1_000.0,
+            pacing.skipped_frames
+        )];
+        if let Some(audio) = &self.audio_output {
+            let diagnostics = audio.diagnostics();
+            lines.push(format!(
+                "AUDIO {}KHZ {}CH {} Q {}/{}",
+                diagnostics.sample_rate / 1_000,
+                diagnostics.channels,
+                diagnostics.sample_format,
+                diagnostics.queued_frames,
+                diagnostics.queue_limit
+            ));
+            #[cfg(target_arch = "wasm32")]
+            let buffer = "BROWSER".to_owned();
+            #[cfg(not(target_arch = "wasm32"))]
+            let buffer = diagnostics
+                .buffer_frames
+                .map_or_else(|| "AUTO".to_owned(), |frames| format!("{frames}F"));
+            lines.push(format!("BUF {buffer} UNDERRUN {}", diagnostics.underruns));
+        } else {
+            lines.push("AUDIO DISABLED".to_owned());
+        }
+        lines.push(format!("STYLE {}", self.settings.graphics.style.label().to_uppercase()));
+        lines
+    }
+
+    fn record_presented_frame(&mut self, now: Instant) {
+        self.diagnostics_presented = self.diagnostics_presented.saturating_add(1);
+        let elapsed = now.saturating_duration_since(self.diagnostics_started);
+        if elapsed.as_secs_f32() >= 1.0 {
+            self.diagnostics_fps = self.diagnostics_presented as f32 / elapsed.as_secs_f32();
+            self.diagnostics_presented = 0;
+            self.diagnostics_started = now;
         }
     }
 

@@ -64,6 +64,7 @@ pub enum AudioBufferSize {
 }
 
 impl AudioBufferSize {
+    #[cfg(not(target_arch = "wasm32"))]
     pub const ALL: [Self; 6] = [
         Self::Auto,
         Self::Frames128,
@@ -73,6 +74,7 @@ impl AudioBufferSize {
         Self::Frames2048,
     ];
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Auto => "Auto",
@@ -217,6 +219,7 @@ pub struct HostSettings {
     pub version: u32,
     pub graphics: GraphicsSettings,
     pub audio: AudioSettings,
+    pub diagnostics_overlay: bool,
 }
 
 impl Default for HostSettings {
@@ -225,6 +228,7 @@ impl Default for HostSettings {
             version: SETTINGS_VERSION,
             graphics: GraphicsSettings::default(),
             audio: AudioSettings::default(),
+            diagnostics_overlay: false,
         }
     }
 }

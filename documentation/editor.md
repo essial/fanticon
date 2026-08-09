@@ -93,7 +93,7 @@ syntax colors from bleeding through the overlay.
 | `RM file` or `DEL file` | Remove one file |
 | `DIR [path]` or `LS [path]` | List a directory |
 | `BUILD source [output]` or `ASM source [output]` | Assemble ASM/INC source to a raw BIN file |
-| `EXPORT target [output]` | Build and export the current project for WEB, WIN64, WINARM, LINUX64, LINUXARM, or MACOS |
+| `EXPORT target [output]` | Build and export the current project for WEB, WIN64, WINARM, LINUX64, LINUXARM, MACOS, or ALL |
 | `DUMP file [offset [length]]` | Display file bytes as hexadecimal and printable ASCII |
 
 Console paths are lowercase and accept `/` or `\\` separators. Every file and

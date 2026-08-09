@@ -340,6 +340,9 @@ jobs:
           FANTICON_SKIP_CODE_ASSET_SYNC=1 cargo run --locked --no-default-features \
             --bin fanticon-export -- \
             verify --runtime-kit "$root"
+          FANTICON_SKIP_CODE_ASSET_SYNC=1 FANTICON_TEST_RUNTIME_KIT="$root" \
+            cargo test --locked --lib --no-default-features --features native-export \
+            export::tests::assembled_runtime_kit_packages_every_platform_without_target_tools
           cp documentation/exporting.md "fanticon-runtime-kit-${version}/README.md"
           zip -r "fanticon-runtime-kit-${version}.zip" "fanticon-runtime-kit-${version}" >/dev/null
       - uses: actions/upload-artifact@v7

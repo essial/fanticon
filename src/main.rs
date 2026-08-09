@@ -849,7 +849,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(not(target_arch = "wasm32"))]
 fn load_embedded_cartridge(bytes: &[u8]) -> Result<DirectGameLaunch, Box<dyn std::error::Error>> {
     let executable = std::env::current_exe()?;
-    load_direct_cartridge_bytes(bytes, executable.with_extension("SAV"))
+    let cartridge = fanticon::cartridge::Cartridge::from_bytes(bytes)?;
+    let legacy_save_path = executable.with_extension("SAV");
+    let save_path = dirs::data_local_dir()
+        .map(|directory| {
+            directory.join("Fanticon").join("saves").join(format!("{:016X}.SAV", cartridge.id))
+        })
+        .unwrap_or_else(|| legacy_save_path.clone());
+    if save_path != legacy_save_path && !save_path.exists() && legacy_save_path.is_file() {
+        if let Some(parent) = save_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(legacy_save_path, &save_path)?;
+    }
+    load_cartridge_with_save(cartridge, save_path)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -873,8 +886,19 @@ fn load_direct_cartridge_bytes(
     save_path: PathBuf,
 ) -> Result<DirectGameLaunch, Box<dyn std::error::Error>> {
     let cartridge = fanticon::cartridge::Cartridge::from_bytes(bytes)?;
+    load_cartridge_with_save(cartridge, save_path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_cartridge_with_save(
+    cartridge: fanticon::cartridge::Cartridge,
+    save_path: PathBuf,
+) -> Result<DirectGameLaunch, Box<dyn std::error::Error>> {
     if cartridge.save_banks == 0 {
         return Ok(DirectGameLaunch { cartridge, save_path: None, save_ram: Vec::new() });
+    }
+    if let Some(parent) = save_path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
     }
     let expected = usize::from(cartridge.save_banks) * fanticon::machine::BANK_SIZE;
     let save_ram = match std::fs::read(&save_path) {
@@ -900,6 +924,9 @@ fn load_direct_cartridge_bytes(
 #[cfg(not(target_arch = "wasm32"))]
 fn write_native_save(path: &Path, cartridge_id: u64, ram: &[u8]) -> Result<(), String> {
     use std::io::Write;
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
     let bytes = fanticon::cartridge::SaveImage { cartridge_id, ram: ram.to_vec() }
         .to_bytes()
         .map_err(|error| error.0)?;

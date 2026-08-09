@@ -31,7 +31,7 @@ use super::{
         SHADE_LIGHT, SHADE_MEDIUM, SYMBOL_ARROW_DOWN, SYMBOL_ARROW_RIGHT, SYMBOL_ARROW_UP,
         SYMBOL_BUSY, SYMBOL_CHECK, SYMBOL_CROSS,
     },
-    exporter::{ExportTarget, export_project},
+    exporter::{ExportTarget, export_projects},
     filesystem::{ConsoleFilesystem, SharedFilesystem},
     graphics_editor::{DEFAULT_PALETTE_FILE, GraphicsEditor},
     music_editor::MusicEditor,
@@ -333,11 +333,11 @@ enum Overlay {
         entries: Vec<BankUsage>,
         scroll: usize,
     },
-    /// Lets the user check any combination of `ExportTarget::ALL` before
+    /// Lets the user check any combination of `ExportTarget::CHOICES` before
     /// running the export, instead of picking exactly one target per menu
     /// click.
     ExportDialog {
-        selected: [bool; ExportTarget::ALL.len()],
+        selected: [bool; ExportTarget::CHOICES.len()],
         cursor: usize,
     },
 }
@@ -1644,7 +1644,7 @@ impl TextEditor {
                 let dialog_y = (ROWS - EXPORT_DIALOG_HEIGHT) / 2;
                 let index = cell_y
                     .checked_sub(dialog_y + 2)
-                    .filter(|index| *index < ExportTarget::ALL.len())
+                    .filter(|index| *index < ExportTarget::CHOICES.len())
                     .filter(|_| cell_x > dialog_x && cell_x < dialog_x + EXPORT_DIALOG_WIDTH - 1);
                 if let Some(index) = index
                     && let Overlay::ExportDialog { selected, cursor } = &mut self.overlay
@@ -3028,7 +3028,7 @@ impl TextEditor {
                     }
                     Key::Named(NamedKey::Space) => selected[*cursor] = !selected[*cursor],
                     Key::Named(NamedKey::Enter) => {
-                        let targets: Vec<ExportTarget> = ExportTarget::ALL
+                        let targets: Vec<ExportTarget> = ExportTarget::CHOICES
                             .iter()
                             .zip(selected.iter())
                             .filter_map(|(target, checked)| checked.then_some(*target))
@@ -3681,7 +3681,7 @@ impl TextEditor {
                     style,
                 );
                 put_text_width(cells, x + 3, y, "Export", EXPORT_DIALOG_WIDTH - 6);
-                for (index, target) in ExportTarget::ALL.iter().enumerate() {
+                for (index, target) in ExportTarget::CHOICES.iter().enumerate() {
                     let row = y + 2 + index;
                     let mark = if selected[index] { 'X' } else { ' ' };
                     let line = format!("[{mark}] {}", target.label());
@@ -4067,7 +4067,7 @@ impl TextEditor {
 
     fn open_export_dialog(&mut self) {
         self.overlay =
-            Overlay::ExportDialog { selected: [false; ExportTarget::ALL.len()], cursor: 0 };
+            Overlay::ExportDialog { selected: [false; ExportTarget::CHOICES.len()], cursor: 0 };
     }
 
     fn start_export(&mut self, targets: &[ExportTarget]) {
@@ -4075,17 +4075,15 @@ impl TextEditor {
             self.show_build_message("Export Error", &[error]);
             return;
         }
-        let mut had_error = false;
-        let mut lines = Vec::new();
-        for &target in targets {
-            match export_project(&self.filesystem, target, None) {
-                Ok(message) => lines.push(message),
-                Err(error) => {
-                    had_error = true;
-                    lines.extend(wrap_dialog_text(&format!("{}: {error}", target.label()), 34));
-                }
-            }
-        }
+        let selected = if targets.len() == ExportTarget::CHOICES.len() {
+            vec![(ExportTarget::All, None)]
+        } else {
+            targets.iter().copied().map(|target| (target, None)).collect()
+        };
+        let (had_error, lines) = match export_projects(&self.filesystem, &selected) {
+            Ok(messages) => (false, messages),
+            Err(error) => (true, wrap_dialog_text(&error, 34)),
+        };
         self.refresh_project_browser();
         let title = if had_error { "Export Error" } else { "Export Complete" };
         self.show_build_message(title, &lines);
@@ -8659,7 +8657,7 @@ mod tests {
             panic!("expected the export dialog to open");
         };
         assert_eq!(*cursor, 0);
-        assert_eq!(selected.len(), ExportTarget::ALL.len());
+        assert_eq!(selected.len(), ExportTarget::CHOICES.len());
         assert!(selected.iter().all(|checked| !checked));
     }
 
@@ -8695,7 +8693,7 @@ mod tests {
     }
 
     #[test]
-    fn export_dialog_enter_exports_every_checked_target_and_ignores_an_empty_selection() {
+    fn export_dialog_submits_checked_targets_as_one_batch_and_ignores_an_empty_selection() {
         let mut editor =
             TextEditor::new(shared_filesystem(), shared_ui_colors(), Some("main.asm".to_owned()));
         editor.open_export_dialog();
@@ -8710,16 +8708,13 @@ mod tests {
         editor.handle_overlay_key(&Key::Named(NamedKey::Space), ModifiersState::empty());
         editor.handle_overlay_key(&Key::Named(NamedKey::Enter), ModifiersState::empty());
 
-        // No runtime kit is bundled in the test environment, so every export
-        // fails, but both selected targets must still have been attempted
-        // (proving the dialog drives all checked targets, not just one).
+        // No runtime kit is bundled in the test environment, so the shared
+        // one-build export batch fails before writing either selected target.
         let Overlay::Message { title, lines } = &editor.overlay else {
             panic!("expected an export result message");
         };
         assert_eq!(title, "Export Error");
-        let combined = lines.join(" ");
-        assert!(combined.contains(ExportTarget::Html.label()));
-        assert!(combined.contains(ExportTarget::WindowsX86_64.label()));
+        assert!(!lines.is_empty());
     }
 
     #[test]

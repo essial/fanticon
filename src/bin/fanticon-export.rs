@@ -2,7 +2,10 @@ use std::{env, fs, path::PathBuf, process::ExitCode, str::FromStr};
 
 use fanticon::{
     cartridge::Cartridge,
-    export::{ExportMetadata, ExportPlatform, RuntimeKit, export_binary, export_html},
+    export::{
+        ExportMetadata, ExportPlatform, RuntimeKit, export_all, export_binary, export_html,
+        export_package,
+    },
     project::{MANIFEST_NAME, ProjectManifest},
 };
 
@@ -13,6 +16,8 @@ Usage:
   fanticon-export verify [--runtime-kit <directory>]
   fanticon-export html <game.fcn> [output-directory] [--runtime-kit <directory>]
   fanticon-export binary <platform> <game.fcn> [output-file] [--runtime-kit <directory>]
+  fanticon-export package <platform> <game.fcn> [output-archive] [--runtime-kit <directory>]
+  fanticon-export all <game.fcn> [output-directory] [--runtime-kit <directory>]
 
 Platforms:
   windows-x86_64  windows-arm64  linux-x86_64  linux-arm64  macos-universal
@@ -48,11 +53,21 @@ fn run() -> Result<(), String> {
         println!("Runtime kit {} is complete and compatible", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    let platform = match format.to_ascii_lowercase().as_str() {
-        "html" | "web" => None,
+    enum Command {
+        Web,
+        Binary(ExportPlatform),
+        Package(ExportPlatform),
+        All,
+    }
+    let command = match format.to_ascii_lowercase().as_str() {
+        "html" | "web" => Command::Web,
         "binary" | "native" | "bin" => {
-            Some(ExportPlatform::from_str(&take_string(&mut arguments)?)?)
+            Command::Binary(ExportPlatform::from_str(&take_string(&mut arguments)?)?)
         }
+        "package" | "archive" => {
+            Command::Package(ExportPlatform::from_str(&take_string(&mut arguments)?)?)
+        }
+        "all" | "release" => Command::All,
         _ => return Err(USAGE.to_owned()),
     };
     let cartridge_path = take_path(&mut arguments)?;
@@ -67,15 +82,15 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("could not read {}: {error}", cartridge_path.display()))?;
     let cartridge = Cartridge::from_bytes(&bytes).map_err(|error| error.0)?;
     let metadata = discover_metadata(&cartridge_path, &cartridge)?;
-    match platform {
-        None => {
+    match command {
+        Command::Web => {
             let output = output.unwrap_or_else(|| {
                 cartridge_path.with_file_name(format!("{}-web", stem(&cartridge_path)))
             });
             export_html(&kit, &bytes, &metadata, &output)?;
             println!("Exported {} to {}", cartridge.title, output.display());
         }
-        Some(platform) => {
+        Command::Binary(platform) => {
             let suffix = if platform.name().starts_with("windows-") { ".exe" } else { "" };
             let output = output.unwrap_or_else(|| {
                 cartridge_path.with_file_name(format!(
@@ -92,6 +107,38 @@ fn run() -> Result<(), String> {
                 output.display()
             );
         }
+        Command::Package(platform) => {
+            let extension =
+                if matches!(platform, ExportPlatform::LinuxX86_64 | ExportPlatform::LinuxArm64) {
+                    "tar.gz"
+                } else {
+                    "zip"
+                };
+            let output = output.unwrap_or_else(|| {
+                cartridge_path.with_file_name(format!(
+                    "{}-{}.{extension}",
+                    stem(&cartridge_path),
+                    platform.name()
+                ))
+            });
+            export_package(&kit, platform, &bytes, &metadata, &output)?;
+            println!(
+                "Packaged {} for {} at {}",
+                cartridge.title,
+                platform.name(),
+                output.display()
+            );
+        }
+        Command::All => {
+            let output = output.unwrap_or_else(|| {
+                cartridge_path.with_file_name(format!("{}-release", stem(&cartridge_path)))
+            });
+            let artifacts = export_all(&kit, &bytes, &metadata, &output)?;
+            println!("Exported {} release to {}", cartridge.title, output.display());
+            for artifact in artifacts {
+                println!("  {}", artifact.display());
+            }
+        }
     }
     Ok(())
 }
@@ -100,17 +147,21 @@ fn discover_metadata(
     path: &std::path::Path,
     cartridge: &Cartridge,
 ) -> Result<ExportMetadata, String> {
-    let Some(directory) = path.parent() else {
-        return Ok(ExportMetadata::from_title(&cartridge.title));
+    let mut metadata = if let Some(directory) = path.parent() {
+        let manifest_path = directory.join(MANIFEST_NAME);
+        if manifest_path.is_file() {
+            let manifest = ProjectManifest::parse(
+                &fs::read_to_string(&manifest_path).map_err(|error| error.to_string())?,
+            )?;
+            manifest.export_metadata(directory)
+        } else {
+            ExportMetadata::from_title(&cartridge.title)
+        }
+    } else {
+        ExportMetadata::from_title(&cartridge.title)
     };
-    let manifest_path = directory.join(MANIFEST_NAME);
-    if !manifest_path.is_file() {
-        return Ok(ExportMetadata::from_title(&cartridge.title));
-    }
-    let manifest = ProjectManifest::parse(
-        &fs::read_to_string(&manifest_path).map_err(|error| error.to_string())?,
-    )?;
-    Ok(manifest.export_metadata(directory))
+    metadata.cartridge_id = Some(cartridge.id);
+    Ok(metadata)
 }
 
 fn take_option(

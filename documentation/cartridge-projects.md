@@ -34,7 +34,7 @@ WEB_FOREGROUND=#EEEEEE
 | `MACHINE` | Required Fanticon hardware version; `1.0` for v0.1 |
 | `AUTHOR` | Optional 1-64 character export author |
 | `DESCRIPTION` | Optional 1-160 character export description |
-| `ICON` | Optional 8.3 PNG path used by web exports and copied beside binaries |
+| `ICON` | Optional 8.3 PNG path used by PWA, Windows, Linux, and macOS packages |
 | `WEB_BACKGROUND` | Optional HTML shell color in `#RRGGBB`; defaults to `#08080C` |
 | `WEB_FOREGROUND` | Optional HTML shell color in `#RRGGBB`; defaults to `#EEEEEE` |
 

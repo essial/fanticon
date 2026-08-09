@@ -153,6 +153,7 @@ impl ProjectManifest {
     pub fn export_metadata(&self, directory: &std::path::Path) -> crate::export::ExportMetadata {
         crate::export::ExportMetadata {
             title: self.title.clone(),
+            cartridge_id: Some(self.id),
             author: self.author.clone(),
             description: self.description.clone(),
             icon: self.icon.as_ref().map(|path| directory.join(path)),

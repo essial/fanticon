@@ -21,6 +21,7 @@ EXPORT WINARM
 EXPORT LINUX64
 EXPORT LINUXARM
 EXPORT MACOS
+EXPORT ALL
 ```
 
 Each command builds the current project first. An optional second argument
@@ -33,7 +34,9 @@ fanticon-export html GAME.FCN GAME-WEB
 ```
 
 The output directory contains `index.html`, the Fanticon JavaScript/WebAssembly
-runtime, and `game.fcn`. Serve the directory from an ordinary HTTP host; browsers
+runtime, `game.fcn`, a web app manifest, and an offline service worker. It is an
+installable Progressive Web App and caches the game after its first successful
+load. Serve the directory from an HTTPS host (or localhost while testing); browsers
 do not allow WebAssembly games to work reliably when `index.html` is opened as a
 raw `file:` URL.
 
@@ -58,7 +61,9 @@ The cartridge is appended to a prebuilt runtime template. PE, ELF, and Mach-O
 loaders ignore the versioned Fanticon footer after the executable image, while
 the player validates and launches that embedded cartridge at startup. No source
 files or separate editor resources are packaged. Battery RAM is written beside
-the player as a `.SAV` file.
+the cartridge for direct `.FCN` launches. Packaged games store it in the host
+platform's per-user Fanticon application-data directory, keyed by the stable
+cartridge ID, so installed or read-only app bundles can still save normally.
 
 Every exported web directory and binary destination receives the Fanticon MIT
 and Apache 2.0 license texts. Optional `AUTHOR`, `DESCRIPTION`, `ICON`,
@@ -66,10 +71,41 @@ and Apache 2.0 license texts. Optional `AUTHOR`, `DESCRIPTION`, `ICON`,
 exports write the descriptive metadata to a same-stem `.TXT` sidecar and copy a
 configured icon to a same-stem `.PNG` sidecar.
 
-Linux and macOS outputs must retain their executable permission when copied or
-archived. macOS distribution may additionally require the normal application
-bundle, signing, and notarization steps expected by Gatekeeper; those are
-publisher-identity operations rather than game compilation.
+Raw binaries remain available for scripts that need them. For normal game
+distribution, use the packaged exports instead:
+
+```text
+fanticon-export package windows-x86_64 GAME.FCN
+fanticon-export package windows-arm64  GAME.FCN
+fanticon-export package linux-x86_64   GAME.FCN
+fanticon-export package linux-arm64    GAME.FCN
+fanticon-export package macos-universal GAME.FCN
+```
+
+Windows packages are ZIP archives containing a customized `.EXE`; on real PE
+runtime templates Fanticon embeds the game title, author, description, version,
+and optional custom icon in the executable. Linux packages are `.tar.gz` archives with
+a relocatable AppDir layout, desktop entry, executable `AppRun`, and a project
+or Fanticon icon. The macOS ZIP contains a complete `.app` bundle with `Info.plist`, a
+universal executable, and an `.icns` generated from the project PNG. Archives
+also contain the applicable readme and license files and preserve executable
+permissions.
+
+## Export all platforms
+
+```text
+fanticon-export all GAME.FCN GAME-RELEASE
+```
+
+`EXPORT ALL` at the Fanticon prompt and selecting every target in the editor do
+the same job. Fanticon builds the cartridge once, then writes a publishable PWA,
+two Windows ZIPs, two Linux `.tar.gz` archives, one universal macOS app ZIP, and
+`RELEASE.txt` into one directory. Every output is self-contained; players need
+neither Fanticon nor a Rust, WebAssembly, SDK, or target-platform toolchain.
+
+macOS public distribution may additionally require signing and notarization for
+the publisher's identity. These are Gatekeeper trust operations, not compilation
+requirements; the generated app itself is complete.
 
 ## Runtime kit layout
 

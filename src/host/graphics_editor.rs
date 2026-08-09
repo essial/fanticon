@@ -23,6 +23,8 @@ const PANE_TOP: usize = 3 * GLYPH_HEIGHT;
 const OUTER_TOP: usize = 2 * GLYPH_HEIGHT + 4;
 const MAP_VIEW_WIDTH: usize = 40;
 const MAP_VIEW_HEIGHT: usize = 25;
+const BITMAP_WIDTH: usize = 320;
+const BITMAP_HEIGHT: usize = 200;
 const DB16: [u8; 16] = [
     0x00, 0x45, 0x25, 0x49, 0x89, 0x2c, 0xc9, 0x6d, 0x4e, 0xcd, 0x92, 0x75, 0xd6, 0x76, 0xd9, 0xdf,
 ];
@@ -103,6 +105,9 @@ pub struct GraphicsEditor {
     stroke_changed: bool,
     bitmap_asset: bool,
     bitmap_bank: u8,
+    bitmap_zoom: usize,
+    bitmap_view_x: usize,
+    bitmap_view_y: usize,
     palette_preset: Option<usize>,
     palette_reference: Option<String>,
     palette_document: bool,
@@ -128,6 +133,9 @@ impl Default for GraphicsEditor {
             stroke_changed: false,
             bitmap_asset: false,
             bitmap_bank: 0,
+            bitmap_zoom: 1,
+            bitmap_view_x: 0,
+            bitmap_view_y: 0,
             palette_preset: Some(0),
             palette_reference: None,
             palette_document: false,
@@ -326,6 +334,113 @@ impl GraphicsEditor {
         Ok(())
     }
 
+    pub fn import_bitmap_png(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+            .map_err(|error| format!("Could not decode PNG: {error}"))?
+            .to_rgba8();
+        let (width, height) = image.dimensions();
+        if (width as usize, height as usize) != (BITMAP_WIDTH, BITMAP_HEIGHT) {
+            return Err(format!(
+                "Bitmap PNG must be {BITMAP_WIDTH}x{BITMAP_HEIGHT}, found {width}x{height}"
+            ));
+        }
+        self.record_undo();
+        let pixels = image.as_raw();
+        for y in 0..BITMAP_HEIGHT {
+            for x in 0..BITMAP_WIDTH {
+                let offset = (y * BITMAP_WIDTH + x) * 4;
+                let color = self.nearest_palette_color(&pixels[offset..offset + 4]);
+                self.set_bitmap_pixel(x, y, color);
+            }
+        }
+        self.bitmap_asset = true;
+        self.view = GraphicsView::Bitmap;
+        self.bitmap_view_x = 0;
+        self.bitmap_view_y = 0;
+        Ok(())
+    }
+
+    pub fn import_tileset_png(&mut self, bytes: &[u8]) -> Result<usize, String> {
+        let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+            .map_err(|error| format!("Could not decode PNG: {error}"))?
+            .to_rgba8();
+        let (width, height) = image.dimensions();
+        let (width, height) = (width as usize, height as usize);
+        if width == 0 || height == 0 || !width.is_multiple_of(8) || !height.is_multiple_of(8) {
+            return Err(format!(
+                "Tileset dimensions must be multiples of 8, found {width}x{height}"
+            ));
+        }
+        let columns = width / 8;
+        let rows = height / 8;
+        let count = columns.checked_mul(rows).ok_or_else(|| "Tileset is too large".to_owned())?;
+        let start = usize::from(self.selected_tile);
+        if start + count > 256 {
+            return Err(format!(
+                "{count} tiles do not fit at tile ${:02X}; {} slots remain",
+                self.selected_tile,
+                256 - start
+            ));
+        }
+        self.record_undo();
+        let pixels = image.as_raw();
+        for tile in 0..count {
+            let tile_x = tile % columns * 8;
+            let tile_y = tile / columns * 8;
+            for y in 0..8 {
+                for x in 0..8 {
+                    let offset = ((tile_y + y) * width + tile_x + x) * 4;
+                    let color = self.nearest_palette_color(&pixels[offset..offset + 4]);
+                    self.set_tile_pixel((start + tile) as u8, x, y, color);
+                }
+            }
+        }
+        self.view = GraphicsView::Tiles;
+        Ok(count)
+    }
+
+    fn nearest_palette_color(&self, rgba: &[u8]) -> u8 {
+        let start = usize::from(self.palette_bank) * 16;
+        self.asset.palette[start..start + 16]
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, color)| {
+                let candidate = rgb332_to_rgba(**color);
+                let dr = i32::from(rgba[0]) - i32::from(candidate[0]);
+                let dg = i32::from(rgba[1]) - i32::from(candidate[1]);
+                let db = i32::from(rgba[2]) - i32::from(candidate[2]);
+                dr * dr + dg * dg + db * db
+            })
+            .map_or(0, |(index, _)| index as u8)
+    }
+
+    fn set_bitmap_zoom(&mut self, zoom: usize) {
+        self.bitmap_zoom = match zoom {
+            2 => 2,
+            4 => 4,
+            _ => 1,
+        };
+        self.clamp_bitmap_view();
+    }
+
+    fn clamp_bitmap_view(&mut self) {
+        self.bitmap_view_x = self.bitmap_view_x.min(BITMAP_WIDTH - BITMAP_WIDTH / self.bitmap_zoom);
+        self.bitmap_view_y =
+            self.bitmap_view_y.min(BITMAP_HEIGHT - BITMAP_HEIGHT / self.bitmap_zoom);
+    }
+
+    fn pan_bitmap(&mut self, horizontal: isize, vertical: isize) {
+        self.bitmap_view_x = self.bitmap_view_x.saturating_add_signed(horizontal);
+        self.bitmap_view_y = self.bitmap_view_y.saturating_add_signed(vertical);
+        self.clamp_bitmap_view();
+    }
+
+    pub fn handle_mouse_wheel(&mut self, horizontal: isize, vertical: isize) {
+        if self.view == GraphicsView::Bitmap && self.bitmap_zoom > 1 {
+            self.pan_bitmap(horizontal * 8, -vertical * 8);
+        }
+    }
+
     pub fn undo(&mut self) -> bool {
         let Some(asset) = self.undo.pop() else { return false };
         self.asset = asset;
@@ -378,6 +493,12 @@ impl GraphicsEditor {
                 "." if self.bitmap_asset => {
                     self.bitmap_bank = self.bitmap_bank.saturating_add(1).min(253)
                 }
+                "-" if self.view == GraphicsView::Bitmap => {
+                    self.set_bitmap_zoom((self.bitmap_zoom / 2).max(1));
+                }
+                "+" | "=" if self.view == GraphicsView::Bitmap => {
+                    self.set_bitmap_zoom((self.bitmap_zoom * 2).min(4));
+                }
                 "[" => self.step_palette_bank(-1),
                 "]" => self.step_palette_bank(1),
                 "p" => self.tool = GraphicsTool::Pencil,
@@ -420,28 +541,36 @@ impl GraphicsEditor {
                 return true;
             }
             Key::Named(NamedKey::ArrowLeft) => {
-                if self.view == GraphicsView::Map {
+                if self.view == GraphicsView::Bitmap {
+                    self.pan_bitmap(-8, 0);
+                } else if self.view == GraphicsView::Map {
                     self.map_view_x = (self.map_view_x + TILEMAP_WIDTH - 1) % TILEMAP_WIDTH;
                 } else {
                     self.selected_tile = self.selected_tile.wrapping_sub(1);
                 }
             }
             Key::Named(NamedKey::ArrowRight) => {
-                if self.view == GraphicsView::Map {
+                if self.view == GraphicsView::Bitmap {
+                    self.pan_bitmap(8, 0);
+                } else if self.view == GraphicsView::Map {
                     self.map_view_x = (self.map_view_x + 1) % TILEMAP_WIDTH;
                 } else {
                     self.selected_tile = self.selected_tile.wrapping_add(1);
                 }
             }
             Key::Named(NamedKey::ArrowUp) => {
-                if self.view == GraphicsView::Map {
+                if self.view == GraphicsView::Bitmap {
+                    self.pan_bitmap(0, -8);
+                } else if self.view == GraphicsView::Map {
                     self.map_view_y = (self.map_view_y + TILEMAP_HEIGHT - 1) % TILEMAP_HEIGHT;
                 } else {
                     self.selected_tile = self.selected_tile.wrapping_sub(16);
                 }
             }
             Key::Named(NamedKey::ArrowDown) => {
-                if self.view == GraphicsView::Map {
+                if self.view == GraphicsView::Bitmap {
+                    self.pan_bitmap(0, 8);
+                } else if self.view == GraphicsView::Map {
                     self.map_view_y = (self.map_view_y + 1) % TILEMAP_HEIGHT;
                 } else {
                     self.selected_tile = self.selected_tile.wrapping_add(16);
@@ -467,6 +596,12 @@ impl GraphicsEditor {
         }
         if let Some(tool) = tool_button_at(x, y) {
             self.tool = tool;
+            return false;
+        }
+        if self.view == GraphicsView::Bitmap
+            && let Some(zoom) = bitmap_zoom_button_at(x, y)
+        {
+            self.set_bitmap_zoom(zoom);
             return false;
         }
         if self.view == GraphicsView::Palette
@@ -624,7 +759,10 @@ impl GraphicsEditor {
                 ),
             },
             GraphicsView::Bitmap => format!(
-                " 320x200 bitmap - Pal {} Color {:X}  ROM banks {}-{} (+sprite chr)",
+                " 320x200 bitmap {}x at {},{} - Pal {} Color {:X}  ROM banks {}-{} (+sprite chr)",
+                self.bitmap_zoom,
+                self.bitmap_view_x,
+                self.bitmap_view_y,
                 self.palette_bank,
                 self.selected_color,
                 self.bitmap_bank,
@@ -844,13 +982,27 @@ impl GraphicsEditor {
 
     fn render_bitmap(&self, surface: &mut Surface) {
         let origin = (PANE_LEFT + 4, PANE_TOP + 38);
-        draw_group_box(surface, PANE_LEFT + 2, PANE_TOP + 32, 326, 210, "320 x 200 Bitmap");
+        draw_group_box(
+            surface,
+            PANE_LEFT + 2,
+            PANE_TOP + 32,
+            326,
+            210,
+            &format!("320 x 200 Bitmap - {}x", self.bitmap_zoom),
+        );
         draw_group_box(surface, PANE_LEFT + 332, PANE_TOP + 32, 136, 190, "Bitmap Settings");
-        for y in 0..200 {
-            for x in 0..320 {
+        for screen_y in 0..BITMAP_HEIGHT {
+            for screen_x in 0..BITMAP_WIDTH {
+                let x = self.bitmap_view_x + screen_x / self.bitmap_zoom;
+                let y = self.bitmap_view_y + screen_y / self.bitmap_zoom;
                 let color = self.bitmap_pixel(x, y);
                 let index = usize::from(self.palette_bank) * 16 + usize::from(color);
-                put_pixel(surface, origin.0 + x, origin.1 + y, self.asset.palette[index]);
+                put_pixel(
+                    surface,
+                    origin.0 + screen_x,
+                    origin.1 + screen_y,
+                    self.asset.palette[index],
+                );
             }
         }
         draw_text(
@@ -862,14 +1014,27 @@ impl GraphicsEditor {
         );
         draw_text(surface, PANE_LEFT + 332, PANE_TOP + 58, "BM+BM+CHR", UI_GRAY);
         draw_text(surface, PANE_LEFT + 332, PANE_TOP + 72, ",/. ROM Bank", UI_GRAY);
+        draw_text(surface, PANE_LEFT + 332, PANE_TOP + 86, "Zoom", UI_GRAY);
+        for (index, zoom) in [1, 2, 4].into_iter().enumerate() {
+            let x = PANE_LEFT + 370 + index * 30;
+            stroke_rect(
+                surface,
+                x,
+                PANE_TOP + 82,
+                26,
+                18,
+                if zoom == self.bitmap_zoom { UI_BLUE } else { UI_WHITE },
+            );
+            draw_text(surface, x + 5, PANE_TOP + 87, &format!("{zoom}x"), UI_WHITE);
+        }
         for color in 0..16 {
             let index = usize::from(self.palette_bank) * 16 + color;
             fill_rect(
                 surface,
                 PANE_LEFT + 336 + color % 4 * 28,
-                PANE_TOP + 88 + color / 4 * 24,
+                PANE_TOP + 104 + color / 4 * 20,
                 24,
-                20,
+                18,
                 self.asset.palette[index],
             );
         }
@@ -989,8 +1154,20 @@ impl GraphicsEditor {
 
     fn apply_bitmap(&mut self, x: usize, y: usize) -> bool {
         let origin = (PANE_LEFT + 4, PANE_TOP + 38);
-        let Some(px) = x.checked_sub(origin.0).filter(|value| *value < 320) else { return false };
-        let Some(py) = y.checked_sub(origin.1).filter(|value| *value < 200) else { return false };
+        let Some(px) = x
+            .checked_sub(origin.0)
+            .filter(|value| *value < BITMAP_WIDTH)
+            .map(|value| self.bitmap_view_x + value / self.bitmap_zoom)
+        else {
+            return false;
+        };
+        let Some(py) = y
+            .checked_sub(origin.1)
+            .filter(|value| *value < BITMAP_HEIGHT)
+            .map(|value| self.bitmap_view_y + value / self.bitmap_zoom)
+        else {
+            return false;
+        };
         let old = self.bitmap_pixel(px, py);
         if self.tool == GraphicsTool::Eyedropper {
             self.selected_color = old;
@@ -1378,8 +1555,16 @@ fn bank_button_origin(view: GraphicsView) -> Option<(usize, usize)> {
 
 fn bitmap_palette_at(x: usize, y: usize) -> Option<usize> {
     let x = x.checked_sub(PANE_LEFT + 336)? / 28;
-    let y = y.checked_sub(PANE_TOP + 88)? / 24;
+    let y = y.checked_sub(PANE_TOP + 104)? / 20;
     (x < 4 && y < 4).then_some(y * 4 + x)
+}
+
+fn bitmap_zoom_button_at(x: usize, y: usize) -> Option<usize> {
+    if !(PANE_TOP + 82..PANE_TOP + 100).contains(&y) {
+        return None;
+    }
+    let column = x.checked_sub(PANE_LEFT + 370)? / 30;
+    [1, 2, 4].get(column).copied()
 }
 
 fn preset_button_at(x: usize, y: usize) -> Option<usize> {
@@ -1723,5 +1908,74 @@ mod tests {
         assert_eq!(cartridge.rom_banks[7].len(), 0x4000);
         assert_eq!(cartridge.rom_banks[8][15_871] & 0x0f, 0xe);
         assert_eq!(cartridge.rom_banks[9].len(), 0x4000);
+    }
+
+    fn png_bytes(width: u32, height: u32, pixels: Vec<u8>) -> Vec<u8> {
+        let image = image::RgbaImage::from_raw(width, height, pixels).unwrap();
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        bytes.into_inner()
+    }
+
+    #[test]
+    fn bitmap_zoom_pans_and_maps_screen_pixels_back_to_the_image() {
+        let mut editor = GraphicsEditor {
+            view: GraphicsView::Bitmap,
+            selected_color: 6,
+            ..GraphicsEditor::default()
+        };
+        editor.set_bitmap_zoom(4);
+        editor.pan_bitmap(16, 8);
+        assert_eq!((editor.bitmap_zoom, editor.bitmap_view_x, editor.bitmap_view_y), (4, 16, 8));
+        assert!(editor.apply_bitmap(PANE_LEFT + 4 + 12, PANE_TOP + 38 + 20));
+        assert_eq!(editor.bitmap_pixel(19, 13), 6);
+
+        editor.pan_bitmap(isize::MAX, isize::MAX);
+        assert_eq!((editor.bitmap_view_x, editor.bitmap_view_y), (240, 150));
+        editor.set_bitmap_zoom(1);
+        assert_eq!((editor.bitmap_view_x, editor.bitmap_view_y), (0, 0));
+    }
+
+    #[test]
+    fn bitmap_png_import_quantizes_to_the_active_bank_and_is_undoable() {
+        let mut editor = GraphicsEditor { palette_bank: 0, ..GraphicsEditor::default() };
+        let target = rgb332_to_rgba(DB16[5]);
+        let pixels = target.repeat(BITMAP_WIDTH * BITMAP_HEIGHT);
+        editor.import_bitmap_png(&png_bytes(320, 200, pixels)).unwrap();
+        assert_eq!(editor.bitmap_pixel(0, 0), 5);
+        assert_eq!(editor.bitmap_pixel(319, 199), 5);
+        assert_eq!(editor.view, GraphicsView::Bitmap);
+        assert!(editor.bitmap_asset);
+        assert!(editor.undo());
+        assert_eq!(editor.bitmap_pixel(0, 0), 0);
+    }
+
+    #[test]
+    fn tileset_png_import_slices_rows_into_consecutive_selected_tiles() {
+        let mut editor = GraphicsEditor { selected_tile: 10, ..GraphicsEditor::default() };
+        let left = rgb332_to_rgba(DB16[2]);
+        let right = rgb332_to_rgba(DB16[9]);
+        let mut pixels = Vec::new();
+        for _y in 0..8 {
+            for x in 0..16 {
+                pixels.extend_from_slice(if x < 8 { &left } else { &right });
+            }
+        }
+        assert_eq!(editor.import_tileset_png(&png_bytes(16, 8, pixels)).unwrap(), 2);
+        assert_eq!(editor.tile_pixel(10, 0, 0), 2);
+        assert_eq!(editor.tile_pixel(11, 7, 7), 9);
+        assert!(editor.undo());
+        assert_eq!(editor.tile_pixel(10, 0, 0), 0);
+    }
+
+    #[test]
+    fn image_import_rejects_dimensions_that_do_not_fit_the_target() {
+        let mut editor = GraphicsEditor { selected_tile: 255, ..GraphicsEditor::default() };
+        let pixels = vec![0; 16 * 8 * 4];
+        let png = png_bytes(16, 8, pixels);
+        assert!(editor.import_bitmap_png(&png).unwrap_err().contains("320x200"));
+        assert!(editor.import_tileset_png(&png).unwrap_err().contains("do not fit"));
     }
 }

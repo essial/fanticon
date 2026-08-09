@@ -222,6 +222,8 @@ enum MenuKind {
 enum DialogKind {
     Open,
     SaveAs,
+    ImportBitmap,
+    ImportTileset,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2002,6 +2004,13 @@ impl TextEditor {
             music.handle_mouse_wheel(vertical);
             return;
         }
+        if self.graphics_active() && !self.graphics_source_active() {
+            self.graphics_tabs
+                .get_mut(&self.document_id)
+                .expect("active graphics tab")
+                .handle_mouse_wheel(horizontal, vertical);
+            return;
+        }
         let max_line = self.lines.len().saturating_sub(TEXT_ROWS);
         let max_column =
             self.lines.iter().map(String::len).max().unwrap_or(0).saturating_sub(EDITOR_COLUMNS);
@@ -3291,7 +3300,9 @@ impl TextEditor {
             (MenuKind::File, 7) => self.open_dialog(DialogKind::SaveAs),
             (MenuKind::File, 8) => self.save_all(),
             (MenuKind::File, 10) => self.request_close_tab(self.active_tab),
-            (MenuKind::File, 12) => {
+            (MenuKind::File, 12) => self.open_graphics_import_dialog(DialogKind::ImportBitmap),
+            (MenuKind::File, 13) => self.open_graphics_import_dialog(DialogKind::ImportTileset),
+            (MenuKind::File, 15) => {
                 if self.any_dirty_tabs() {
                     self.show_build_message(
                         "Unsaved Tabs",
@@ -3419,7 +3430,12 @@ impl TextEditor {
                 }
             }
             Overlay::Dialog { kind, input, error } => {
-                let title = if *kind == DialogKind::Open { "Open File" } else { "Save File" };
+                let title = match kind {
+                    DialogKind::Open => "Open File",
+                    DialogKind::SaveAs => "Save File",
+                    DialogKind::ImportBitmap => "Import Bitmap PNG",
+                    DialogKind::ImportTileset => "Import Tileset PNG",
+                };
                 let width = 32;
                 let height = 8;
                 let x = (COLUMNS - width) / 2;
@@ -3867,6 +3883,35 @@ impl TextEditor {
             Overlay::Dialog { kind, input: self.filename.clone().unwrap_or_default(), error: None };
     }
 
+    fn open_graphics_import_dialog(&mut self, kind: DialogKind) {
+        if !self.graphics_active() || self.graphics_source_active() {
+            self.show_build_message(
+                "Graphics Import",
+                &["Open a graphics document in visual mode first".to_owned()],
+            );
+            return;
+        }
+        self.overlay = Overlay::Dialog { kind, input: String::new(), error: None };
+    }
+
+    fn import_graphics_png(&mut self, kind: DialogKind, filename: &str) -> Result<(), String> {
+        let bytes = self.filesystem.borrow().read_binary(filename)?;
+        let graphics = self
+            .graphics_tabs
+            .get_mut(&self.document_id)
+            .ok_or_else(|| "No graphics document is active".to_owned())?;
+        match kind {
+            DialogKind::ImportBitmap => graphics.import_bitmap_png(&bytes)?,
+            DialogKind::ImportTileset => {
+                graphics.import_tileset_png(&bytes)?;
+            }
+            _ => return Err("Not a graphics import".to_owned()),
+        }
+        self.dirty = true;
+        self.invalidate_build();
+        Ok(())
+    }
+
     fn open_debug_prompt(&mut self, kind: DebugPromptKind) {
         if !self.debug_active {
             self.show_build_message("Debugger", &["Start a debug session first".to_owned()]);
@@ -3905,6 +3950,9 @@ impl TextEditor {
         let result = match kind {
             DialogKind::Open => self.load(&filename),
             DialogKind::SaveAs => self.save_as(&filename),
+            DialogKind::ImportBitmap | DialogKind::ImportTileset => {
+                self.import_graphics_png(kind, &filename)
+            }
         };
         if let Err(error) = result {
             self.overlay = Overlay::Dialog { kind, input: filename, error: Some(error) };
@@ -5193,6 +5241,9 @@ fn menu_items(menu: MenuKind) -> &'static [&'static str] {
             "",
             "Close Tab",
             "",
+            "Import Bitmap...",
+            "Import Tileset...",
+            "",
             "Exit",
         ],
         MenuKind::Edit => &[
@@ -5260,6 +5311,7 @@ const fn menu_width(menu: MenuKind) -> usize {
     match menu {
         MenuKind::Debug => 27,
         MenuKind::Music => 26,
+        MenuKind::File => 20,
         _ => 16,
     }
 }
@@ -5290,6 +5342,9 @@ fn menu_labels(menu: MenuKind) -> &'static [&'static str] {
             "Save All  L",
             "",
             "Close Tab W",
+            "",
+            "Import Bitmap  I",
+            "Import Tileset T",
             "",
             "Exit      X",
         ],
@@ -5363,7 +5418,9 @@ fn menu_hotkey(menu: MenuKind, key: &str) -> Option<usize> {
             (7, "a"),
             (8, "l"),
             (10, "w"),
-            (12, "x"),
+            (12, "i"),
+            (13, "t"),
+            (15, "x"),
         ],
         MenuKind::Edit => &[
             (0, "u"),
@@ -6555,7 +6612,7 @@ mod tests {
         editor.open_menu(MenuKind::File);
 
         editor.handle_overlay_key(&Key::Named(NamedKey::ArrowUp), ModifiersState::empty());
-        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 12 }));
+        assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 15 }));
         editor.handle_overlay_key(&Key::Named(NamedKey::ArrowDown), ModifiersState::empty());
         assert!(matches!(editor.overlay, Overlay::Menu { menu: MenuKind::File, selected: 0 }));
 
@@ -6599,7 +6656,7 @@ mod tests {
         let mut editor = TextEditor::new(shared_filesystem(), shared_ui_colors(), None);
         editor.open_menu(MenuKind::File);
         assert_eq!(
-            editor.handle_mouse_press(4 * GLYPH_WIDTH, 14 * GLYPH_HEIGHT, false),
+            editor.handle_mouse_press(4 * GLYPH_WIDTH, 17 * GLYPH_HEIGHT, false),
             EditorAction::Exit
         );
     }
@@ -8169,6 +8226,30 @@ mod tests {
         editor.load("world.gfx").unwrap();
         assert!(editor.graphics_active());
         assert_eq!(editor.filename.as_deref(), Some("world.gfx"));
+    }
+
+    #[test]
+    fn graphics_import_dialog_loads_project_pngs_and_marks_the_document_dirty() {
+        let filesystem = shared_filesystem();
+        let mut editor = TextEditor::new(filesystem.clone(), shared_ui_colors(), None);
+        editor.new_graphics_document();
+        let color = rgb332_to_rgba(editor.graphics_tabs[&editor.document_id].palette()[5]);
+        let image = image::RgbaImage::from_pixel(8, 8, image::Rgba(color));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        filesystem.borrow_mut().write_binary("tiles.png", &png.into_inner()).unwrap();
+
+        editor.open_graphics_import_dialog(DialogKind::ImportTileset);
+        assert!(matches!(editor.overlay, Overlay::Dialog { kind: DialogKind::ImportTileset, .. }));
+        editor.submit_dialog(DialogKind::ImportTileset, "tiles.png".to_owned());
+
+        assert!(matches!(editor.overlay, Overlay::None));
+        assert!(editor.dirty);
+        assert_eq!(
+            editor.graphics_tabs[&editor.document_id].view,
+            super::super::graphics_editor::GraphicsView::Tiles
+        );
+        assert!(editor.graphics_tabs.get_mut(&editor.document_id).unwrap().undo());
     }
 
     #[test]

@@ -63,7 +63,9 @@ The visual views are:
 - `2` — a pannable 40×25 view of the 64×32 background map. Arrow keys pan it.
 - `3` — a 16×16 sprite composite made from four shared patterns.
 - `4` — the referenced 256-color palette.
-- `5` — a packed 320×200 bitmap background.
+- `5` — a packed 320×200 bitmap background. Use `-`/`+` or the 1×, 2×,
+  and 4× buttons to change magnification. At 2× and 4×, the arrow keys and
+  mouse wheel scroll the viewport (horizontal wheel input scrolls sideways).
 
 Drawing tools are `P` Pencil, `F` connected Fill, and `I` Eyedropper. Pattern
 view supports `H`/`V` flips, `R` clockwise rotation, Delete, arrow-key pattern
@@ -74,6 +76,22 @@ In Map view, the arrow keys move the editor viewport one tile and wrap at all
 four map edges. This exposes every cell and makes the circular seam directly
 editable. The viewport origin shown in the status bar is the hardware cell at
 its upper-left corner; it does not alter data when the asset is saved.
+
+## Importing PNG artwork
+
+With a graphics document open in visual mode, choose **File > Import Bitmap**
+or **File > Import Tileset** and enter the name of a PNG in the Fanticon project
+filesystem. Imports work in desktop and web installations and are undoable.
+
+A bitmap PNG must be exactly 320×200. A tileset PNG may use any dimensions that
+are multiples of 8; its 8×8 cells are read left-to-right, then top-to-bottom,
+and written beginning at the currently selected pattern. The import is rejected
+if those cells would extend past pattern `$FF`.
+
+Fanticon maps imported RGB pixels to the nearest of the 16 colors in the active
+palette bank. Select the intended bank before importing so the indexed result
+matches the colors the game will display. PNG alpha does not change the mapping;
+use the bank's color 0 explicitly where sprite transparency is intended.
 
 ## Shared palettes
 

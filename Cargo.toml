@@ -1,6 +1,6 @@
 [package]
 name = "fanticon"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 description = "High-performance, cycle-accurate NMOS 6502 core for the Fanticon fantasy console"
 license = "MIT OR Apache-2.0"

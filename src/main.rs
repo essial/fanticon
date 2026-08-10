@@ -57,6 +57,7 @@ struct FanticonApp {
     /// console's indexed output so chrome never competes for cartridge colors.
     editor_surface: Surface,
     frame_pacer: FramePacer,
+    presentation_activity: PresentationActivity,
     frame_number: u64,
     boot_splash: BootSplash,
     terminal: Terminal,
@@ -80,6 +81,21 @@ struct FanticonApp {
     system_media_controls: Option<souvlaki::MediaControls>,
     #[cfg(target_os = "macos")]
     system_media_snapshot: Option<SystemMediaSnapshot>,
+}
+
+/// Stops the host clock while no compositor can consume submitted frames.
+/// In particular, macOS reports a sleeping display as an occluded window;
+/// continuing to present there can retain a large Metal command backlog.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PresentationActivity {
+    suspended: bool,
+    occluded: bool,
+}
+
+impl PresentationActivity {
+    const fn paused(self) -> bool {
+        self.suspended || self.occluded
+    }
 }
 
 struct GameSession {
@@ -122,6 +138,7 @@ impl FanticonApp {
             video,
             editor_surface: Surface::new(host::EDITOR_DISPLAY_WIDTH, host::EDITOR_DISPLAY_HEIGHT),
             frame_pacer: FramePacer::new(now),
+            presentation_activity: PresentationActivity::default(),
             frame_number: 0,
             boot_splash: BootSplash::new(now),
             terminal: Terminal::new(mode),
@@ -151,7 +168,12 @@ impl FanticonApp {
 
 impl ApplicationHandler<UserEvent> for FanticonApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let was_paused = self.presentation_activity.paused();
+        self.presentation_activity.suspended = false;
         if self.window.is_some() {
+            if was_paused && !self.presentation_activity.paused() {
+                self.resume_presentation();
+            }
             return;
         }
         let attributes = Window::default_attributes()
@@ -191,6 +213,12 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 let _ = proxy.send_event(UserEvent::RendererReady(result));
             });
         }
+    }
+
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        let _ = event_loop;
+        self.presentation_activity.suspended = true;
+        self.pause_presentation();
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
@@ -300,6 +328,15 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                     self.apply_editor_action(action);
                 }
             }
+            WindowEvent::Occluded(occluded) => {
+                let was_paused = self.presentation_activity.paused();
+                self.presentation_activity.occluded = occluded;
+                if self.presentation_activity.paused() {
+                    self.pause_presentation();
+                } else if was_paused {
+                    self.resume_presentation();
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_position = Some(position);
                 if self.settings_menu.is_some() {
@@ -397,6 +434,9 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if self.presentation_activity.paused() {
+                    return;
+                }
                 // Present whatever the frame actually drew into. This has to match
                 // the branch in emulate_frame exactly: a game stopped at a
                 // breakpoint still exists, but the editor is what is on screen and
@@ -443,6 +483,11 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
         }
+        if self.presentation_activity.paused() {
+            // Wait for the visibility/lifecycle event instead of waking at 60 Hz.
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
 
         let now = Instant::now();
         if self.frame_pacer.is_due(now) {
@@ -455,6 +500,25 @@ impl ApplicationHandler<UserEvent> for FanticonApp {
 }
 
 impl FanticonApp {
+    fn pause_presentation(&mut self) {
+        if let Some(audio) = &self.audio_output {
+            audio.clear();
+        }
+    }
+
+    fn resume_presentation(&mut self) {
+        let now = Instant::now();
+        self.frame_pacer.reset(now);
+        self.diagnostics_started = now;
+        self.diagnostics_presented = 0;
+        if let Some(window) = &self.window {
+            if let Some(renderer) = &mut self.renderer {
+                renderer.resize(window.inner_size());
+            }
+            window.request_redraw();
+        }
+    }
+
     fn game_running(&self) -> bool {
         self.game.as_ref().is_some_and(|game| !game.debugger.paused())
     }
@@ -1362,6 +1426,20 @@ fn attach_canvas(window: &Window) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presentation_stays_paused_until_visible_and_resumed() {
+        let mut activity = PresentationActivity::default();
+        assert!(!activity.paused());
+
+        activity.occluded = true;
+        assert!(activity.paused());
+        activity.suspended = true;
+        activity.occluded = false;
+        assert!(activity.paused());
+        activity.suspended = false;
+        assert!(!activity.paused());
+    }
 
     #[test]
     fn named_space_key_is_inserted_into_terminal_input() {

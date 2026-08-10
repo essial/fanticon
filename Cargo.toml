@@ -21,6 +21,12 @@ required-features = ["native-export"]
 test = false
 bench = false
 
+[[bin]]
+name = "fanticon-check"
+path = "src/bin/fanticon-check.rs"
+test = false
+bench = false
+
 [features]
 default = ["app-host", "native-export"]
 native-export = []

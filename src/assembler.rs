@@ -819,6 +819,9 @@ fn expand_macro_line(
         }
     }
     replacements.sort_by(|left, right| right.0.len().cmp(&left.0.len()));
+    if let Some(label) = &statement.label {
+        output.push(SourceLine { source: line.source.clone(), line: line.line, text: label.clone() });
+    }
     let current_expansion = *expansion_id;
     *expansion_id = expansion_id.wrapping_add(1);
     for body_line in &definition.body {
@@ -2910,6 +2913,8 @@ HERE     EQU   *
          PMC   SUB16;$24;$1234
          PMC   INC16;$24
          PMC   DEC16;$24
+         PMC   SEED_RANDOM;$3A
+         PMC   NEXT_RANDOM;$3A
          PMC   EMIT_VRAM_COPY;VCOPY;$30;$32;$34;$0200
          PMC   EMIT_PAD_SCROLL;SCROLL;$36;$38
 DATA     DS    TILE_BYTES
@@ -2924,6 +2929,40 @@ DATA     DS    TILE_BYTES
         assert_eq!(program.symbols["VRAM_SPR_CPU"], 0xb000);
         assert!(program.symbols["VCOPY"] >= 0x8000);
         assert!(program.symbols["SCROLL"] > program.symbols["VCOPY"]);
+    }
+
+    #[test]
+    fn label_sharing_a_line_with_a_macro_invocation_is_defined() {
+        let source = r#"
+         INCLUDE FANTICON.INC
+         ORG   $8000
+RESET    PMC   SEED_RANDOM;$20
+LOOP     PMC   NEXT_RANDOM;$20
+         BNE   LOOP
+"#;
+        let program = assemble_with_loader("main.asm", source, |_| {
+            panic!("the built-in include must not call the project loader")
+        })
+        .unwrap();
+        assert_eq!(program.symbols["RESET"], 0x8000);
+        // SEED_RANDOM expands to 12 bytes, so LOOP lands right after it —
+        // proving the label bound to the macro's own address, not skipped.
+        assert_eq!(program.symbols["LOOP"], 0x800c);
+    }
+
+    #[test]
+    fn label_sharing_a_line_with_a_user_defined_macro_invocation_is_defined() {
+        let source = r#"
+COUNT    MAC   VALUE
+         LDA   #]VALUE
+         EOM
+         ORG   $8000
+HERE     COUNT $42
+         JMP   HERE
+"#;
+        let program = assemble(source).unwrap();
+        assert_eq!(program.symbols["HERE"], 0x8000);
+        assert_eq!(program.bytes, [0xa9, 0x42, 0x4c, 0x00, 0x80]);
     }
 
     #[test]

@@ -503,6 +503,37 @@ DEC16 MAC ADDRESS
 @LOW     DEC ]ADDRESS
          EOM
 
+; Fanticon has no hardware entropy source; the noise
+; voice's LFSR is audio-only and not meant for gameplay
+; use. These two macros run an 8-bit Galois LFSR (tap
+; $1D, maximal period 255) over a caller-owned seed byte,
+; so results are fully deterministic for a given input
+; sequence: seed once from FRAME_LOW and PAD0_STATE so
+; different players, or different input timing from the
+; same player, diverge, while a fixed input recording
+; always reproduces the same sequence.
+
+; Seed SEED from the live frame count and pad state, and
+; guarantee it is nonzero (an all-zero seed never
+; changes). Clobbers A.
+SEED_RANDOM MAC SEED
+         LDA FRAME_LOW
+         EOR PAD0_STATE
+         BNE @NONZERO
+         LDA #1
+@NONZERO STA ]SEED
+         EOM
+
+; Advance SEED one LFSR step and leave the new byte in A.
+; Clobbers A.
+NEXT_RANDOM MAC SEED
+         LDA ]SEED
+         ASL A
+         BCC @NOEOR
+         EOR #$1D
+@NOEOR   STA ]SEED
+         EOM
+
 ; ---------------------------------------------------
 ; OPT-IN RUNTIME PROCEDURE EMITTERS
 ; ---------------------------------------------------

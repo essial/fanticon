@@ -196,10 +196,22 @@ It also provides reusable macros:
 | `STORE16 dest;value` / `COPY16 dest;source` | Store or copy a little-endian word | A |
 | `ADD16 address;value` / `SUB16 address;value` | Add or subtract an immediate word | A, flags |
 | `INC16 address` / `DEC16 address` | Change a little-endian word | flags / A, flags |
+| `SEED_RANDOM seed` / `NEXT_RANDOM seed` | Seed or advance an 8-bit deterministic LFSR | A |
 
 Macro arguments are assembly-time expressions. The complete checked-in source is
 [`code-assets/fanticon.inc`](../code-assets/fanticon.inc); comments beside every
 helper state its register effects.
+
+### Deterministic randomness
+
+Fanticon has no hardware entropy source; the noise voice's LFSR belongs to the
+APU, not general code. `SEED_RANDOM seed` and `NEXT_RANDOM seed` run an 8-bit
+Galois LFSR (tap `$1D`, maximal period 255) over a caller-owned RAM byte.
+`SEED_RANDOM` mixes the live frame counter with pad 0's state and guarantees a
+nonzero seed; `NEXT_RANDOM` advances the LFSR one step and leaves the new byte
+in A. The sequence is fully deterministic for a given input recording — call
+`NEXT_RANDOM` once per frame from the VBlank handler and results only change
+when a player's input timing changes.
 
 ### Procedure emitters
 

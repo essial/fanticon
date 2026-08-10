@@ -182,8 +182,14 @@ enabled.
 `READ_TIMER16`, `WAIT_VBLANK` (spins until `VIDEO_STATUS` shows
 `STATUS_VBLANK`), `WAIT_NEXT_VBLANK` (waits for the next rising edge),
 `PUSH_BANK`/`POP_BANK`, `PUSH_AXY`/`POP_YXA`, `STORE16`/`COPY16 DEST;VALUE`,
-`ADD16`/`SUB16 ADDRESS;VALUE`, `INC16`/`DEC16 ADDRESS`. Two emitters
-generate a whole named subroutine (call once from `FIXED`, then
+`ADD16`/`SUB16 ADDRESS;VALUE`, `INC16`/`DEC16 ADDRESS`. There's no hardware
+entropy source (the noise channel's LFSR is audio-only) — `SEED_RANDOM SEED`
+/ `NEXT_RANDOM SEED` run an 8-bit Galois LFSR (tap `$1D`, maximal period
+255) over a caller-owned RAM byte instead: `SEED_RANDOM` mixes `FRAME_LOW`
+with `PAD0_STATE` and guarantees a nonzero seed, `NEXT_RANDOM` advances one
+step and leaves the new byte in A. Deterministic for a given input
+recording — call `NEXT_RANDOM` once per frame from the VBlank handler. Two
+emitters generate a whole named subroutine (call once from `FIXED`, then
 `JSR NAME`): `EMIT_VRAM_COPY NAME;SRC;DST;LEN;BUF` and
 `EMIT_PAD_SCROLL NAME;X;Y;PAD=PAD0_STATE`.
 
@@ -248,6 +254,11 @@ renders.
 - Unknown `fanticon.cfg` keys are a build error.
 - `INCLUDE FANTICON.INC` is safe to repeat (from main source and from a
   child include) — it only expands once per assembly.
+- **Silent, not a build error:** a label sharing a line with a `PMC` macro
+  invocation (`LOOP PMC NEXT_RANDOM;$20`) is dropped — the macro expands,
+  but the label is never defined, so a later reference to it fails with an
+  unrelated-looking "unresolved expression" error somewhere else. Always
+  put a label that a macro call needs on its own line above the call.
 
 ## Verifying gameplay
 
